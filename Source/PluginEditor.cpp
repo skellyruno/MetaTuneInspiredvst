@@ -92,7 +92,7 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     speedLabel.setText("Speed", juce::dontSendNotification);
     amountLabel.setText("Amount", juce::dontSendNotification);
     noteReadout.setJustificationType(juce::Justification::centred);
-    noteReadout.setFont(juce::Font(juce::FontOptions(42.0f, juce::Font::bold)));
+    noteReadout.setFont(juce::Font(juce::FontOptions(38.0f, juce::Font::bold)));
     status.setJustificationType(juce::Justification::centredLeft);
     presetLabel.setText("No preset selected", juce::dontSendNotification);
     presetLabel.setJustificationType(juce::Justification::centredLeft);
@@ -174,29 +174,69 @@ void MetaTuneInspiredAudioProcessorEditor::drawKnob(juce::Graphics& g, juce::Rec
 
 void MetaTuneInspiredAudioProcessorEditor::drawPiano(juce::Graphics& g, juce::Rectangle<int> area)
 {
-    const char* names[]={"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
-    const bool black[]={false,true,false,true,false,false,true,false,true,false,true,false};
-    const int w=area.getWidth()/12;
-    for(int i=0;i<12;++i) {
-        auto x=area.getX()+i*w;
-        g.setColour(juce::Colour(0xff77777b)); g.fillRect(x,area.getY(),w-1,52);
-        g.setColour(juce::Colour(0xff202024)); g.drawRect(x,area.getY(),w-1,52,1);
-        g.setColour(text); g.setFont(juce::Font(juce::FontOptions(15.0f,juce::Font::bold)));
-        g.drawText(names[i],x,area.getY()+3,w-1,45,juce::Justification::centred);
-        const bool highlighted = (i == 0 || i == 2 || i == 4 || i == 5 || i == 7 || i == 9 || i == 11);
-        g.setColour(highlighted ? juce::Colour(0xff8d68e8) : juce::Colour(0xff51436f));
-        g.fillRect((float)x,(float)(area.getY()+53),(float)(w-1),(float)(area.getHeight()-53));
-        if (highlighted)
-        {
-            g.setColour(juce::Colour(0xffd2baff).withAlpha(0.24f));
-            g.fillRect((float)x,(float)(area.getY()+53),(float)(w-1),3.0f);
-        }
-        g.setColour(juce::Colour(0xff29282f)); g.drawRect((float)x,(float)(area.getY()+53),(float)(w-1),(float)(area.getHeight()-53),1.0f);
+    // Chromatic note strip above the actual seven-white-key octave. Keeping the
+    // label strip chromatic mirrors MetaTune while the keyboard uses real piano geometry.
+    const char* names[] = { "C", "C #", "D", "D #", "E", "F", "F #", "G", "G #", "A", "A #", "B" };
+    const int labelH = 52;
+    const int labelW = area.getWidth() / 12;
+    for (int i = 0; i < 12; ++i)
+    {
+        const int x = area.getX() + i * labelW;
+        g.setColour((i % 2 == 0) ? juce::Colour(0xff77777b) : juce::Colour(0xff68686d));
+        g.fillRect(x, area.getY(), labelW - 1, labelH);
+        g.setColour(juce::Colour(0xff202024));
+        g.drawRect(x, area.getY(), labelW - 1, labelH, 1);
+        g.setColour(text);
+        g.setFont(juce::Font(juce::FontOptions(14.0f, juce::Font::bold)));
+        g.drawText(names[i], x, area.getY() + 2, labelW - 1, labelH - 4, juce::Justification::centred);
     }
-    for(int i=0;i<12;++i) if(black[i]) {
-        auto x=area.getX()+i*w-w/3;
-        g.setColour(juce::Colour(0xff09090a)); g.fillRoundedRectangle((float)x,(float)area.getY()+52,(float)(w*0.64f),(float)(area.getHeight()*0.60f),10.0f);
-        g.setColour(juce::Colour(0xff414147)); g.drawRoundedRectangle((float)x,(float)area.getY()+52,(float)(w*0.64f),(float)(area.getHeight()*0.60f),10.0f,1.5f);
+
+    const int keyY = area.getY() + labelH;
+    const int keyH = area.getHeight() - labelH;
+    const int whiteCount = 7;
+    const float whiteW = (float) area.getWidth() / (float) whiteCount;
+    const juce::Colour topWhite(0xffa078ff), bottomWhite(0xff8d70d4);
+    // Seven full-width white keys with subtle vertical lighting and clear gaps.
+    for (int i = 0; i < whiteCount; ++i)
+    {
+        const float x = area.getX() + i * whiteW;
+        juce::ColourGradient gradient(topWhite, x, (float)keyY,
+                                      bottomWhite, x, (float)(keyY + keyH), false);
+        gradient.addColour(0.48, juce::Colour(0xff9b7bf0));
+        g.setGradientFill(gradient);
+        g.fillRect(x + 0.5f, (float)keyY, whiteW - 1.0f, (float)keyH);
+        g.setColour(juce::Colour(0xff29252f));
+        g.drawRect(x, (float)keyY, whiteW, (float)keyH, 1.25f);
+        g.setColour(juce::Colour(0xffd7c7ff).withAlpha(0.20f));
+        g.drawLine(x + 2.0f, (float)keyY + 2.0f, x + whiteW - 2.0f, (float)keyY + 2.0f, 1.0f);
+    }
+
+    // Black keys sit between the natural notes, with rounded lower corners and
+    // a dark top-to-bottom gradient. There is intentionally no key after E or B.
+    const int blackAfterWhite[] = { 0, 1, 3, 4, 5 };
+    const float blackW = whiteW * 0.54f;
+    const float blackH = keyH * 0.60f;
+    for (int i = 0; i < 5; ++i)
+    {
+        const float x = area.getX() + (blackAfterWhite[i] + 1) * whiteW - blackW * 0.5f;
+        const float y = (float)keyY;
+        juce::Path key;
+        key.startNewSubPath(x, y);
+        key.lineTo(x + blackW, y);
+        key.lineTo(x + blackW, y + blackH - 12.0f);
+        key.quadraticTo(x + blackW, y + blackH, x + blackW - 12.0f, y + blackH);
+        key.lineTo(x + 12.0f, y + blackH);
+        key.quadraticTo(x, y + blackH, x, y + blackH - 12.0f);
+        key.closeSubPath();
+        juce::ColourGradient blackGradient(juce::Colour(0xff303034), x, y,
+                                           juce::Colour(0xff111113), x, y + blackH, false);
+        blackGradient.addColour(0.55, juce::Colour(0xff202023));
+        g.setGradientFill(blackGradient);
+        g.fillPath(key);
+        g.setColour(juce::Colour(0xff050506));
+        g.strokePath(key, juce::PathStrokeType(2.0f));
+        g.setColour(juce::Colour(0xff77717f).withAlpha(0.30f));
+        g.drawLine(x + 2.0f, y + 2.0f, x + blackW - 2.0f, y + 2.0f, 1.0f);
     }
 }
 
@@ -359,7 +399,7 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xffd0a3b9)); g.fillRect(103,834,3,17);
     g.setColour(juce::Colour(0xff252329)); g.fillRoundedRectangle(12,875,141,169,15.0f);
     g.setColour(juce::Colour(0xffd7c8df)); g.setFont(juce::Font(juce::FontOptions(44.0f,juce::Font::bold)));
-    g.drawText("—",12,902,141,58,juce::Justification::centred);
+    g.drawText("--",12,902,141,58,juce::Justification::centred);
     g.setColour(muted); g.setFont(juce::Font(juce::FontOptions(16.0f,juce::Font::bold)));
     g.drawText("hover to",15,960,135,24,juce::Justification::centred);
     g.drawText("set scale",15,983,135,24,juce::Justification::centred);
