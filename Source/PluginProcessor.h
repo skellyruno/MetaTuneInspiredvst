@@ -36,7 +36,6 @@ private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameters();
     void updatePitchEstimate(const juce::AudioBuffer<float>& buffer);
     std::atomic<float> detectedMidiNote { 64.0f }, detectedHz { 0.0f }, correctionCents { 0.0f };
-    juce::dsp::PitchShifter<float> shifter;
     juce::AudioBuffer<float> monoScratch;
     double currentSampleRate = 44100.0;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MetaTuneInspiredAudioProcessor)

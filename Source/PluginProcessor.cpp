@@ -26,10 +26,7 @@ void MetaTuneInspiredAudioProcessor::prepareToPlay(double sr, int maxBlock)
 {
     currentSampleRate = sr;
     monoScratch.setSize(1, maxBlock);
-    juce::dsp::ProcessSpec spec { sr, (juce::uint32) maxBlock, (juce::uint32) getTotalNumOutputChannels() };
-    shifter.reset();
-    shifter.prepare(spec);
-    shifter.setPitchFactor(1.0f);
+    juce::ignoreUnused(sr, maxBlock);
 }
 
 void MetaTuneInspiredAudioProcessor::releaseResources() {}
@@ -107,15 +104,10 @@ void MetaTuneInspiredAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
     const float cents = (target - note) * 100.0f;
     correctionCents.store(cents);
 
-    // Pitch-shift ratio follows the nearest allowed note. This first-pass shifter is
-    // block-based; use short blocks for better response and lower latency.
-    const float ratio = juce::jlimit(0.5f, 2.0f, std::pow(2.0f, (target - note) / 12.0f));
-    shifter.setPitchFactor(1.0f + (ratio - 1.0f) * juce::jlimit(0.0f, 1.0f, (100.0f - speed) / 100.0f));
-    juce::dsp::AudioBlock<float> block(buffer);
-    juce::dsp::ProcessContextReplacing<float> context(block);
-    shifter.process(context);
-    for (int c = 0; c < buffer.getNumChannels(); ++c)
-        buffer.applyGain(c, 0, buffer.getNumSamples(), 1.0f);
+    // Build-safe milestone: estimate pitch and target correction but leave audio
+    // transparent until a real pitch-shifting engine is implemented. JUCE 8 does
+    // not provide juce::dsp::PitchShifter.
+    juce::ignoreUnused(target, speed);
 }
 
 void MetaTuneInspiredAudioProcessor::getStateInformation(juce::MemoryBlock& dest)
