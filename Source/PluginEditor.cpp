@@ -828,6 +828,12 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     slotB = slotA.createCopy();
     scale.onChange = [this]() { repaint(); };
     root.onChange = [this]() { selectedNoteIndex = juce::jlimit(0, 11, root.getSelectedItemIndex()); repaint(); };
+
+    // Startup spin-and-illuminate routine plays once for every newly opened editor.
+    orbStartupStartedAtMs = juce::Time::getMillisecondCounter();
+    orbStartupProgress = 0.0f;
+    orbStartupGlow = 0.0f;
+    orbStartupComplete = false;
     startTimerHz(30);
 }
 MetaTuneInspiredAudioProcessorEditor::~MetaTuneInspiredAudioProcessorEditor()
@@ -1101,6 +1107,45 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     // Heavy particle artwork is rasterized once, then reused during repaints.
     static const juce::Image orbArtwork = createOrbArtwork();
     g.drawImageAt(orbArtwork, 185, 85);
+
+    // Startup light pass: a rotating icy highlight runs around the shell while
+    // concentric silver/violet energy rings brighten and then settle smoothly.
+    if (!orbStartupComplete && orbStartupGlow > 0.001f)
+    {
+        const float pulse = juce::jlimit(0.0f, 1.0f, orbStartupGlow);
+        const float angle = -juce::MathConstants<float>::halfPi
+                          + orbStartupProgress * juce::MathConstants<float>::twoPi * 2.65f;
+        for (int layer = 0; layer < 7; ++layer)
+        {
+            const float spread = (float)layer * 3.4f + (1.0f - orbStartupProgress) * 14.0f;
+            const float alpha = pulse * (0.045f + 0.018f * (6 - layer));
+            g.setColour(juce::Colour(0xfff8f4ff).withAlpha(alpha));
+            g.drawEllipse(238.0f - spread, 138.0f - spread,
+                          465.0f + spread * 2.0f, 460.0f + spread * 2.0f,
+                          2.0f + (float)(layer % 2));
+        }
+
+        juce::Path startupSweep;
+        startupSweep.addArc(235.0f, 135.0f, 471.0f, 466.0f,
+                            angle - 0.42f, angle + 0.35f, true);
+        g.setColour(juce::Colour(0xffb4f1ff).withAlpha(0.18f + 0.30f * pulse));
+        g.strokePath(startupSweep, juce::PathStrokeType(15.0f + 3.0f * pulse,
+                                                        juce::PathStrokeType::curved,
+                                                        juce::PathStrokeType::rounded));
+        g.setColour(juce::Colour(0xfffffdff).withAlpha(0.42f + 0.48f * pulse));
+        g.strokePath(startupSweep, juce::PathStrokeType(2.0f + 1.6f * pulse,
+                                                        juce::PathStrokeType::curved,
+                                                        juce::PathStrokeType::rounded));
+
+        // A violet sweep crosses the inner halo in the opposite hue direction.
+        juce::Path violetSweep;
+        violetSweep.addArc(315.0f, 211.0f, 311.0f, 310.0f,
+                           -angle * 0.73f - 0.48f, -angle * 0.73f + 0.24f, true);
+        g.setColour(juce::Colour(0xffc59aff).withAlpha(0.20f + 0.42f * pulse));
+        g.strokePath(violetSweep, juce::PathStrokeType(8.0f + 5.0f * pulse,
+                                                       juce::PathStrokeType::curved,
+                                                       juce::PathStrokeType::rounded));
+    }
 
     // Retain the luminous silver shell at 50% host scaling.
     for (int shell = 16; shell >= 1; --shell)
@@ -1478,8 +1523,12 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDrag(const juce::MouseEvent& eve
 
     if (orbDragMode == 3)
     {
-        doublerWidth = juce::jlimit(0.0f, 1.0f, doublerDragStartWidth + (designX - orbDragStartX) / 100.0f);
-        doublerMix = juce::jlimit(0.0f, 1.0f, doublerDragStartMix + (orbDragStartY - designY) / 90.0f);
+        // Horizontal movement is the primary Doubler Width axis; vertical movement
+        // continues to control the mix/blur intensity shown by the two orb rings.
+        doublerWidth = juce::jlimit(0.0f, 1.0f,
+            doublerDragStartWidth + (designX - orbDragStartX) / 100.0f);
+        doublerMix = juce::jlimit(0.0f, 1.0f,
+            doublerDragStartMix + (orbDragStartY - designY) / 90.0f);
         repaint();
         return;
     }
@@ -1498,7 +1547,7 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDrag(const juce::MouseEvent& eve
         return;
     }
 
-    const float delta = (orbDragStartY - designY) * 0.42f;
+    const float delta = (orbDragStartY - designY) * 0.48f;
     if (orbDragMode == 1)
         speed.setValue(juce::jlimit<float>(0.0f, 100.0f,
                          static_cast<float>(orbDragStartValue + delta)), juce::sendNotificationSync);
@@ -1750,9 +1799,30 @@ void MetaTuneInspiredAudioProcessorEditor::resized()
 }
 void MetaTuneInspiredAudioProcessorEditor::timerCallback()
 {
-    // Match the design-study behavior: the inner orb rotates faster as Retune Speed rises.
+    // One-shot startup sequence: fast spinning plasma and an illumination sweep
+    // over 1.8 seconds, then a clean hand-off to normal Speed-driven animation.
+    constexpr float startupDurationMs = 1800.0f;
+    const juce::uint32 elapsedMs = juce::Time::getMillisecondCounter() - orbStartupStartedAtMs;
+    orbStartupProgress = juce::jlimit(0.0f, 1.0f, (float)elapsedMs / startupDurationMs);
+
+    if (elapsedMs >= (juce::uint32)startupDurationMs)
+    {
+        orbStartupComplete = true;
+        orbStartupGlow = 0.0f;
+    }
+    else
+    {
+        const float attack = juce::jlimit(0.0f, 1.0f, (float)elapsedMs / 260.0f);
+        const float envelope = std::sin(juce::MathConstants<float>::pi * orbStartupProgress);
+        orbStartupGlow = attack * juce::jlimit(0.0f, 1.0f, 0.16f + 1.10f * envelope);
+    }
+
+    // The inner plasma spins quickly on launch, then settles to a rate tied to Speed.
     const float speedNorm = juce::jlimit(0.0f, 1.0f, (float)speed.getValue() / 100.0f);
-    const float turnsPerSecond = 0.08f + 2.40f * std::pow(speedNorm, 1.35f);
+    const float normalTurnsPerSecond = 0.08f + 2.40f * std::pow(speedNorm, 1.35f);
+    const float startupBlend = orbStartupComplete ? 0.0f
+        : std::pow(1.0f - orbStartupProgress, 1.25f);
+    const float turnsPerSecond = normalTurnsPerSecond + 4.6f * startupBlend;
     orbRotationRadians += juce::MathConstants<float>::twoPi * turnsPerSecond / 30.0f;
     if (orbRotationRadians >= juce::MathConstants<float>::twoPi)
         orbRotationRadians = std::fmod(orbRotationRadians, juce::MathConstants<float>::twoPi);
