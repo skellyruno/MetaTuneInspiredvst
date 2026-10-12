@@ -12,6 +12,8 @@ public:
     void paint(juce::Graphics&) override;
     void resized() override;
     void mouseDown(const juce::MouseEvent&) override;
+    void mouseDrag(const juce::MouseEvent&) override;
+    void mouseUp(const juce::MouseEvent&) override;
 
 private:
     void timerCallback() override;
@@ -34,6 +36,15 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> stabAttach, latencyAttach;
 
     int selectedNoteIndex = 4;
+    int lastNonChromaticScaleMode = 1;
+    int orbDragMode = 0; // 0 none, 1 Speed from inner orb, 2 Amount from outer shell
+    float orbDragStartY = 0.0f;
+    float orbDragStartX = 0.0f;
+    float orbDragStartValue = 0.0f;
+    float doublerWidth = 0.46f;
+    float doublerMix = 0.49f;
+    float doublerDragStartWidth = 0.46f;
+    float doublerDragStartMix = 0.49f;
     int activeNoteGroup = 0;
     int selectedCorrectionTime = 1; // None, Short, Mid, Long
     bool majorHold = false;
