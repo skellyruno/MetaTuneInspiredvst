@@ -55,6 +55,7 @@ private:
     bool activeB = false;
     float toneVolume = 0.65f;
     float pitchReferenceHz = 440.0f;
+    float orbRotationRadians = 0.0f;
 
     juce::ValueTree slotA, slotB, undoState, redoState;
     juce::String selectedPresetName { "No preset selected" };
