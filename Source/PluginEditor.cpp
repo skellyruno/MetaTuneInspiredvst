@@ -25,6 +25,230 @@ juce::Font digitalFont(float height, int style = juce::Font::bold)
     return juce::Font(options);
 }
 
+juce::Image createOrbArtwork()
+{
+    constexpr int imageWidth = 560;
+    constexpr int imageHeight = 560;
+    constexpr float originX = 185.0f;
+    constexpr float originY = 85.0f;
+    juce::Image image(juce::Image::ARGB, imageWidth, imageHeight, true);
+    image.clear(image.getBounds(), juce::Colours::transparentBlack);
+    juce::Graphics g(image);
+    g.addTransform(juce::AffineTransform::translation(-originX, -originY));
+    // Center orb - layered dark glass, frosted particle shell, violet neon halo and split-color core.
+    constexpr float orbCx = 470.0f, orbCy = 368.0f;
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff151319), orbCx - 42.0f, orbCy - 55.0f,
+                                           juce::Colour(0xff030304), orbCx + 228.0f, orbCy + 226.0f, true));
+    g.fillEllipse(238.0f, 138.0f, 465.0f, 460.0f);
+
+    // Frosted light shell: broad low-opacity strokes build a soft silver-white volume.
+    // The strongest edge is intentionally at the top-left, like the reference orb.
+    g.setColour(juce::Colour(0xffe8e3f1).withAlpha(0.018f));
+    g.drawEllipse(233.0f, 133.0f, 475.0f, 470.0f, 27.0f);
+    g.setColour(juce::Colour(0xffe8e3f1).withAlpha(0.024f));
+    g.drawEllipse(238.0f, 138.0f, 465.0f, 460.0f, 18.0f);
+    g.setColour(juce::Colour(0xfff1edf7).withAlpha(0.034f));
+    g.drawEllipse(242.0f, 142.0f, 457.0f, 452.0f, 11.0f);
+    g.setColour(juce::Colour(0xffdcd6e6).withAlpha(0.042f));
+    g.drawEllipse(245.0f, 145.0f, 451.0f, 446.0f, 5.0f);
+    for (int i = 18; i >= 1; --i)
+    {
+        const float grow = (float)i * 1.55f;
+        const float alpha = 0.012f + 0.0026f * (18 - i);
+        g.setColour(juce::Colour(0xffeeeaf6).withAlpha(alpha));
+        g.drawEllipse(241.0f - grow, 141.0f - grow, 459.0f + grow * 2.0f,
+                      454.0f + grow * 2.0f, 2.0f + (float)(i % 3) * 0.30f);
+    }
+
+    // Static deterministic noise lets the frosted shell look organic without flickering.
+    // Radial jitter creates dense white particles and a smaller number of violet/cyan sparks.
+    for (int i = 0; i < 4200; ++i)
+    {
+        const unsigned int h1 = (unsigned int)i * 747796405u + 2891336453u;
+        const unsigned int h2 = (unsigned int)i * 277803737u + 1013904223u;
+        const float a = (float)i * 2.39996323f + (float)(h1 & 1023u) * 0.00019f;
+        const float rj = (float)(h2 % 10000u) / 10000.0f;
+        const float cluster = (float)((h1 >> 8u) % 1000u) / 1000.0f;
+        const float radius = 218.0f + (rj - 0.5f) * 29.0f + (cluster - 0.5f) * 7.0f;
+        const float px = orbCx + std::cos(a) * radius;
+        const float py = orbCy + std::sin(a) * radius * 0.982f;
+        const float dot = (i % 17 == 0) ? 3.0f : ((i % 5 == 0) ? 1.8f : 0.9f);
+        juce::Colour particle = juce::Colour(0xfff3eff9);
+        if (i % 11 == 0) particle = juce::Colour(0xffd9c9f7);
+        if (i % 37 == 0) particle = juce::Colour(0xff95dfff);
+        const float angleLight = juce::jlimit(0.45f, 1.35f, 0.82f + 0.42f * -std::sin(a));
+        const float brightness = ((i % 13 == 0) ? 0.70f : ((i % 4 == 0) ? 0.38f : 0.15f)) * angleLight;
+        g.setColour(particle.withAlpha(juce::jmin(0.92f, brightness)));
+        g.fillEllipse(px, py, dot, dot);
+    }
+
+    // Fine drifting flecks spread through the shell's thickness: this breaks the
+    // perfect circular edge and creates the luminous grain seen in the original.
+    for (int i = 0; i < 1450; ++i)
+    {
+        const unsigned int h1 = (unsigned int)i * 2246822519u + 3266489917u;
+        const unsigned int h2 = (unsigned int)i * 3266489917u + 668265263u;
+        const float a = (float)i * 2.39996323f + (float)(h1 % 4096u) * 0.00021f;
+        const float r = 202.0f + (float)(h2 % 10000u) * 0.0041f;
+        const float px = orbCx + std::cos(a) * r;
+        const float py = orbCy + std::sin(a) * r * 0.982f;
+        const float size = (i % 23 == 0) ? 3.5f : ((i % 7 == 0) ? 2.0f : 0.9f);
+        const auto tint = (i % 19 == 0) ? juce::Colour(0xffc7afff)
+                         : ((i % 31 == 0) ? juce::Colour(0xffa9e6ff) : juce::Colour(0xffece7f4));
+        const float alpha = (i % 17 == 0) ? 0.28f : ((i % 4 == 0) ? 0.13f : 0.045f);
+        g.setColour(tint.withAlpha(alpha));
+        g.fillEllipse(px, py, size, size);
+    }
+
+    // Fine highlight edge and a dark inner lens create depth, rather than a flat ring.
+    g.setColour(juce::Colour(0xfff1edf6).withAlpha(0.45f));
+    g.drawEllipse(243.0f, 143.0f, 454.0f, 450.0f, 1.5f);
+    g.setColour(juce::Colour(0xff6d6879).withAlpha(0.62f));
+    g.drawEllipse(250.0f, 150.0f, 440.0f, 436.0f, 1.0f);
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff121116), 390.0f, 260.0f,
+                                           juce::Colour(0xff050506), 470.0f, 550.0f, true));
+    g.fillEllipse(280.0f, 178.0f, 380.0f, 380.0f);
+
+    // Violet halo - numerous soft strokes underneath a crisp neon ring.
+    for (int i = 12; i >= 1; --i)
+    {
+        const float inset = (float)i * 1.8f;
+        g.setColour(juce::Colour(0xffa875ff).withAlpha(0.024f * (13 - i)));
+        g.drawEllipse(319.0f - inset, 215.0f - inset,
+                      303.0f + inset * 2.0f, 302.0f + inset * 2.0f, 3.0f + (float)(i % 2));
+    }
+    g.setColour(juce::Colour(0xffa47aff).withAlpha(0.22f));
+    g.drawEllipse(316.0f, 212.0f, 309.0f, 308.0f, 15.0f);
+    g.setColour(juce::Colour(0xff9064df));
+    g.drawEllipse(319.0f, 215.0f, 303.0f, 302.0f, 6.5f);
+    g.setColour(juce::Colour(0xffd0b7ff).withAlpha(0.42f));
+    g.drawEllipse(323.0f, 219.0f, 295.0f, 294.0f, 1.2f);
+
+    // Inner 2-tone plasma globe. A cloudy gradient, fine particle edge and curved energy seam
+    // mimic the cyan-left / magenta-right glass surface from the reference screenshot.
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff251e31), 411.0f, 294.0f,
+                                           juce::Colour(0xff100f16), 518.0f, 443.0f, true));
+    g.fillEllipse(370.0f, 270.0f, 201.0f, 190.0f);
+
+    // Overlapping radial colour fields form cloudy energy rather than a hard vertical split.
+    // Each field fades to transparent and is clipped to the spherical glass lens.
+    juce::Path innerGlassClip;
+    innerGlassClip.addEllipse(372.0f, 272.0f, 197.0f, 186.0f);
+    g.saveState();
+    g.reduceClipRegion(innerGlassClip);
+
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff62dff5).withAlpha(0.42f),
+                                           414.0f, 355.0f,
+                                           juce::Colour(0xff4acde7).withAlpha(0.0f),
+                                           482.0f, 355.0f, true));
+    g.fillEllipse(365.0f, 293.0f, 155.0f, 150.0f);
+
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xffe18ce4).withAlpha(0.38f),
+                                           519.0f, 349.0f,
+                                           juce::Colour(0xffb65cc9).withAlpha(0.0f),
+                                           584.0f, 349.0f, true));
+    g.fillEllipse(427.0f, 281.0f, 155.0f, 166.0f);
+
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff8571ff).withAlpha(0.28f),
+                                           462.0f, 407.0f,
+                                           juce::Colour(0xff6651d0).withAlpha(0.0f),
+                                           462.0f, 473.0f, true));
+    g.fillEllipse(393.0f, 348.0f, 153.0f, 112.0f);
+
+    // A barely visible shadow along the lower-right creates internal spherical depth.
+    juce::Path internalShade;
+    internalShade.startNewSubPath(472.0f, 285.0f);
+    internalShade.cubicTo(530.0f, 302.0f, 552.0f, 345.0f, 552.0f, 367.0f);
+    internalShade.cubicTo(550.0f, 407.0f, 518.0f, 427.0f, 489.0f, 435.0f);
+    internalShade.lineTo(471.0f, 364.0f);
+    internalShade.closeSubPath();
+    g.setColour(juce::Colour(0xff120d1b).withAlpha(0.12f));
+    g.fillPath(internalShade);
+    g.restoreState();
+
+    // Cloudy micro-texture inside the glass, kept faint so the note icon remains clear.
+    juce::Path innerClip;
+    innerClip.addEllipse(372.0f, 272.0f, 197.0f, 186.0f);
+    g.saveState();
+    g.reduceClipRegion(innerClip);
+    for (int i = 0; i < 900; ++i)
+    {
+        const unsigned int h = (unsigned int)i * 2246822519u + 3266489917u;
+        const float px = 379.0f + (float)(h % 18300u) / 100.0f;
+        const float py = 277.0f + (float)((h >> 7u) % 16900u) / 100.0f;
+        const float dx = (px - 470.5f) / 99.0f;
+        const float dy = (py - 365.0f) / 94.0f;
+        if (dx * dx + dy * dy > 1.0f) continue;
+        const bool left = px < 470.5f;
+        auto cloud = left ? juce::Colour(0xff72dcf7) : juce::Colour(0xffe09be9);
+        g.setColour(cloud.withAlpha((i % 9 == 0) ? 0.18f : 0.055f));
+        const float dot = (i % 13 == 0) ? 1.4f : 0.7f;
+        g.fillEllipse(px, py, dot, dot);
+    }
+    g.restoreState();
+
+    // Grainy white inner boundary with tinted lower-left and upper-right arcs.
+    for (int i = 0; i < 2100; ++i)
+    {
+        const unsigned int h = (unsigned int)i * 747796405u + 2891336453u;
+        const float a = (float)i * 2.39996323f + (float)(h % 1000u) * 0.00012f;
+        const float rr = 96.0f + ((float)((h >> 10u) % 10000u) / 10000.0f - 0.5f) * 12.0f;
+        const float px = 470.0f + std::cos(a) * rr;
+        const float py = 365.0f + std::sin(a) * rr * 0.91f;
+        juce::Colour edge = juce::Colour(0xfff4e9ff);
+        if (std::cos(a) < -0.28f) edge = juce::Colour(0xff8ce7ff);
+        else if (std::cos(a) > 0.25f) edge = juce::Colour(0xffffb6e9);
+        const float alpha = (i % 11 == 0) ? 0.66f : ((i % 4 == 0) ? 0.34f : 0.13f);
+        const float dot = (i % 7 == 0) ? 2.0f : 0.9f;
+        g.setColour(edge.withAlpha(alpha));
+        g.fillEllipse(px, py, dot, dot);
+    }
+    juce::Path innerRim;
+    innerRim.addEllipse(370.0f, 270.0f, 201.0f, 190.0f);
+    g.setColour(juce::Colour(0xfff0e4ff).withAlpha(0.48f));
+    g.strokePath(innerRim, juce::PathStrokeType(2.2f));
+    g.setColour(juce::Colour(0xffb6a0dd).withAlpha(0.22f));
+    g.strokePath(innerRim, juce::PathStrokeType(6.5f));
+
+    juce::Path plasma;
+    plasma.startNewSubPath(395.0f, 383.0f);
+    plasma.cubicTo(420.0f, 376.0f, 446.0f, 350.0f, 468.0f, 330.0f);
+    plasma.cubicTo(491.0f, 308.0f, 514.0f, 303.0f, 531.0f, 313.0f);
+    g.setColour(juce::Colour(0xffd7b1ff).withAlpha(0.50f));
+    g.strokePath(plasma, juce::PathStrokeType(1.7f, juce::PathStrokeType::curved,
+                                               juce::PathStrokeType::rounded));
+
+    juce::Path filamentOne;
+    filamentOne.startNewSubPath(394.0f, 356.0f);
+    filamentOne.cubicTo(414.0f, 346.0f, 430.0f, 333.0f, 448.0f, 317.0f);
+    filamentOne.cubicTo(466.0f, 302.0f, 483.0f, 299.0f, 497.0f, 304.0f);
+    g.setColour(juce::Colour(0xff92e7ff).withAlpha(0.24f));
+    g.strokePath(filamentOne, juce::PathStrokeType(1.1f, juce::PathStrokeType::curved,
+                                                    juce::PathStrokeType::rounded));
+    juce::Path filamentTwo;
+    filamentTwo.startNewSubPath(409.0f, 409.0f);
+    filamentTwo.cubicTo(437.0f, 425.0f, 473.0f, 428.0f, 502.0f, 413.0f);
+    g.setColour(juce::Colour(0xffe7aaff).withAlpha(0.18f));
+    g.strokePath(filamentTwo, juce::PathStrokeType(1.0f, juce::PathStrokeType::curved,
+                                                    juce::PathStrokeType::rounded));
+
+    // Draw the lightning mark as vector paths so the central icon is DPI independent.
+    juce::Path bolt;
+    bolt.startNewSubPath(477.0f, 326.0f);
+    bolt.lineTo(455.0f, 354.0f);
+    bolt.lineTo(469.0f, 354.0f);
+    bolt.lineTo(461.0f, 380.0f);
+    bolt.lineTo(486.0f, 345.0f);
+    bolt.lineTo(472.0f, 345.0f);
+    bolt.closeSubPath();
+    g.setColour(juce::Colour(0xffc66dff).withAlpha(0.18f));
+    g.fillPath(bolt, juce::AffineTransform::translation(1.2f, 1.2f));
+    g.setColour(juce::Colour(0xffd077ff));
+    g.fillPath(bolt);
+
+    return image;
+}
+
 class MetaTuneKnobLookAndFeel final : public juce::LookAndFeel_V4
 {
 public:
@@ -573,158 +797,10 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     splitHighlight.lineTo(1120.0f, 675.0f);
     g.setColour(juce::Colour(0xff5a575f).withAlpha(0.18f));
     g.strokePath(splitHighlight, juce::PathStrokeType(2.0f));
-    // Center orb - layered dark glass, frosted particle shell, violet neon halo and split-color core.
-    constexpr float orbCx = 470.0f, orbCy = 368.0f;
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff151319), orbCx - 42.0f, orbCy - 55.0f,
-                                           juce::Colour(0xff030304), orbCx + 228.0f, orbCy + 226.0f, true));
-    g.fillEllipse(238.0f, 138.0f, 465.0f, 460.0f);
-
-    // Broad diffused white edge glow, stronger on the upper-left like the reference.
-    for (int i = 18; i >= 1; --i)
-    {
-        const float grow = (float)i * 1.55f;
-        const float alpha = 0.009f + 0.0022f * (18 - i);
-        g.setColour(juce::Colour(0xffeeeaf6).withAlpha(alpha));
-        g.drawEllipse(241.0f - grow, 141.0f - grow, 459.0f + grow * 2.0f,
-                      454.0f + grow * 2.0f, 2.0f + (float)(i % 3) * 0.25f);
-    }
-
-    // Static deterministic noise lets the frosted shell look organic without flickering.
-    // Radial jitter creates dense white particles and a smaller number of violet/cyan sparks.
-    for (int i = 0; i < 4200; ++i)
-    {
-        const unsigned int h1 = (unsigned int)i * 747796405u + 2891336453u;
-        const unsigned int h2 = (unsigned int)i * 277803737u + 1013904223u;
-        const float a = (float)i * 2.39996323f + (float)(h1 & 1023u) * 0.00019f;
-        const float rj = (float)(h2 % 10000u) / 10000.0f;
-        const float cluster = (float)((h1 >> 8u) % 1000u) / 1000.0f;
-        const float radius = 218.0f + (rj - 0.5f) * 29.0f + (cluster - 0.5f) * 7.0f;
-        const float px = orbCx + std::cos(a) * radius;
-        const float py = orbCy + std::sin(a) * radius * 0.982f;
-        const float dot = (i % 19 == 0) ? 2.6f : ((i % 5 == 0) ? 1.5f : 0.75f);
-        juce::Colour particle = juce::Colour(0xffeeeaf5);
-        if (i % 11 == 0) particle = juce::Colour(0xffd5c5f2);
-        if (i % 37 == 0) particle = juce::Colour(0xff95dfff);
-        const float brightness = (i % 13 == 0) ? 0.58f : ((i % 4 == 0) ? 0.27f : 0.10f);
-        g.setColour(particle.withAlpha(brightness));
-        g.fillEllipse(px, py, dot, dot);
-    }
-
-    // Fine highlight edge and a dark inner lens create depth, rather than a flat ring.
-    g.setColour(juce::Colour(0xfff1edf6).withAlpha(0.45f));
-    g.drawEllipse(243.0f, 143.0f, 454.0f, 450.0f, 1.5f);
-    g.setColour(juce::Colour(0xff6d6879).withAlpha(0.62f));
-    g.drawEllipse(250.0f, 150.0f, 440.0f, 436.0f, 1.0f);
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff121116), 390.0f, 260.0f,
-                                           juce::Colour(0xff050506), 470.0f, 550.0f, true));
-    g.fillEllipse(280.0f, 178.0f, 380.0f, 380.0f);
-
-    // Violet halo - numerous soft strokes underneath a crisp neon ring.
-    for (int i = 12; i >= 1; --i)
-    {
-        const float inset = (float)i * 1.8f;
-        g.setColour(juce::Colour(0xffa875ff).withAlpha(0.024f * (13 - i)));
-        g.drawEllipse(319.0f - inset, 215.0f - inset,
-                      303.0f + inset * 2.0f, 302.0f + inset * 2.0f, 3.0f + (float)(i % 2));
-    }
-    g.setColour(juce::Colour(0xffa47aff).withAlpha(0.22f));
-    g.drawEllipse(316.0f, 212.0f, 309.0f, 308.0f, 15.0f);
-    g.setColour(juce::Colour(0xff9064df));
-    g.drawEllipse(319.0f, 215.0f, 303.0f, 302.0f, 6.5f);
-    g.setColour(juce::Colour(0xffd0b7ff).withAlpha(0.42f));
-    g.drawEllipse(323.0f, 219.0f, 295.0f, 294.0f, 1.2f);
-
-    // Inner 2-tone plasma globe. A cloudy gradient, fine particle edge and curved energy seam
-    // mimic the cyan-left / magenta-right glass surface from the reference screenshot.
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff251e31), 411.0f, 294.0f,
-                                           juce::Colour(0xff100f16), 518.0f, 443.0f, true));
-    g.fillEllipse(370.0f, 270.0f, 201.0f, 190.0f);
-
-    juce::Path leftEnergy;
-    leftEnergy.startNewSubPath(471.0f, 286.0f);
-    leftEnergy.cubicTo(425.0f, 296.0f, 387.0f, 325.0f, 384.0f, 358.0f);
-    leftEnergy.cubicTo(382.0f, 395.0f, 418.0f, 428.0f, 469.0f, 440.0f);
-    leftEnergy.lineTo(470.0f, 365.0f);
-    leftEnergy.closeSubPath();
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff4cdaf3).withAlpha(0.28f), 390.0f, 377.0f,
-                                           juce::Colour(0xff4d3c85).withAlpha(0.16f), 476.0f, 312.0f, false));
-    g.fillPath(leftEnergy);
-
-    juce::Path rightEnergy;
-    rightEnergy.startNewSubPath(470.0f, 286.0f);
-    rightEnergy.cubicTo(514.0f, 295.0f, 548.0f, 324.0f, 556.0f, 356.0f);
-    rightEnergy.cubicTo(565.0f, 398.0f, 529.0f, 429.0f, 472.0f, 440.0f);
-    rightEnergy.lineTo(470.0f, 365.0f);
-    rightEnergy.closeSubPath();
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff9b4cb7).withAlpha(0.28f), 536.0f, 327.0f,
-                                           juce::Colour(0xff292044).withAlpha(0.18f), 465.0f, 430.0f, false));
-    g.fillPath(rightEnergy);
-
-    // Cloudy micro-texture inside the glass, kept faint so the note icon remains clear.
-    juce::Path innerClip;
-    innerClip.addEllipse(372.0f, 272.0f, 197.0f, 186.0f);
-    g.saveState();
-    g.reduceClipRegion(innerClip);
-    for (int i = 0; i < 900; ++i)
-    {
-        const unsigned int h = (unsigned int)i * 2246822519u + 3266489917u;
-        const float px = 379.0f + (float)(h % 18300u) / 100.0f;
-        const float py = 277.0f + (float)((h >> 7u) % 16900u) / 100.0f;
-        const float dx = (px - 470.5f) / 99.0f;
-        const float dy = (py - 365.0f) / 94.0f;
-        if (dx * dx + dy * dy > 1.0f) continue;
-        const bool left = px < 470.5f;
-        auto cloud = left ? juce::Colour(0xff72dcf7) : juce::Colour(0xffe09be9);
-        g.setColour(cloud.withAlpha((i % 9 == 0) ? 0.18f : 0.055f));
-        const float dot = (i % 13 == 0) ? 1.4f : 0.7f;
-        g.fillEllipse(px, py, dot, dot);
-    }
-    g.restoreState();
-
-    // Grainy white inner boundary with tinted lower-left and upper-right arcs.
-    for (int i = 0; i < 2100; ++i)
-    {
-        const unsigned int h = (unsigned int)i * 747796405u + 2891336453u;
-        const float a = (float)i * 2.39996323f + (float)(h % 1000u) * 0.00012f;
-        const float rr = 96.0f + ((float)((h >> 10u) % 10000u) / 10000.0f - 0.5f) * 12.0f;
-        const float px = 470.0f + std::cos(a) * rr;
-        const float py = 365.0f + std::sin(a) * rr * 0.91f;
-        juce::Colour edge = juce::Colour(0xfff4e9ff);
-        if (std::cos(a) < -0.28f) edge = juce::Colour(0xff8ce7ff);
-        else if (std::cos(a) > 0.25f) edge = juce::Colour(0xffffb6e9);
-        const float alpha = (i % 11 == 0) ? 0.66f : ((i % 4 == 0) ? 0.34f : 0.13f);
-        const float dot = (i % 7 == 0) ? 2.0f : 0.9f;
-        g.setColour(edge.withAlpha(alpha));
-        g.fillEllipse(px, py, dot, dot);
-    }
-    juce::Path innerRim;
-    innerRim.addEllipse(370.0f, 270.0f, 201.0f, 190.0f);
-    g.setColour(juce::Colour(0xfff0e4ff).withAlpha(0.48f));
-    g.strokePath(innerRim, juce::PathStrokeType(2.2f));
-    g.setColour(juce::Colour(0xffb6a0dd).withAlpha(0.22f));
-    g.strokePath(innerRim, juce::PathStrokeType(6.5f));
-
-    juce::Path plasma;
-    plasma.startNewSubPath(395.0f, 383.0f);
-    plasma.cubicTo(420.0f, 376.0f, 446.0f, 350.0f, 468.0f, 330.0f);
-    plasma.cubicTo(491.0f, 308.0f, 514.0f, 303.0f, 531.0f, 313.0f);
-    g.setColour(juce::Colour(0xffd7b1ff).withAlpha(0.50f));
-    g.strokePath(plasma, juce::PathStrokeType(1.7f, juce::PathStrokeType::curved,
-                                               juce::PathStrokeType::rounded));
-
-    // Draw the lightning mark as vector paths so the central icon is DPI independent.
-    juce::Path bolt;
-    bolt.startNewSubPath(477.0f, 326.0f);
-    bolt.lineTo(455.0f, 354.0f);
-    bolt.lineTo(469.0f, 354.0f);
-    bolt.lineTo(461.0f, 380.0f);
-    bolt.lineTo(486.0f, 345.0f);
-    bolt.lineTo(472.0f, 345.0f);
-    bolt.closeSubPath();
-    g.setColour(juce::Colour(0xffc66dff).withAlpha(0.18f));
-    g.fillPath(bolt, juce::AffineTransform::translation(1.2f, 1.2f));
-    g.setColour(juce::Colour(0xffd077ff));
-    g.fillPath(bolt);
+    // Orb art is expensive to build (particle grain and plasma texture), so rasterize it
+    // once at design resolution and composite it during subsequent repaints.
+    static const juce::Image orbArtwork = createOrbArtwork();
+    g.drawImageAt(orbArtwork, 185, 85);
 
     // Left group selector rail
     g.setColour(juce::Colour(0xff18181b)); g.fillRoundedRectangle(-15,150,73,430,22.0f);
