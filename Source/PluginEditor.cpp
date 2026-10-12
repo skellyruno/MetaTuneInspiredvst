@@ -780,13 +780,13 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xffa36bff).withAlpha(0.22f));
     g.fillRect(508,6,471,2);
     const auto logoFont = uiFont(27.0f, juce::Font::bold);
-    const float logoW = logoFont.getStringWidthFloat("metaTune");
-    const float logoX = 743.5f - logoW * 0.5f;
     g.setFont(logoFont);
+    // Use fixed integer bounds instead of measuring glyph widths: this avoids
+    // deprecated text-width APIs and float-to-int overload ambiguity on MSVC.
     g.setColour(juce::Colour(0xffb9a0ff).withAlpha(0.23f));
-    g.drawText("metaTune", logoX - 0.4f, 7.0f, logoW + 1.0f, 47.0f, juce::Justification::centred);
+    g.drawText("metaTune", 509, 7, 471, 47, juce::Justification::centred);
     g.setColour(juce::Colour(0xffe2d5ff));
-    g.drawText("metaTune", logoX, 6.0f, logoW, 47.0f, juce::Justification::centred);
+    g.drawText("metaTune", 508, 6, 471, 48, juce::Justification::centred);
 
     // Icon-only toolbar with consistent vector strokes.
     auto drawUndoIcon = [&g](float x, bool redo)
@@ -1159,9 +1159,9 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDrag(const juce::MouseEvent& eve
 
     const float delta = (orbDragStartY - designY) * 0.42f;
     if (orbDragMode == 1)
-        speed.setValue(juce::jlimit(0.0, 100.0, orbDragStartValue + delta), juce::sendNotificationSync);
+        speed.setValue(juce::jlimit(0.0f, 100.0f, orbDragStartValue + delta), juce::sendNotificationSync);
     else if (orbDragMode == 2)
-        amount.setValue(juce::jlimit(0.0, 100.0, orbDragStartValue + delta), juce::sendNotificationSync);
+        amount.setValue(juce::jlimit(0.0f, 100.0f, orbDragStartValue + delta), juce::sendNotificationSync);
 }
 
 void MetaTuneInspiredAudioProcessorEditor::mouseUp(const juce::MouseEvent&)
