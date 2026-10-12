@@ -364,6 +364,134 @@ juce::Image createOrbArtwork()
     g.strokePath(lowerShellGlint, juce::PathStrokeType(7.0f, juce::PathStrokeType::curved,
                                                        juce::PathStrokeType::rounded));
 
+    // Make the inner energy globe a separate transparent layer. This keeps the
+    // frosted shell/rim cached while allowing the inner plasma to rotate by Speed.
+    constexpr float coreCx = 285.0f, coreCy = 280.0f;
+    constexpr float coreRx = 93.0f, coreRy = 88.0f;
+    for (int py = (int)(coreCy - coreRy - 1.0f); py <= (int)(coreCy + coreRy + 1.0f); ++py)
+        for (int px = (int)(coreCx - coreRx - 1.0f); px <= (int)(coreCx + coreRx + 1.0f); ++px)
+        {
+            const float nx = (px - coreCx) / coreRx;
+            const float ny = (py - coreCy) / coreRy;
+            if (nx * nx + ny * ny <= 1.0f)
+                image.setPixelAt(px, py, juce::Colours::transparentBlack);
+        }
+
+    return image;
+}
+
+juce::Image createInnerOrbArtwork()
+{
+    constexpr int imageWidth = 240;
+    constexpr int imageHeight = 220;
+    juce::Image image(juce::Image::ARGB, imageWidth, imageHeight, true);
+    image.clear(image.getBounds(), juce::Colours::transparentBlack);
+    juce::Graphics g(image);
+
+    const juce::Rectangle<float> lens(28.0f, 23.0f, 184.0f, 174.0f);
+    const juce::Point<float> centre = lens.getCentre();
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff4a2b60), 77.0f, 59.0f,
+                                           juce::Colour(0xff090912), 166.0f, 173.0f, true));
+    g.fillEllipse(lens);
+
+    g.saveState();
+    juce::Path clip;
+    clip.addEllipse(lens);
+    g.reduceClipRegion(clip);
+
+    // Overlapping, non-symmetrical colour clouds recreate the original cyan-left,
+    // magenta-right inner globe without the static half-and-half gradient look.
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff2de7fa).withAlpha(0.98f),
+                                           77.0f, 108.0f,
+                                           juce::Colour(0xff3ecfe9).withAlpha(0.0f),
+                                           137.0f, 105.0f, true));
+    g.fillEllipse(22.0f, 51.0f, 135.0f, 134.0f);
+
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xffff70dc).withAlpha(0.94f),
+                                           168.0f, 91.0f,
+                                           juce::Colour(0xffb64bc6).withAlpha(0.0f),
+                                           117.0f, 127.0f, true));
+    g.fillEllipse(104.0f, 34.0f, 132.0f, 149.0f);
+
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xffa67aff).withAlpha(0.77f),
+                                           121.0f, 154.0f,
+                                           juce::Colour(0xff5542a9).withAlpha(0.0f),
+                                           119.0f, 204.0f, true));
+    g.fillEllipse(53.0f, 100.0f, 145.0f, 112.0f);
+
+    // Irregular plasma lobes, deliberately offset and asymmetrical.
+    juce::Path cyanLobe;
+    cyanLobe.startNewSubPath(38.0f, 65.0f);
+    cyanLobe.cubicTo(54.0f, 42.0f, 92.0f, 50.0f, 106.0f, 76.0f);
+    cyanLobe.cubicTo(118.0f, 98.0f, 99.0f, 125.0f, 79.0f, 138.0f);
+    cyanLobe.cubicTo(57.0f, 153.0f, 38.0f, 129.0f, 35.0f, 103.0f);
+    cyanLobe.cubicTo(32.0f, 86.0f, 31.0f, 75.0f, 38.0f, 65.0f);
+    cyanLobe.closeSubPath();
+    g.setColour(juce::Colour(0xff26dbf4).withAlpha(0.42f));
+    g.fillPath(cyanLobe);
+
+    juce::Path magentaLobe;
+    magentaLobe.startNewSubPath(129.0f, 43.0f);
+    magentaLobe.cubicTo(159.0f, 32.0f, 190.0f, 57.0f, 193.0f, 85.0f);
+    magentaLobe.cubicTo(197.0f, 111.0f, 178.0f, 138.0f, 157.0f, 124.0f);
+    magentaLobe.cubicTo(140.0f, 111.0f, 147.0f, 91.0f, 134.0f, 76.0f);
+    magentaLobe.cubicTo(122.0f, 63.0f, 118.0f, 49.0f, 129.0f, 43.0f);
+    magentaLobe.closeSubPath();
+    g.setColour(juce::Colour(0xffff78df).withAlpha(0.40f));
+    g.fillPath(magentaLobe);
+
+    // Curving filaments rotate with the plasma and give the Speed control a
+    // visible animation response. A slower setting moves gently; fast settings snap.
+    juce::Path filamentA;
+    filamentA.startNewSubPath(38.0f, 124.0f);
+    filamentA.cubicTo(62.0f, 114.0f, 80.0f, 86.0f, 104.0f, 75.0f);
+    filamentA.cubicTo(119.0f, 67.0f, 129.0f, 70.0f, 140.0f, 75.0f);
+    g.setColour(juce::Colour(0xff4ceaff).withAlpha(0.34f));
+    g.strokePath(filamentA, juce::PathStrokeType(5.0f, juce::PathStrokeType::curved,
+                                                 juce::PathStrokeType::rounded));
+    g.setColour(juce::Colour(0xffc2f5ff).withAlpha(0.82f));
+    g.strokePath(filamentA, juce::PathStrokeType(1.15f, juce::PathStrokeType::curved,
+                                                 juce::PathStrokeType::rounded));
+
+    juce::Path filamentB;
+    filamentB.startNewSubPath(125.0f, 42.0f);
+    filamentB.cubicTo(156.0f, 51.0f, 177.0f, 78.0f, 172.0f, 101.0f);
+    filamentB.cubicTo(170.0f, 119.0f, 154.0f, 134.0f, 143.0f, 141.0f);
+    g.setColour(juce::Colour(0xffff66d9).withAlpha(0.28f));
+    g.strokePath(filamentB, juce::PathStrokeType(5.0f, juce::PathStrokeType::curved,
+                                                 juce::PathStrokeType::rounded));
+    g.setColour(juce::Colour(0xffffc0ed).withAlpha(0.86f));
+    g.strokePath(filamentB, juce::PathStrokeType(1.2f, juce::PathStrokeType::curved,
+                                                 juce::PathStrokeType::rounded));
+
+    // Dense deterministic grain produces the grainy texture rather than a smooth gradient.
+    for (int i = 0; i < 2600; ++i)
+    {
+        const unsigned int h1 = (unsigned int)i * 747796405u + 2891336453u;
+        const unsigned int h2 = (unsigned int)i * 2246822519u + 3266489917u;
+        const float px = 28.0f + (float)(h1 % 18400u) / 100.0f;
+        const float py = 23.0f + (float)(h2 % 17400u) / 100.0f;
+        const float dx = (px - centre.x) / 92.0f;
+        const float dy = (py - centre.y) / 87.0f;
+        if (dx * dx + dy * dy > 1.0f) continue;
+        const float seam = centre.x + 10.0f * std::sin((py - 23.0f) * 0.055f)
+                                    + 4.0f * std::sin((py - 23.0f) * 0.13f);
+        juce::Colour speck = px < seam ? juce::Colour(0xff78ecff)
+                           : juce::Colour(0xffff9de5);
+        if (i % 7 == 0) speck = juce::Colour(0xfff1d8ff);
+        const float alpha = (i % 17 == 0) ? 0.88f : ((i % 4 == 0) ? 0.43f : 0.19f);
+        const float size = (i % 29 == 0) ? 2.3f : ((i % 5 == 0) ? 1.35f : 0.75f);
+        g.setColour(speck.withAlpha(alpha));
+        g.fillEllipse(px, py, size, size);
+    }
+
+    // Soft cloudy turbulence across the lower half gives the core depth.
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff3fbef4).withAlpha(0.28f),
+                                           80.0f, 144.0f,
+                                           juce::Colour(0xff3fbef4).withAlpha(0.0f),
+                                           130.0f, 179.0f, true));
+    g.fillEllipse(28.0f, 103.0f, 134.0f, 96.0f);
+    g.restoreState();
     return image;
 }
 
@@ -700,7 +828,7 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     slotB = slotA.createCopy();
     scale.onChange = [this]() { repaint(); };
     root.onChange = [this]() { selectedNoteIndex = juce::jlimit(0, 11, root.getSelectedItemIndex()); repaint(); };
-    startTimerHz(20);
+    startTimerHz(30);
 }
 MetaTuneInspiredAudioProcessorEditor::~MetaTuneInspiredAudioProcessorEditor()
 {
@@ -945,11 +1073,36 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     splitHighlight.lineTo(1120.0f, 675.0f);
     g.setColour(juce::Colour(0xff5a575f).withAlpha(0.18f));
     g.strokePath(splitHighlight, juce::PathStrokeType(2.0f));
-    // Orb art is expensive to build (particle grain and plasma texture), so rasterize it
-    // once at design resolution and composite it during subsequent repaints.
+    // MetaTune visualizer behavior from the design case study:
+    // Amount changes outer-orb diameter, Speed rotates the inner plasma, and Doubler
+    // shows two offset rings with blue haze controlled by the Doubler mix gesture.
+    const float amountNorm = juce::jlimit(0.0f, 1.0f, (float)amount.getValue() / 100.0f);
+    const float orbScale = 0.86f + 0.14f * amountNorm;
+    constexpr float orbCentreX = 470.0f, orbCentreY = 365.0f;
+
+    g.saveState();
+    g.addTransform(juce::AffineTransform::scale(orbScale, orbScale,
+                                               orbCentreX, orbCentreY));
+
+    // Doubler visualizer: two translucent rings shift apart as width increases.
+    // Mix controls the cyan-blue blur that the design uses to indicate blend amount.
+    const float doublerOffset = 5.0f + 25.0f * juce::jlimit(0.0f, 1.0f, doublerWidth);
+    const float blurStrength = juce::jlimit(0.0f, 1.0f, doublerMix);
+    const juce::Colour doublerBlue(0xff47cfff);
+    for (const float side : { -1.0f, 1.0f })
+    {
+        const float dx = side * doublerOffset;
+        g.setColour(doublerBlue.withAlpha(0.025f + 0.105f * blurStrength));
+        g.drawEllipse(238.0f + dx, 138.0f, 465.0f, 460.0f, 15.0f + blurStrength * 5.0f);
+        g.setColour(doublerBlue.withAlpha(0.035f + 0.13f * blurStrength));
+        g.drawEllipse(241.0f + dx, 141.0f, 459.0f, 454.0f, 2.0f);
+    }
+
+    // Heavy particle artwork is rasterized once, then reused during repaints.
     static const juce::Image orbArtwork = createOrbArtwork();
     g.drawImageAt(orbArtwork, 185, 85);
-    // Keep the edge luminous at compact host scale as well as inside the cached bitmap.
+
+    // Retain the luminous silver shell at 50% host scaling.
     for (int shell = 16; shell >= 1; --shell)
     {
         const float spread = (float)shell * 1.25f;
@@ -961,62 +1114,68 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     }
     juce::Path shellSpecular;
     shellSpecular.addArc(241.0f, 141.0f, 459.0f, 454.0f, 3.28f, 5.18f, true);
-    g.setColour(juce::Colour(0xfffffdff).withAlpha(0.24f));
+    g.setColour(juce::Colour(0xfffffdff).withAlpha(0.22f + 0.07f * blurStrength));
     g.strokePath(shellSpecular, juce::PathStrokeType(12.0f, juce::PathStrokeType::curved,
                                                       juce::PathStrokeType::rounded));
-    g.setColour(juce::Colour(0xfffffdff).withAlpha(0.78f));
+    g.setColour(juce::Colour(0xfffffdff).withAlpha(0.80f));
     g.strokePath(shellSpecular, juce::PathStrokeType(2.8f, juce::PathStrokeType::curved,
                                                       juce::PathStrokeType::rounded));
     g.setColour(juce::Colour(0xfffdfaff).withAlpha(0.72f));
     g.drawEllipse(241.0f, 141.0f, 459.0f, 454.0f, 2.5f);
-    // Violet halo is re-glowed after compositing so it does not get swallowed by scaling.
-    g.setColour(juce::Colour(0xffa875ff).withAlpha(0.12f));
+
+    // Violet bloom around the middle ring stays diffuse under the crisp neon rim.
+    g.setColour(juce::Colour(0xffa875ff).withAlpha(0.13f));
     g.drawEllipse(306.0f, 202.0f, 329.0f, 328.0f, 31.0f);
     g.setColour(juce::Colour(0xffaa79ff).withAlpha(0.28f));
     g.drawEllipse(313.0f, 209.0f, 315.0f, 314.0f, 19.0f);
-    g.setColour(juce::Colour(0xffb58aff).withAlpha(0.78f));
+    g.setColour(juce::Colour(0xffb58aff).withAlpha(0.80f));
     g.drawEllipse(319.0f, 215.0f, 303.0f, 302.0f, 6.5f);
     g.setColour(juce::Colour(0xffe2d0ff).withAlpha(0.70f));
     g.drawEllipse(323.0f, 219.0f, 295.0f, 294.0f, 1.8f);
 
-    // Extra post-composite plasma bloom: this is intentionally drawn above the
-    // cached artwork so the cyan/magenta core remains vivid at 50% host scaling.
-    juce::Path plasmaClip;
-    plasmaClip.addEllipse(370.0f, 270.0f, 201.0f, 190.0f);
+    // The inner texture rotates at a rate derived from Retune Speed. Faster/harder
+    // tuning rotates faster and shifts the live tint from cyan-violet toward magenta.
+    static const juce::Image innerOrbArtwork = createInnerOrbArtwork();
+    const float speedNorm = juce::jlimit(0.0f, 1.0f, (float)speed.getValue() / 100.0f);
+    const juce::Colour speedTint = juce::Colour(0xff4edcf5).interpolatedWith(
+                                       juce::Colour(0xffff73d9), speedNorm);
+    juce::Path coreClip;
+    coreClip.addEllipse(370.0f, 270.0f, 201.0f, 190.0f);
     g.saveState();
-    g.reduceClipRegion(plasmaClip);
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff35e8ff).withAlpha(0.58f),
-                                           415.0f, 354.0f,
-                                           juce::Colour(0xff48d9f4).withAlpha(0.0f),
-                                           478.0f, 360.0f, true));
-    g.fillEllipse(368.0f, 275.0f, 146.0f, 162.0f);
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xffff73df).withAlpha(0.54f),
-                                           526.0f, 347.0f,
-                                           juce::Colour(0xffff8fdf).withAlpha(0.0f),
-                                           464.0f, 361.0f, true));
-    g.fillEllipse(425.0f, 278.0f, 147.0f, 164.0f);
-    juce::Path liveCyanWisp;
-    liveCyanWisp.startNewSubPath(389.0f, 372.0f);
-    liveCyanWisp.cubicTo(407.0f, 362.0f, 419.0f, 339.0f, 438.0f, 327.0f);
-    liveCyanWisp.cubicTo(446.0f, 322.0f, 454.0f, 319.0f, 463.0f, 323.0f);
-    g.setColour(juce::Colour(0xff44e2ff).withAlpha(0.22f));
-    g.strokePath(liveCyanWisp, juce::PathStrokeType(5.0f, juce::PathStrokeType::curved,
-                                                    juce::PathStrokeType::rounded));
-    g.setColour(juce::Colour(0xffa1edff).withAlpha(0.62f));
-    g.strokePath(liveCyanWisp, juce::PathStrokeType(1.15f, juce::PathStrokeType::curved,
-                                                    juce::PathStrokeType::rounded));
-    juce::Path liveMagentaWisp;
-    liveMagentaWisp.startNewSubPath(472.0f, 303.0f);
-    liveMagentaWisp.cubicTo(499.0f, 313.0f, 525.0f, 343.0f, 525.0f, 367.0f);
-    liveMagentaWisp.cubicTo(526.0f, 385.0f, 511.0f, 397.0f, 497.0f, 405.0f);
-    g.setColour(juce::Colour(0xffff6fdf).withAlpha(0.20f));
-    g.strokePath(liveMagentaWisp, juce::PathStrokeType(6.0f, juce::PathStrokeType::curved,
-                                                       juce::PathStrokeType::rounded));
-    g.setColour(juce::Colour(0xffffb0e9).withAlpha(0.56f));
-    g.strokePath(liveMagentaWisp, juce::PathStrokeType(1.2f, juce::PathStrokeType::curved,
-                                                       juce::PathStrokeType::rounded));
-    g.setColour(juce::Colour(0xfff0dbff).withAlpha(0.34f));
-    g.drawEllipse(373.0f, 273.0f, 195.0f, 184.0f, 10.0f);
+    g.reduceClipRegion(coreClip);
+    g.addTransform(juce::AffineTransform::rotation(orbRotationRadians, orbCentreX, orbCentreY));
+    g.drawImageAt(innerOrbArtwork, 350, 255);
+    g.restoreState();
+
+    // Slight live hue correlation to the Speed dial, applied gently so texture stays visible.
+    g.saveState();
+    g.reduceClipRegion(coreClip);
+    g.setGradientFill(juce::ColourGradient(speedTint.withAlpha(0.035f + 0.095f * speedNorm),
+                                           518.0f, 348.0f,
+                                           speedTint.withAlpha(0.0f), 463.0f, 367.0f, true));
+    g.fillEllipse(370.0f, 270.0f, 201.0f, 190.0f);
+    g.restoreState();
+
+    // Keep the lightning logo fixed while the plasma texture moves beneath it.
+    juce::Path bolt;
+    bolt.startNewSubPath(477.0f, 326.0f);
+    bolt.lineTo(455.0f, 354.0f);
+    bolt.lineTo(469.0f, 354.0f);
+    bolt.lineTo(461.0f, 380.0f);
+    bolt.lineTo(486.0f, 345.0f);
+    bolt.lineTo(472.0f, 345.0f);
+    bolt.closeSubPath();
+    g.setColour(juce::Colour(0xffc66dff).withAlpha(0.15f));
+    g.fillPath(bolt, juce::AffineTransform::translation(1.0f, 1.0f));
+    g.setColour(juce::Colour(0xfff0adff).withAlpha(0.98f));
+    g.fillPath(bolt);
+
+    // One clean luminous inner rim keeps the rotating texture inside the glass lens.
+    g.setColour(juce::Colour(0xfff0e5ff).withAlpha(0.68f));
+    g.drawEllipse(370.0f, 270.0f, 201.0f, 190.0f, 2.4f);
+    g.setColour(juce::Colour(0xffd6bdff).withAlpha(0.20f));
+    g.drawEllipse(367.0f, 267.0f, 207.0f, 196.0f, 7.0f);
+
     g.restoreState();
 
     // Left group selector rail
@@ -1591,6 +1750,13 @@ void MetaTuneInspiredAudioProcessorEditor::resized()
 }
 void MetaTuneInspiredAudioProcessorEditor::timerCallback()
 {
+    // Match the design-study behavior: the inner orb rotates faster as Retune Speed rises.
+    const float speedNorm = juce::jlimit(0.0f, 1.0f, (float)speed.getValue() / 100.0f);
+    const float turnsPerSecond = 0.08f + 2.40f * std::pow(speedNorm, 1.35f);
+    orbRotationRadians += juce::MathConstants<float>::twoPi * turnsPerSecond / 30.0f;
+    if (orbRotationRadians >= juce::MathConstants<float>::twoPi)
+        orbRotationRadians = std::fmod(orbRotationRadians, juce::MathConstants<float>::twoPi);
+
     // Mirror host automation/state restoration from the signed APVTS parameter.
     if (auto* rawSustain = processor.parameters.getRawParameterValue("sustain"))
     {
@@ -1611,4 +1777,5 @@ void MetaTuneInspiredAudioProcessorEditor::timerCallback()
         noteReadout.setVisible(false);
         status.setText("Waiting for pitched input...",juce::dontSendNotification);
     }
+    repaint();
 }
