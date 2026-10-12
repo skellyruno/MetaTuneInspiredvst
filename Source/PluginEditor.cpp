@@ -170,8 +170,8 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     for(int i=0;i<100;++i) {
         float x=165.0f+i*10.2f;
         auto col=(i%17<4) ? purple : ((i%13<3) ? cyan : juce::Colour(0xff39343f));
-        g.setColour(col.withAlpha((i%5==0)?0.95f:0.45f)); g.fillRect(x,739,7,19);
-        g.setColour(col.withAlpha((i%7==0)?0.95f:0.30f)); g.fillRect(x+2,762,6,18);
+        g.setColour(col.withAlpha((i%5==0)?0.95f:0.45f)); g.fillRect(x,739.0f,7.0f,19.0f);
+        g.setColour(col.withAlpha((i%7==0)?0.95f:0.30f)); g.fillRect(x+2.0f,762.0f,6.0f,18.0f);
     }
 
     // Keyboard and right status rail
