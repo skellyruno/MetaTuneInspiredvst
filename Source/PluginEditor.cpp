@@ -4,6 +4,73 @@ namespace {
 const juce::Colour bg(0xff101012), panel(0xff242427), panel2(0xff18181b);
 const juce::Colour purple(0xffa36bff), pink(0xffdf83c5), cyan(0xff66dfff);
 const juce::Colour text(0xffe7e5e9), muted(0xffa7a5aa);
+
+class MetaTuneKnobLookAndFeel final : public juce::LookAndFeel_V4
+{
+public:
+    void drawRotarySlider(juce::Graphics& g, int x, int y, int width, int height,
+                          float sliderPos, float startAngle, float endAngle,
+                          juce::Slider& slider) override
+    {
+        const float side = (float) juce::jmin(width, height);
+        const float cx = x + width * 0.5f;
+        const float cy = y + height * 0.5f;
+        const float radius = side * 0.43f;
+        const float ringRadius = radius * 0.88f;
+        const float start = startAngle;
+        const float end = endAngle;
+        const auto accent = slider.getName() == "Amount" ? pink : purple;
+
+        g.setColour(juce::Colour(0xff08080a));
+        g.fillEllipse(cx - radius - 7.0f, cy - radius - 7.0f,
+                      (radius + 7.0f) * 2.0f, (radius + 7.0f) * 2.0f);
+        g.setColour(juce::Colour(0xff3a393f));
+        g.drawEllipse(cx - radius - 5.0f, cy - radius - 5.0f,
+                      (radius + 5.0f) * 2.0f, (radius + 5.0f) * 2.0f, 2.0f);
+        g.setColour(juce::Colour(0xff19191d));
+        g.fillEllipse(cx - radius, cy - radius, radius * 2.0f, radius * 2.0f);
+
+        // Fine segmented scale, like the hardware-style MetaTune dials.
+        const int ticks = 71;
+        for (int i = 0; i < ticks; ++i)
+        {
+            const float t = (float) i / (float) (ticks - 1);
+            const float a = start + (end - start) * t;
+            const float inner = ringRadius - (i % 5 == 0 ? 7.0f : 3.5f);
+            const float outer = ringRadius + 1.0f;
+            juce::Line<float> tick(cx + std::cos(a) * inner, cy + std::sin(a) * inner,
+                                   cx + std::cos(a) * outer, cy + std::sin(a) * outer);
+            g.setColour(t <= sliderPos ? accent.withAlpha(0.96f) : juce::Colour(0xff4a494f));
+            g.drawLine(tick, i % 5 == 0 ? 1.7f : 1.0f);
+        }
+
+        juce::Path progress;
+        progress.addCentredArc(cx, cy, ringRadius - 4.0f, ringRadius - 4.0f, 0.0f,
+                               start, start + (end - start) * sliderPos, true);
+        g.setColour(accent.withAlpha(0.95f));
+        g.strokePath(progress, juce::PathStrokeType(4.0f, juce::PathStrokeType::curved,
+                                                    juce::PathStrokeType::rounded));
+        const float thumbAngle = start + (end - start) * sliderPos;
+        g.setColour(cyan);
+        g.fillEllipse(cx + std::cos(thumbAngle) * (ringRadius - 4.0f) - 5.0f,
+                      cy + std::sin(thumbAngle) * (ringRadius - 4.0f) - 5.0f, 10.0f, 10.0f);
+
+        juce::String value;
+        if (slider.getName() == "Speed") value = juce::String(slider.getValue(), 1);
+        else value = juce::String(slider.getValue(), 0);
+        g.setColour(text);
+        g.setFont(juce::Font(juce::FontOptions(side * 0.16f, juce::Font::bold)));
+        g.drawText(value, juce::Rectangle<float>(cx - radius * 0.72f, cy - 14.0f,
+                                                  radius * 1.44f, 31.0f), juce::Justification::centred);
+        g.setColour(muted);
+        g.setFont(juce::Font(juce::FontOptions(juce::jlimit(10.0f, 14.0f, side * 0.055f),
+                                               juce::Font::bold)));
+        g.drawText(slider.getName(), juce::Rectangle<float>(cx - radius * 0.72f, cy + 14.0f,
+                                                             radius * 1.44f, 23.0f), juce::Justification::centred);
+    }
+};
+
+MetaTuneKnobLookAndFeel metaTuneKnobLookAndFeel;
 }
 
 MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaTuneInspiredAudioProcessor& p)
@@ -12,6 +79,10 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     setSize(1080, 850);
     setResizable(false, false);
     styleKnob(speed); styleKnob(amount); styleKnob(sustain);
+    speed.setName("Speed"); amount.setName("Amount"); sustain.setName("Sustain");
+    speed.setLookAndFeel(&metaTuneKnobLookAndFeel);
+    amount.setLookAndFeel(&metaTuneKnobLookAndFeel);
+    sustain.setLookAndFeel(&metaTuneKnobLookAndFeel);
     speed.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
     amount.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
     sustain.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
@@ -28,6 +99,20 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     for (auto* c : components) addAndMakeVisible(c);
 
     scale.addItem("Chromatic", 1); scale.addItem("Major", 2); scale.addItem("Minor", 3);
+    for (auto* combo : { &scale, &root })
+    {
+        combo->setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff242429));
+        combo->setColour(juce::ComboBox::textColourId, text);
+        combo->setColour(juce::ComboBox::outlineColourId, juce::Colour(0xff77777e));
+        combo->setColour(juce::ComboBox::arrowColourId, text);
+    }
+    for (auto* toggle : { &stabilizer, &lowLatency })
+    {
+        toggle->setColour(juce::ToggleButton::textColourId, text);
+        toggle->setColour(juce::ToggleButton::tickColourId, cyan);
+        toggle->setColour(juce::ToggleButton::tickDisabledColourId, muted);
+        toggle->setLookAndFeel(&metaTuneKnobLookAndFeel);
+    }
     const char* notes[] = {"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
     for (int i=0;i<12;++i) root.addItem(notes[i], i+1);
     speedAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor.parameters,"speed",speed);
@@ -39,7 +124,15 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     latencyAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(processor.parameters,"lowLatency",lowLatency);
     startTimerHz(20);
 }
-MetaTuneInspiredAudioProcessorEditor::~MetaTuneInspiredAudioProcessorEditor() { stopTimer(); }
+MetaTuneInspiredAudioProcessorEditor::~MetaTuneInspiredAudioProcessorEditor()
+{
+    stopTimer();
+    speed.setLookAndFeel(nullptr);
+    amount.setLookAndFeel(nullptr);
+    sustain.setLookAndFeel(nullptr);
+    stabilizer.setLookAndFeel(nullptr);
+    lowLatency.setLookAndFeel(nullptr);
+}
 
 void MetaTuneInspiredAudioProcessorEditor::styleKnob(juce::Slider& s)
 {
@@ -88,8 +181,8 @@ void MetaTuneInspiredAudioProcessorEditor::drawPiano(juce::Graphics& g, juce::Re
         g.setColour(text); g.setFont(juce::Font(juce::FontOptions(15.0f,juce::Font::bold)));
         g.drawText(names[i],x,area.getY()+3,w-1,45,juce::Justification::centred);
         g.setColour((i%3==0 || i==4 || i==9) ? juce::Colour(0xffa079ff) : juce::Colour(0xff6550a0));
-        g.fillRect(x,area.getY()+53,w-1,area.getHeight()-53);
-        g.setColour(juce::Colour(0xff29282f)); g.drawRect(x,area.getY()+53,w-1,area.getHeight()-53,1);
+        g.fillRect((float)x,(float)(area.getY()+53),(float)(w-1),(float)(area.getHeight()-53));
+        g.setColour(juce::Colour(0xff29282f)); g.drawRect((float)x,(float)(area.getY()+53),(float)(w-1),(float)(area.getHeight()-53),1.0f);
     }
     for(int i=0;i<12;++i) if(black[i]) {
         auto x=area.getX()+i*w-w/3;
@@ -121,13 +214,20 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xffd9caff)); g.setFont(juce::Font(juce::FontOptions(27.0f,juce::Font::bold)));
     g.drawText("metaTune",508,6,471,48,juce::Justification::centred);
     g.setColour(muted); g.setFont(juce::Font(juce::FontOptions(23.0f)));
-    g.drawText("UNDO     REDO     A / B     HELP",985,7,365,45,juce::Justification::centred);
+    g.drawText("UNDO     REDO      A  >  B      HELP",985,7,365,45,juce::Justification::centred);
 
     // Main surface and dramatic diagonal split
     g.setColour(juce::Colour(0xff09090b)); g.fillRect(0,60,1366,615);
     juce::Path right; right.startNewSubPath(755,60); right.lineTo(1366,60); right.lineTo(1366,675); right.lineTo(1120,675); right.closeSubPath();
     g.setColour(juce::Colour(0xff29292c)); g.fillPath(right);
     g.setColour(juce::Colour(0xff111113)); g.fillEllipse(238,138,465,460);
+    // Layered translucent rings add the soft luminous halo of the reference UI.
+    for (int i = 7; i >= 1; --i)
+    {
+        g.setColour(juce::Colour(0xffa56bff).withAlpha(0.018f * (8 - i)));
+        g.drawEllipse(319.0f - i * 1.8f, 215.0f - i * 1.8f,
+                      303.0f + i * 3.6f, 302.0f + i * 3.6f, 2.0f);
+    }
     g.setColour(juce::Colour(0xff66616e)); g.drawEllipse(241,141,459,454,3.0f);
     g.setColour(juce::Colour(0xff7652a9)); g.drawEllipse(319,215,303,302,8.0f);
     g.setColour(juce::Colour(0xffb9a2ff)); g.drawEllipse(370,270,201,190,5.0f);
@@ -156,9 +256,6 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     // Decorative outer orb and control labels
     g.setColour(juce::Colour(0xff5a5a5d)); g.fillEllipse(146,557,40,40);
     g.setColour(juce::Colour(0xff8b8b8e)); g.drawEllipse(146,557,40,40,1.5f);
-    drawKnob(g,{930,105,280,275},speed.getValue(),juce::String(speed.getValue(),1),"Speed",pink);
-    drawKnob(g,{1150,205,170,170},sustain.getValue(),juce::String(sustain.getValue(),0),"Sustain",purple);
-    drawKnob(g,{1080,375,255,245},amount.getValue(),juce::String(amount.getValue(),0),"Amount",pink);
 
     // Lower selector strip
     g.setColour(juce::Colour(0xff27272b)); g.fillRect(0,676,1366,57);
@@ -202,9 +299,9 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
 void MetaTuneInspiredAudioProcessorEditor::resized()
 {
     const float sx=getWidth()/1366.0f, sy=getHeight()/1080.0f;
-    speed.setBounds(960*sx,125*sy,220*sx,220*sy);
-    sustain.setBounds(1168*sx,220*sy,135*sx,135*sy);
-    amount.setBounds(1097*sx,400*sy,220*sx,210*sy);
+    speed.setBounds(955*sx,120*sy,225*sx,225*sy);
+    sustain.setBounds(1155*sx,215*sy,150*sx,150*sy);
+    amount.setBounds(1090*sx,395*sy,225*sx,225*sy);
     speedLabel.setBounds(960*sx,320*sy,220*sx,25*sy);
     amountLabel.setBounds(1097*sx,575*sy,220*sx,25*sy);
     scale.setBounds(165*sx,686*sy,125*sx,35*sy);
