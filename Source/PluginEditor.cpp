@@ -251,10 +251,15 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xff7652a9)); g.drawEllipse(319,215,303,302,8.0f);
     g.setColour(juce::Colour(0xffb9a2ff)); g.drawEllipse(370,270,201,190,5.0f);
     // Fine highlight strokes create a more dimensional glass-ring appearance.
+    juce::Path glassHighlight;
+    glassHighlight.addArc(373.0f, 273.0f, 195.0f, 184.0f, 3.55f, 5.15f, true);
     g.setColour(juce::Colour(0xffd8c7ff).withAlpha(0.45f));
-    g.drawArc(373.0f, 273.0f, 195.0f, 184.0f, 3.55f, 5.15f, true, 1.5f);
+    g.strokePath(glassHighlight, juce::PathStrokeType(1.5f));
+
+    juce::Path cyanHighlight;
+    cyanHighlight.addArc(377.0f, 277.0f, 188.0f, 177.0f, 1.55f, 2.45f, true);
     g.setColour(juce::Colour(0xff68dfff).withAlpha(0.65f));
-    g.drawArc(377.0f, 277.0f, 188.0f, 177.0f, 1.55f, 2.45f, true, 2.0f);
+    g.strokePath(cyanHighlight, juce::PathStrokeType(2.0f));
     g.setColour(juce::Colour(0xffbb72e8)); g.setFont(juce::Font(juce::FontOptions(54.0f)));
     // Draw a small lightning mark with vector geometry instead of a font glyph.
     juce::Path bolt;
