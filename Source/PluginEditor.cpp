@@ -6,12 +6,12 @@ const juce::Colour purple(0xffa36bff), pink(0xffdf83c5), cyan(0xff66dfff);
 const juce::Colour text(0xffe7e5e9), muted(0xffa7a5aa);
 
 // Use named typefaces and JUCE 8 portable metrics consistently throughout the UI.
-// Disabling Direct2D bitmap hinting keeps glyphs closer to JUCE's outline renderer.
+// This build uses a JUCE version that does not expose Direct2D hinting through
+// FontOptions, so we avoid that newer API and rely on portable metrics/fallbacks.
 juce::Font uiFont(float height, int style = juce::Font::plain)
 {
     auto options = juce::FontOptions("Segoe UI", height, style)
         .withMetricsKind(juce::TypefaceMetricsKind::portable)
-        .withDirect2DHinting(false)
         .withFallbacks(std::vector<juce::String>{ "Arial", "Tahoma" });
     return juce::Font(options);
 }
@@ -20,7 +20,6 @@ juce::Font digitalFont(float height, int style = juce::Font::bold)
 {
     auto options = juce::FontOptions("Consolas", height, style)
         .withMetricsKind(juce::TypefaceMetricsKind::portable)
-        .withDirect2DHinting(false)
         .withFallbacks(std::vector<juce::String>{ "Segoe UI", "Arial" });
     return juce::Font(options);
 }
@@ -665,17 +664,19 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
 void MetaTuneInspiredAudioProcessorEditor::resized()
 {
     const float sx=getWidth()/1366.0f, sy=getHeight()/1080.0f;
-    speed.setBounds(955*sx,120*sy,225*sx,225*sy);
-    sustain.setBounds(1155*sx,215*sy,150*sx,150*sy);
-    amount.setBounds(1090*sx,395*sy,225*sx,225*sy);
-    speedLabel.setBounds(960*sx,320*sy,220*sx,25*sy);
-    amountLabel.setBounds(1097*sx,575*sy,220*sx,25*sy);
-    scale.setBounds(165*sx,686*sy,176*sx,35*sy);
-    root.setBounds(350*sx,686*sy,100*sx,35*sy);
-    stabilizer.setBounds(990*sx,686*sy,185*sx,35*sy);
-    lowLatency.setBounds(1177*sx,686*sy,175*sx,35*sy);
-    noteReadout.setBounds(360*sx,365*sy,230*sx,70*sy);
-    status.setBounds(32*sx,610*sy,600*sx,25*sy);
+    const auto px = [sx](float value) { return juce::roundToInt(value * sx); };
+    const auto py = [sy](float value) { return juce::roundToInt(value * sy); };
+    speed.setBounds(px(955), py(120), px(225), py(225));
+    sustain.setBounds(px(1155), py(215), px(150), py(150));
+    amount.setBounds(px(1090), py(395), px(225), py(225));
+    speedLabel.setBounds(px(960), py(320), px(220), py(25));
+    amountLabel.setBounds(px(1097), py(575), px(220), py(25));
+    scale.setBounds(px(165), py(686), px(176), py(35));
+    root.setBounds(px(350), py(686), px(100), py(35));
+    stabilizer.setBounds(px(990), py(686), px(185), py(35));
+    lowLatency.setBounds(px(1177), py(686), px(175), py(35));
+    noteReadout.setBounds(px(360), py(365), px(230), py(70));
+    status.setBounds(px(32), py(610), px(600), py(25));
     const float uiScale = juce::jmin(sx, sy);
     noteReadout.setFont(uiFont(juce::jlimit(16.0f, 42.0f, 42.0f * uiScale),
                               juce::Font::bold));
