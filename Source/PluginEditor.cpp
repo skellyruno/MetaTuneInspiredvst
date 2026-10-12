@@ -8,6 +8,37 @@ const juce::Colour text(0xffe7e5e9), muted(0xffa7a5aa);
 constexpr float pitchReferenceMinHz = 415.3047f; // A440 - 1 semitone
 constexpr float pitchReferenceMaxHz = 466.1638f; // A440 + 1 semitone
 
+// UI conversion for the project's existing normalized 0..100 Speed parameter.
+// The display range is 200 ms down to -3 ms. The taper preserves the familiar
+// setting 30 as 30 ms and reserves extra dial travel for the hard-tune region.
+// The DSP must use this same conversion when calculating correction time.
+float speedMillisecondsFromControl(float controlValue)
+{
+    const float p = juce::jlimit(0.0f, 100.0f, controlValue);
+    if (p <= 30.0f)
+        return 200.0f - (170.0f * p / 30.0f); // 0 -> 200 ms; 30 -> 30 ms
+    return 30.0f - (33.0f * (p - 30.0f) / 70.0f); // 30 -> 30 ms; 100 -> -3 ms
+}
+
+// Keep the older APVTS 0..100 sustain storage compatible while exposing the
+// intended signed UI range. A one-time state marker prevents remapping saved
+// negative Sustain settings every time the editor is reopened.
+void ensureSignedSustainState(juce::AudioProcessorValueTreeState& state)
+{
+    const juce::Identifier versionKey("signedSustainRangeVersion");
+    if ((int)state.state.getProperty(versionKey, 0) >= 1)
+        return;
+
+    if (auto* raw = state.getRawParameterValue("sustain"))
+    {
+        const float legacyValue = juce::jlimit(0.0f, 100.0f, raw->load());
+        const float encoded = (legacyValue + 100.0f) * 0.5f;
+        if (auto* parameter = state.getParameter("sustain"))
+            parameter->setValueNotifyingHost(encoded / 100.0f);
+    }
+    state.state.setProperty(versionKey, 1, nullptr);
+}
+
 // Use named typefaces and JUCE 8 portable metrics consistently throughout the UI.
 // This build uses a JUCE version that does not expose Direct2D hinting through
 // FontOptions, so we avoid that newer API and rely on portable metrics/fallbacks.
@@ -45,16 +76,18 @@ juce::Image createOrbArtwork()
 
     // Brighter frosted glass volume. The reference has a clearly visible cloudy
     // silver shell, so build several broader and stronger translucent edge layers.
-    g.setColour(juce::Colour(0xffe8e3f1).withAlpha(0.075f));
-    g.drawEllipse(226.0f, 126.0f, 489.0f, 484.0f, 32.0f);
-    g.setColour(juce::Colour(0xffe8e3f1).withAlpha(0.085f));
-    g.drawEllipse(233.0f, 133.0f, 475.0f, 470.0f, 25.0f);
-    g.setColour(juce::Colour(0xfff1edf7).withAlpha(0.115f));
-    g.drawEllipse(238.0f, 138.0f, 465.0f, 460.0f, 18.0f);
-    g.setColour(juce::Colour(0xfff5f0ff).withAlpha(0.15f));
-    g.drawEllipse(242.0f, 142.0f, 457.0f, 452.0f, 11.0f);
-    g.setColour(juce::Colour(0xffe7e0f2).withAlpha(0.17f));
-    g.drawEllipse(245.0f, 145.0f, 451.0f, 446.0f, 5.0f);
+    // Wide low-opacity bloom is followed by progressively sharper white layers.
+    // This gives the shell a luminous halo instead of the previous charcoal rim.
+    g.setColour(juce::Colour(0xffeee9fa).withAlpha(0.14f));
+    g.drawEllipse(220.0f, 120.0f, 501.0f, 496.0f, 34.0f);
+    g.setColour(juce::Colour(0xfff4efff).withAlpha(0.17f));
+    g.drawEllipse(228.0f, 128.0f, 485.0f, 480.0f, 27.0f);
+    g.setColour(juce::Colour(0xfff5f1ff).withAlpha(0.22f));
+    g.drawEllipse(234.0f, 134.0f, 473.0f, 468.0f, 20.0f);
+    g.setColour(juce::Colour(0xfff8f4ff).withAlpha(0.28f));
+    g.drawEllipse(239.0f, 139.0f, 463.0f, 458.0f, 13.0f);
+    g.setColour(juce::Colour(0xfff0eaff).withAlpha(0.40f));
+    g.drawEllipse(244.0f, 144.0f, 453.0f, 448.0f, 6.0f);
 
     // A cool-white top-left haze and a subtle violet lower rim lift the sphere
     // off the background rather than letting it disappear into black.
@@ -71,7 +104,7 @@ juce::Image createOrbArtwork()
     for (int i = 22; i >= 1; --i)
     {
         const float grow = (float)i * 1.45f;
-        const float alpha = 0.045f + 0.0045f * (22 - i);
+        const float alpha = 0.075f + 0.0080f * (22 - i);
         g.setColour(juce::Colour(0xffeeeaf6).withAlpha(alpha));
         g.drawEllipse(241.0f - grow, 141.0f - grow, 459.0f + grow * 2.0f,
                       454.0f + grow * 2.0f, 2.0f + (float)(i % 3) * 0.35f);
@@ -94,7 +127,7 @@ juce::Image createOrbArtwork()
         if (i % 11 == 0) particle = juce::Colour(0xffd9c9f7);
         if (i % 37 == 0) particle = juce::Colour(0xff95dfff);
         const float angleLight = juce::jlimit(0.45f, 1.35f, 0.82f + 0.42f * -std::sin(a));
-        const float brightness = ((i % 13 == 0) ? 0.94f : ((i % 4 == 0) ? 0.64f : 0.29f)) * angleLight;
+        const float brightness = ((i % 13 == 0) ? 1.0f : ((i % 4 == 0) ? 0.78f : 0.43f)) * angleLight;
         g.setColour(particle.withAlpha(juce::jmin(0.98f, brightness)));
         g.fillEllipse(px, py, dot, dot);
     }
@@ -112,41 +145,43 @@ juce::Image createOrbArtwork()
         const float size = (i % 23 == 0) ? 3.5f : ((i % 7 == 0) ? 2.0f : 0.9f);
         const auto tint = (i % 19 == 0) ? juce::Colour(0xffc7afff)
                          : ((i % 31 == 0) ? juce::Colour(0xffa9e6ff) : juce::Colour(0xffece7f4));
-        const float alpha = (i % 17 == 0) ? 0.46f : ((i % 4 == 0) ? 0.25f : 0.095f);
+        const float alpha = (i % 17 == 0) ? 0.78f : ((i % 4 == 0) ? 0.46f : 0.20f);
         g.setColour(tint.withAlpha(alpha));
         g.fillEllipse(px, py, size, size);
     }
 
     // Fine highlight edge and a dark inner lens create depth, rather than a flat ring.
-    g.setColour(juce::Colour(0xfff1edf6).withAlpha(0.45f));
-    g.drawEllipse(243.0f, 143.0f, 454.0f, 450.0f, 1.5f);
-    g.setColour(juce::Colour(0xff6d6879).withAlpha(0.62f));
+    g.setColour(juce::Colour(0xfffaf7ff).withAlpha(0.82f));
+    g.drawEllipse(243.0f, 143.0f, 454.0f, 450.0f, 2.2f);
+    g.setColour(juce::Colour(0xffeee8f7).withAlpha(0.45f));
+    g.drawEllipse(247.0f, 147.0f, 446.0f, 442.0f, 1.4f);
+    g.setColour(juce::Colour(0xff9d91b5).withAlpha(0.38f));
     g.drawEllipse(250.0f, 150.0f, 440.0f, 436.0f, 1.0f);
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff1a1720), 390.0f, 260.0f,
-                                           juce::Colour(0xff08070b), 470.0f, 550.0f, true));
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff282032), 390.0f, 260.0f,
+                                           juce::Colour(0xff0b0911), 470.0f, 550.0f, true));
     g.fillEllipse(280.0f, 178.0f, 380.0f, 380.0f);
 
     // Violet halo - numerous soft strokes underneath a crisp neon ring.
     for (int i = 12; i >= 1; --i)
     {
         const float inset = (float)i * 1.8f;
-        g.setColour(juce::Colour(0xffa875ff).withAlpha(0.048f * (13 - i)));
+        g.setColour(juce::Colour(0xffad82ff).withAlpha(0.064f * (13 - i)));
         g.drawEllipse(319.0f - inset, 215.0f - inset,
                       303.0f + inset * 2.0f, 302.0f + inset * 2.0f, 3.0f + (float)(i % 2));
     }
-    g.setColour(juce::Colour(0xffa47aff).withAlpha(0.46f));
-    g.drawEllipse(312.0f, 208.0f, 317.0f, 316.0f, 19.0f);
-    g.setColour(juce::Colour(0xff8f5cff).withAlpha(0.52f));
-    g.drawEllipse(316.0f, 212.0f, 309.0f, 308.0f, 13.0f);
-    g.setColour(juce::Colour(0xffa77aff));
-    g.drawEllipse(319.0f, 215.0f, 303.0f, 302.0f, 7.4f);
-    g.setColour(juce::Colour(0xffe2ccff).withAlpha(0.76f));
-    g.drawEllipse(323.0f, 219.0f, 295.0f, 294.0f, 1.5f);
+    g.setColour(juce::Colour(0xffa97cff).withAlpha(0.62f));
+    g.drawEllipse(308.0f, 204.0f, 325.0f, 324.0f, 22.0f);
+    g.setColour(juce::Colour(0xff965eff).withAlpha(0.76f));
+    g.drawEllipse(314.0f, 210.0f, 313.0f, 312.0f, 15.0f);
+    g.setColour(juce::Colour(0xffa77aff).withAlpha(0.98f));
+    g.drawEllipse(319.0f, 215.0f, 303.0f, 302.0f, 7.8f);
+    g.setColour(juce::Colour(0xffe9d9ff).withAlpha(0.92f));
+    g.drawEllipse(323.0f, 219.0f, 295.0f, 294.0f, 1.7f);
 
     // Inner 2-tone plasma globe. A cloudy gradient, fine particle edge and curved energy seam
     // mimic the cyan-left / magenta-right glass surface from the reference screenshot.
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff493658), 411.0f, 294.0f,
-                                           juce::Colour(0xff17131f), 518.0f, 443.0f, true));
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff654879), 411.0f, 294.0f,
+                                           juce::Colour(0xff21172e), 518.0f, 443.0f, true));
     g.fillEllipse(370.0f, 270.0f, 201.0f, 190.0f);
 
     // Overlapping radial colour fields form cloudy energy rather than a hard vertical split.
@@ -156,23 +191,57 @@ juce::Image createOrbArtwork()
     g.saveState();
     g.reduceClipRegion(innerGlassClip);
 
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff62dff5).withAlpha(0.68f),
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff55e3ff).withAlpha(0.88f),
                                            414.0f, 355.0f,
                                            juce::Colour(0xff4acde7).withAlpha(0.0f),
                                            482.0f, 355.0f, true));
     g.fillEllipse(365.0f, 293.0f, 155.0f, 150.0f);
 
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xffe18ce4).withAlpha(0.62f),
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xffff8ce7).withAlpha(0.84f),
                                            519.0f, 349.0f,
                                            juce::Colour(0xffb65cc9).withAlpha(0.0f),
                                            584.0f, 349.0f, true));
     g.fillEllipse(427.0f, 281.0f, 155.0f, 166.0f);
 
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xffa08bff).withAlpha(0.46f),
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xffa990ff).withAlpha(0.66f),
                                            462.0f, 407.0f,
                                            juce::Colour(0xff6651d0).withAlpha(0.0f),
                                            462.0f, 473.0f, true));
     g.fillEllipse(393.0f, 348.0f, 153.0f, 112.0f);
+
+    // Irregular translucent lobes create a marbled cyan/magenta plasma surface.
+    // These overlapping patches deliberately avoid a clean half-and-half split.
+    juce::Path cyanLobe;
+    cyanLobe.startNewSubPath(382.0f, 313.0f);
+    cyanLobe.cubicTo(402.0f, 290.0f, 439.0f, 301.0f, 452.0f, 328.0f);
+    cyanLobe.cubicTo(461.0f, 347.0f, 450.0f, 372.0f, 429.0f, 389.0f);
+    cyanLobe.cubicTo(407.0f, 406.0f, 388.0f, 385.0f, 383.0f, 359.0f);
+    cyanLobe.cubicTo(379.0f, 340.0f, 375.0f, 325.0f, 382.0f, 313.0f);
+    cyanLobe.closeSubPath();
+    g.setColour(juce::Colour(0xff38cce9).withAlpha(0.28f));
+    g.fillPath(cyanLobe);
+
+    juce::Path magentaLobe;
+    magentaLobe.startNewSubPath(477.0f, 295.0f);
+    magentaLobe.cubicTo(505.0f, 288.0f, 541.0f, 318.0f, 547.0f, 346.0f);
+    magentaLobe.cubicTo(555.0f, 379.0f, 526.0f, 398.0f, 508.0f, 382.0f);
+    magentaLobe.cubicTo(488.0f, 363.0f, 501.0f, 343.0f, 485.0f, 327.0f);
+    magentaLobe.cubicTo(474.0f, 316.0f, 464.0f, 303.0f, 477.0f, 295.0f);
+    magentaLobe.closeSubPath();
+    g.setColour(juce::Colour(0xfff078dd).withAlpha(0.30f));
+    g.fillPath(magentaLobe);
+
+    // A few hazy highlights deepen the glass without obscuring the lightning.
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xfff4b9ff).withAlpha(0.28f),
+                                           491.0f, 316.0f,
+                                           juce::Colour(0xfff4b9ff).withAlpha(0.0f),
+                                           520.0f, 371.0f, true));
+    g.fillEllipse(454.0f, 283.0f, 103.0f, 111.0f);
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff9beaff).withAlpha(0.24f),
+                                           410.0f, 375.0f,
+                                           juce::Colour(0xff9beaff).withAlpha(0.0f),
+                                           442.0f, 419.0f, true));
+    g.fillEllipse(376.0f, 343.0f, 112.0f, 103.0f);
 
     // A barely visible shadow along the lower-right creates internal spherical depth.
     juce::Path internalShade;
@@ -190,7 +259,7 @@ juce::Image createOrbArtwork()
     innerClip.addEllipse(372.0f, 272.0f, 197.0f, 186.0f);
     g.saveState();
     g.reduceClipRegion(innerClip);
-    for (int i = 0; i < 900; ++i)
+    for (int i = 0; i < 1550; ++i)
     {
         const unsigned int h = (unsigned int)i * 2246822519u + 3266489917u;
         const float px = 379.0f + (float)(h % 18300u) / 100.0f;
@@ -200,7 +269,7 @@ juce::Image createOrbArtwork()
         if (dx * dx + dy * dy > 1.0f) continue;
         const bool left = px < 470.5f;
         auto cloud = left ? juce::Colour(0xff72dcf7) : juce::Colour(0xffe09be9);
-        g.setColour(cloud.withAlpha((i % 9 == 0) ? 0.28f : 0.095f));
+        g.setColour(cloud.withAlpha((i % 9 == 0) ? 0.46f : 0.19f));
         const float dot = (i % 13 == 0) ? 1.4f : 0.7f;
         g.fillEllipse(px, py, dot, dot);
     }
@@ -217,16 +286,16 @@ juce::Image createOrbArtwork()
         juce::Colour edge = juce::Colour(0xfff4e9ff);
         if (std::cos(a) < -0.28f) edge = juce::Colour(0xff8ce7ff);
         else if (std::cos(a) > 0.25f) edge = juce::Colour(0xffffb6e9);
-        const float alpha = (i % 11 == 0) ? 0.66f : ((i % 4 == 0) ? 0.34f : 0.13f);
+        const float alpha = (i % 11 == 0) ? 0.88f : ((i % 4 == 0) ? 0.56f : 0.25f);
         const float dot = (i % 7 == 0) ? 2.0f : 0.9f;
         g.setColour(edge.withAlpha(alpha));
         g.fillEllipse(px, py, dot, dot);
     }
     juce::Path innerRim;
     innerRim.addEllipse(370.0f, 270.0f, 201.0f, 190.0f);
-    g.setColour(juce::Colour(0xfff6edff).withAlpha(0.80f));
+    g.setColour(juce::Colour(0xfffff7ff).withAlpha(0.96f));
     g.strokePath(innerRim, juce::PathStrokeType(2.7f));
-    g.setColour(juce::Colour(0xffb6a0dd).withAlpha(0.34f));
+    g.setColour(juce::Colour(0xffd5c0f2).withAlpha(0.48f));
     g.strokePath(innerRim, juce::PathStrokeType(8.0f));
 
     juce::Path plasma;
@@ -262,8 +331,22 @@ juce::Image createOrbArtwork()
     bolt.closeSubPath();
     g.setColour(juce::Colour(0xffc66dff).withAlpha(0.28f));
     g.fillPath(bolt, juce::AffineTransform::translation(1.2f, 1.2f));
-    g.setColour(juce::Colour(0xffd077ff));
+    g.setColour(juce::Colour(0xfff0adff).withAlpha(0.98f));
     g.fillPath(bolt);
+
+    // Final frosted perimeter bloom, drawn last so later inner-lens fills cannot dim it.
+    for (int i = 12; i >= 1; --i)
+    {
+        const float spread = (float)i * 1.15f;
+        const float a = 0.018f + 0.014f * (13 - i);
+        g.setColour(juce::Colour(0xfff7f3ff).withAlpha(a));
+        g.drawEllipse(243.0f - spread, 143.0f - spread,
+                      454.0f + spread * 2.0f, 450.0f + spread * 2.0f, 2.1f);
+    }
+    g.setColour(juce::Colour(0xfff7f4ff).withAlpha(0.74f));
+    g.drawEllipse(243.0f, 143.0f, 454.0f, 450.0f, 2.5f);
+    g.setColour(juce::Colour(0xfffdfaff).withAlpha(0.56f));
+    g.drawEllipse(246.0f, 146.0f, 448.0f, 444.0f, 1.1f);
 
     return image;
 }
@@ -314,15 +397,23 @@ public:
                                        0.0f, startAngle, endAngle, true);
             g.setColour(juce::Colour(0xff45444b).withAlpha(0.72f));
             g.strokePath(sustainTrack, juce::PathStrokeType(2.2f));
-            if (sliderPos > 0.001f)
-            {
-                juce::Path sustainValue;
-                sustainValue.addCentredArc(cx, cy, tickRadius + 1.5f, tickRadius + 1.5f,
-                                           0.0f, startAngle,
-                                           startAngle + (endAngle - startAngle) * sliderPos, true);
-                g.setColour(juce::Colour(0xff77717f).withAlpha(0.88f));
-                g.strokePath(sustainValue, juce::PathStrokeType(2.2f));
-            }
+
+            const float zeroAngle = startAngle + (endAngle - startAngle) * 0.5f;
+            const float currentAngle = startAngle + (endAngle - startAngle) * sliderPos;
+            juce::Path sustainValue;
+            sustainValue.addCentredArc(cx, cy, tickRadius + 1.5f, tickRadius + 1.5f, 0.0f,
+                                       juce::jmin(zeroAngle, currentAngle),
+                                       juce::jmax(zeroAngle, currentAngle), true);
+            const auto sustainAccent = slider.getValue() < 0.0 ? cyan : pink;
+            g.setColour(sustainAccent.withAlpha(0.90f));
+            g.strokePath(sustainValue, juce::PathStrokeType(2.2f));
+
+            // Neutral-zero tick distinguishes slower negative sustain from faster positive sustain.
+            const float tickInner = tickRadius - 4.0f;
+            const float tickOuter = tickRadius + 5.0f;
+            g.setColour(juce::Colour(0xffd9d4e1).withAlpha(0.9f));
+            g.drawLine(cx + std::cos(zeroAngle) * tickInner, cy + std::sin(zeroAngle) * tickInner,
+                       cx + std::cos(zeroAngle) * tickOuter, cy + std::sin(zeroAngle) * tickOuter, 1.2f);
         }
         else
         {
@@ -331,11 +422,11 @@ public:
             casing.addCentredArc(cx, cy, radius + 5.0f, radius + 5.0f, 0.0f,
                                  startAngle, endAngle, true);
             g.setColour(juce::Colour(0xff030304));
-            g.strokePath(casing, juce::PathStrokeType(isSpeed ? 15.0f : 9.0f,
+            g.strokePath(casing, juce::PathStrokeType(isSpeed ? 12.5f : 8.0f,
                                                       juce::PathStrokeType::curved,
                                                       juce::PathStrokeType::rounded));
             g.setColour(juce::Colour(0xff393940));
-            g.strokePath(casing, juce::PathStrokeType(isSpeed ? 8.0f : 4.2f,
+            g.strokePath(casing, juce::PathStrokeType(isSpeed ? 6.5f : 3.8f,
                                                       juce::PathStrokeType::curved,
                                                       juce::PathStrokeType::rounded));
             juce::Path rimHighlight;
@@ -369,9 +460,9 @@ public:
                 notch.lineTo(cx + std::cos(a) * innerR, cy + std::sin(a) * innerR);
             }
             notch.closeSubPath();
-            g.setColour(juce::Colour(0xff29292c));
+            g.setColour(juce::Colour(0xff2b2a2f));
             g.fillPath(notch);
-            g.setColour(juce::Colour(0xff17171a).withAlpha(0.8f));
+            g.setColour(juce::Colour(0xff19181d).withAlpha(0.88f));
             g.drawLine(cx + std::cos(gapStart) * innerR, cy + std::sin(gapStart) * innerR,
                        cx + std::cos(gapStart) * outerR, cy + std::sin(gapStart) * outerR, 1.0f);
             g.drawLine(cx + std::cos(gapEnd) * innerR, cy + std::sin(gapEnd) * innerR,
@@ -428,8 +519,9 @@ public:
                           cy + std::sin(thumbAngle) * thumbR - 4.2f, 8.4f, 8.4f);
         }
 
-        const juce::String value = isSpeed ? juce::String(slider.getValue(), 1)
-                                           : juce::String(slider.getValue(), 0);
+        const juce::String value = isSpeed
+            ? juce::String(speedMillisecondsFromControl((float)slider.getValue()), 1)
+            : juce::String(slider.getValue(), 0);
         g.setColour(juce::Colour(0xfff0edf4));
         const float valueFontSize = juce::jlimit(isSustain ? 11.0f : 13.0f,
                                                  isSustain ? 16.0f : 23.0f,
@@ -513,8 +605,12 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     setResizable(true, true);
     setResizeLimits(683, 540, 1708, 1350);
     speed.setName("Speed"); amount.setName("Amount"); sustain.setName("Sustain");
+    speed.setTooltip("Retune Speed: 200 ms (natural) down to -3 ms (hard tune)");
+    amount.setTooltip("Correction Amount: 0% to 100%");
+    sustain.setTooltip("Sustain response changes how retuning reacts on held notes; negative values slow it down and positive values speed it up.");
     styleKnob(speed); styleKnob(amount); styleKnob(sustain);
-    speed.setLookAndFeel(&metaTuneKnobLookAndFeel);
+    sustain.setRange(-100.0, 100.0, 1.0);
+    sustain.setLookAndFeel(&metaTuneKnobLookAndFeel);
     amount.setLookAndFeel(&metaTuneKnobLookAndFeel);
     sustain.setLookAndFeel(&metaTuneKnobLookAndFeel);
     speed.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
@@ -553,14 +649,33 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     }
     const char* notes[] = {"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
     for (int i=0;i<12;++i) root.addItem(notes[i], i+1);
+
+    ensureSignedSustainState(processor.parameters);
+    if (auto* rawSustain = processor.parameters.getRawParameterValue("sustain"))
+        sustain.setValue(rawSustain->load() * 2.0f - 100.0f, juce::dontSendNotification);
+
     speedAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor.parameters,"speed",speed);
     amountAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor.parameters,"amount",amount);
-    sustainAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor.parameters,"sustain",sustain);
     auto beginUndoableEdit = [this]() { undoState = processor.parameters.copyState(); hasUndoState = true; hasRedoState = false; };
     auto finishUndoableEdit = [this]() { redoState = processor.parameters.copyState(); hasRedoState = hasUndoState; };
     speed.onDragStart = beginUndoableEdit; speed.onDragEnd = finishUndoableEdit;
     amount.onDragStart = beginUndoableEdit; amount.onDragEnd = finishUndoableEdit;
-    sustain.onDragStart = beginUndoableEdit; sustain.onDragEnd = finishUndoableEdit;
+    sustain.onDragStart = [this, beginUndoableEdit]()
+    {
+        if (auto* parameter = processor.parameters.getParameter("sustain")) parameter->beginChangeGesture();
+        beginUndoableEdit();
+    };
+    sustain.onDragEnd = [this, finishUndoableEdit]()
+    {
+        if (auto* parameter = processor.parameters.getParameter("sustain")) parameter->endChangeGesture();
+        finishUndoableEdit();
+    };
+    sustain.onValueChange = [this]()
+    {
+        if (auto* parameter = processor.parameters.getParameter("sustain"))
+            parameter->setValueNotifyingHost((float)((sustain.getValue() + 100.0) / 200.0));
+        repaint();
+    };
     scaleAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor.parameters,"scale",scale);
     rootAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor.parameters,"root",root);
     stabAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(processor.parameters,"stabilizer",stabilizer);
@@ -779,14 +894,13 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xff1b1a20)); g.fillRect(508,6,471,48);
     g.setColour(juce::Colour(0xffa36bff).withAlpha(0.22f));
     g.fillRect(508,6,471,2);
-    const auto logoFont = uiFont(27.0f, juce::Font::bold);
-    g.setFont(logoFont);
-    // Use fixed integer bounds instead of measuring glyph widths: this avoids
-    // deprecated text-width APIs and float-to-int overload ambiguity on MSVC.
-    g.setColour(juce::Colour(0xffb9a0ff).withAlpha(0.23f));
-    g.drawText("metaTune", 509, 7, 471, 47, juce::Justification::centred);
-    g.setColour(juce::Colour(0xffe2d5ff));
-    g.drawText("metaTune", 508, 6, 471, 48, juce::Justification::centred);
+    g.setFont(uiFont(26.0f, juce::Font::bold));
+    // Fitted text prevents fallback font metrics from clipping the final letters.
+    const juce::Rectangle<int> wordmarkBounds(508, 6, 471, 48);
+    g.setColour(juce::Colour(0xffb9a0ff).withAlpha(0.22f));
+    g.drawFittedText("metaTune", wordmarkBounds.translated(0, 1), juce::Justification::centred, 1, 0.76f);
+    g.setColour(juce::Colour(0xffe7ddff));
+    g.drawFittedText("metaTune", wordmarkBounds, juce::Justification::centred, 1, 0.76f);
 
     // Icon-only toolbar with consistent vector strokes.
     auto drawUndoIcon = [&g](float x, bool redo)
@@ -1106,6 +1220,9 @@ void MetaTuneInspiredAudioProcessorEditor::loadPresetFromFile()
                 if (file.loadFileAsData(block))
                 {
                     safeThis->processor.setStateInformation(block.getData(), (int)block.getSize());
+                    ensureSignedSustainState(safeThis->processor.parameters);
+                    if (auto* rawSustain = safeThis->processor.parameters.getRawParameterValue("sustain"))
+                        safeThis->sustain.setValue(rawSustain->load() * 2.0f - 100.0f, juce::dontSendNotification);
                     safeThis->selectedPresetName = file.getFileNameWithoutExtension();
                     safeThis->selectedNoteIndex = juce::jlimit(0, 11, safeThis->root.getSelectedItemIndex());
                     if (safeThis->scale.getSelectedItemIndex() != 0)
@@ -1159,9 +1276,11 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDrag(const juce::MouseEvent& eve
 
     const float delta = (orbDragStartY - designY) * 0.42f;
     if (orbDragMode == 1)
-        speed.setValue(juce::jlimit(0.0f, 100.0f, orbDragStartValue + delta), juce::sendNotificationSync);
+        speed.setValue(juce::jlimit<float>(0.0f, 100.0f,
+                         static_cast<float>(orbDragStartValue + delta)), juce::sendNotificationSync);
     else if (orbDragMode == 2)
-        amount.setValue(juce::jlimit(0.0f, 100.0f, orbDragStartValue + delta), juce::sendNotificationSync);
+        amount.setValue(juce::jlimit<float>(0.0f, 100.0f,
+                          static_cast<float>(orbDragStartValue + delta)), juce::sendNotificationSync);
 }
 
 void MetaTuneInspiredAudioProcessorEditor::mouseUp(const juce::MouseEvent&)
@@ -1407,6 +1526,15 @@ void MetaTuneInspiredAudioProcessorEditor::resized()
 }
 void MetaTuneInspiredAudioProcessorEditor::timerCallback()
 {
+    // Host automation/state restoration writes the encoded 0..100 APVTS value;
+    // mirror it into the visible signed -100..+100 Sustain control.
+    if (auto* rawSustain = processor.parameters.getRawParameterValue("sustain"))
+    {
+        const double signedValue = (double)rawSustain->load() * 2.0 - 100.0;
+        if (std::abs(sustain.getValue() - signedValue) > 0.51)
+            sustain.setValue(signedValue, juce::dontSendNotification);
+    }
+
     const float hz=processor.getDetectedHz();
     if(hz>0.0f) {
         const int midi=(int)std::round(processor.getDetectedMidiNote());
