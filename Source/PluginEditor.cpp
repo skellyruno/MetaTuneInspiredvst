@@ -36,9 +36,10 @@ public:
         const float cy = y + height * 0.5f;
         const bool isSpeed = slider.getName() == "Speed";
         const bool isAmount = slider.getName() == "Amount";
-        const float radius = side * (isSpeed ? 0.435f : (isAmount ? 0.435f : 0.425f));
-        const float tickRadius = radius * 0.82f;
-        const juce::Colour accent = isAmount ? pink : purple;
+        const bool isSustain = slider.getName() == "Sustain";
+        const float radius = side * (isSpeed ? 0.435f : (isAmount ? 0.435f : 0.405f));
+        const float tickRadius = radius * (isSustain ? 0.78f : 0.82f);
+        const juce::Colour accent = isAmount ? pink : (isSustain ? juce::Colour(0xff55545c) : purple);
 
         // Deep, machined outer housing with two edge bevels.
         g.setColour(juce::Colour(0xff050506).withAlpha(0.82f));
@@ -53,26 +54,54 @@ public:
         g.drawEllipse(cx - radius + 3.0f, cy - radius + 3.0f,
                       (radius - 3.0f) * 2.0f, (radius - 3.0f) * 2.0f, 1.0f);
 
-        // The open C-shaped housing is an important visual signature of Speed.
-        juce::Path casing;
-        casing.addCentredArc(cx, cy, radius + 5.0f, radius + 5.0f, 0.0f,
-                             startAngle, endAngle, true);
-        g.setColour(juce::Colour(0xff030304));
-        g.strokePath(casing, juce::PathStrokeType(isSpeed ? 15.0f : 9.0f,
-                                                  juce::PathStrokeType::curved,
-                                                  juce::PathStrokeType::rounded));
-        g.setColour(juce::Colour(0xff393940));
-        g.strokePath(casing, juce::PathStrokeType(isSpeed ? 8.0f : 4.2f,
-                                                  juce::PathStrokeType::curved,
-                                                  juce::PathStrokeType::rounded));
-        juce::Path rimHighlight;
-        rimHighlight.addCentredArc(cx - 0.6f, cy - 0.6f, radius + 8.2f, radius + 8.2f,
-                                   0.0f, startAngle + 0.08f, endAngle - 0.08f, true);
-        g.setColour(juce::Colour(0xff85818d).withAlpha(0.30f));
-        g.strokePath(rimHighlight, juce::PathStrokeType(0.9f));
+        // Speed and Amount get the stylized open housing. Sustain is the small,
+        // muted secondary dial and uses a continuous recessed ring instead.
+        if (isSustain)
+        {
+            g.setColour(juce::Colour(0xff050506));
+            g.drawEllipse(cx - radius - 4.0f, cy - radius - 4.0f,
+                          (radius + 4.0f) * 2.0f, (radius + 4.0f) * 2.0f, 2.0f);
+            g.setColour(juce::Colour(0xff303036));
+            g.drawEllipse(cx - radius + 2.0f, cy - radius + 2.0f,
+                          (radius - 2.0f) * 2.0f, (radius - 2.0f) * 2.0f, 1.0f);
 
-        // Cut a true notch into the face-side of the Speed housing so its opening
-        // is visible even at the compact 683 x 540 default size.
+            juce::Path sustainTrack;
+            sustainTrack.addCentredArc(cx, cy, tickRadius + 1.5f, tickRadius + 1.5f,
+                                       0.0f, startAngle, endAngle, true);
+            g.setColour(juce::Colour(0xff45444b).withAlpha(0.72f));
+            g.strokePath(sustainTrack, juce::PathStrokeType(2.2f));
+            if (sliderPos > 0.001f)
+            {
+                juce::Path sustainValue;
+                sustainValue.addCentredArc(cx, cy, tickRadius + 1.5f, tickRadius + 1.5f,
+                                           0.0f, startAngle,
+                                           startAngle + (endAngle - startAngle) * sliderPos, true);
+                g.setColour(juce::Colour(0xff77717f).withAlpha(0.88f));
+                g.strokePath(sustainValue, juce::PathStrokeType(2.2f));
+            }
+        }
+        else
+        {
+            // The open C-shaped housing is an important visual signature of Speed.
+            juce::Path casing;
+            casing.addCentredArc(cx, cy, radius + 5.0f, radius + 5.0f, 0.0f,
+                                 startAngle, endAngle, true);
+            g.setColour(juce::Colour(0xff030304));
+            g.strokePath(casing, juce::PathStrokeType(isSpeed ? 15.0f : 9.0f,
+                                                      juce::PathStrokeType::curved,
+                                                      juce::PathStrokeType::rounded));
+            g.setColour(juce::Colour(0xff393940));
+            g.strokePath(casing, juce::PathStrokeType(isSpeed ? 8.0f : 4.2f,
+                                                      juce::PathStrokeType::curved,
+                                                      juce::PathStrokeType::rounded));
+            juce::Path rimHighlight;
+            rimHighlight.addCentredArc(cx - 0.6f, cy - 0.6f, radius + 8.2f, radius + 8.2f,
+                                       0.0f, startAngle + 0.08f, endAngle - 0.08f, true);
+            g.setColour(juce::Colour(0xff85818d).withAlpha(0.30f));
+            g.strokePath(rimHighlight, juce::PathStrokeType(0.9f));
+        }
+
+        // Remove a slice from the Speed housing to create MetaTune's broad C-shaped opening.
         if (isSpeed)
         {
             const float gapStart = endAngle;
@@ -106,7 +135,7 @@ public:
         }
 
         // Small segmented LEDs and major marks at fifth-tick intervals.
-        const int ticks = isSpeed ? 63 : (isAmount ? 57 : 37);
+        const int ticks = isSustain ? 0 : (isSpeed ? 63 : 57);
         for (int i = 0; i < ticks; ++i)
         {
             const float t = (float)i / (float)(ticks - 1);
@@ -132,39 +161,51 @@ public:
             g.drawLine(tick, i % 5 == 0 ? 1.5f : 0.9f);
         }
 
-        juce::Path progress;
-        progress.addCentredArc(cx, cy, tickRadius - 4.0f, tickRadius - 4.0f, 0.0f,
-                               startAngle, startAngle + (endAngle - startAngle) * sliderPos, true);
-        g.setColour(accent.withAlpha(0.13f));
-        g.strokePath(progress, juce::PathStrokeType(7.0f, juce::PathStrokeType::curved,
-                                                    juce::PathStrokeType::rounded));
-        g.setColour(accent.withAlpha(0.92f));
-        g.strokePath(progress, juce::PathStrokeType(isSpeed ? 2.8f : 2.3f,
-                                                    juce::PathStrokeType::curved,
-                                                    juce::PathStrokeType::rounded));
+        if (!isSustain)
+        {
+            juce::Path progress;
+            progress.addCentredArc(cx, cy, tickRadius - 4.0f, tickRadius - 4.0f, 0.0f,
+                                   startAngle, startAngle + (endAngle - startAngle) * sliderPos, true);
+            g.setColour(accent.withAlpha(0.13f));
+            g.strokePath(progress, juce::PathStrokeType(7.0f, juce::PathStrokeType::curved,
+                                                        juce::PathStrokeType::rounded));
+            g.setColour(accent.withAlpha(0.92f));
+            g.strokePath(progress, juce::PathStrokeType(isSpeed ? 2.8f : 2.3f,
+                                                        juce::PathStrokeType::curved,
+                                                        juce::PathStrokeType::rounded));
 
-        const float thumbAngle = startAngle + (endAngle - startAngle) * sliderPos;
-        const float thumbR = tickRadius - 4.0f;
-        g.setColour(juce::Colour(0xff070708));
-        g.fillEllipse(cx + std::cos(thumbAngle) * thumbR - 5.4f,
-                      cy + std::sin(thumbAngle) * thumbR - 5.4f, 10.8f, 10.8f);
-        g.setColour(cyan);
-        g.fillEllipse(cx + std::cos(thumbAngle) * thumbR - 4.2f,
-                      cy + std::sin(thumbAngle) * thumbR - 4.2f, 8.4f, 8.4f);
+            const float thumbAngle = startAngle + (endAngle - startAngle) * sliderPos;
+            const float thumbR = tickRadius - 4.0f;
+            g.setColour(juce::Colour(0xff070708));
+            g.fillEllipse(cx + std::cos(thumbAngle) * thumbR - 5.4f,
+                          cy + std::sin(thumbAngle) * thumbR - 5.4f, 10.8f, 10.8f);
+            g.setColour(cyan);
+            g.fillEllipse(cx + std::cos(thumbAngle) * thumbR - 4.2f,
+                          cy + std::sin(thumbAngle) * thumbR - 4.2f, 8.4f, 8.4f);
+        }
 
         const juce::String value = isSpeed ? juce::String(slider.getValue(), 1)
                                            : juce::String(slider.getValue(), 0);
         g.setColour(juce::Colour(0xfff0edf4));
-        g.setFont(digitalFont(juce::jlimit(13.0f, 23.0f, side * 0.185f),
-                                                   juce::Font::bold));
-        g.drawText(value, juce::Rectangle<float>(cx - radius * 0.72f, cy - side * 0.10f,
-                                                  radius * 1.44f, side * 0.27f),
+        const float valueFontSize = juce::jlimit(isSustain ? 11.0f : 13.0f,
+                                                 isSustain ? 16.0f : 23.0f,
+                                                 side * (isSustain ? 0.19f : 0.185f));
+        g.setFont(digitalFont(valueFontSize, juce::Font::bold));
+        const float valueY = cy - side * (isSustain ? 0.22f : 0.10f);
+        const float valueH = side * (isSustain ? 0.30f : 0.27f);
+        g.drawText(value, juce::Rectangle<float>(cx - radius * 0.72f, valueY,
+                                                  radius * 1.44f, valueH),
                    juce::Justification::centred);
-        g.setColour(muted);
-        g.setFont(uiFont(juce::jlimit(9.0f, 14.0f, side * 0.105f),
-                                               juce::Font::bold));
-        g.drawText(slider.getName(), juce::Rectangle<float>(cx - radius * 0.72f, cy + side * 0.08f,
-                                                             radius * 1.44f, side * 0.22f),
+
+        g.setColour(isSustain ? juce::Colour(0xffbdbac4) : muted);
+        const float labelSize = juce::jlimit(isSustain ? 8.0f : 9.0f,
+                                             isSustain ? 10.0f : 14.0f,
+                                             side * (isSustain ? 0.11f : 0.105f));
+        g.setFont(uiFont(labelSize, juce::Font::bold));
+        const float labelY = cy + side * (isSustain ? 0.08f : 0.08f);
+        const float labelH = side * (isSustain ? 0.18f : 0.22f);
+        g.drawText(slider.getName(), juce::Rectangle<float>(cx - radius * 0.78f, labelY,
+                                                             radius * 1.56f, labelH),
                    juce::Justification::centred);
     }
 
@@ -667,7 +708,7 @@ void MetaTuneInspiredAudioProcessorEditor::resized()
     const auto px = [sx](float value) { return juce::roundToInt(value * sx); };
     const auto py = [sy](float value) { return juce::roundToInt(value * sy); };
     speed.setBounds(px(955), py(120), px(225), py(225));
-    sustain.setBounds(px(1155), py(215), px(150), py(150));
+    sustain.setBounds(px(1180), py(205), px(140), py(140));
     amount.setBounds(px(1090), py(395), px(225), py(225));
     speedLabel.setBounds(px(960), py(320), px(220), py(25));
     amountLabel.setBounds(px(1097), py(575), px(220), py(25));
