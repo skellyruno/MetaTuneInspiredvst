@@ -76,9 +76,9 @@ MetaTuneKnobLookAndFeel metaTuneKnobLookAndFeel;
 MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaTuneInspiredAudioProcessor& p)
  : AudioProcessorEditor(&p), processor(p)
 {
-    // Start at 65% of the reference canvas (35% smaller), while allowing the host
-    // editor to be resized. All custom drawing and child controls scale together.
-    setSize(888, 702);
+    // Default to the requested compact size while keeping the editor resizable.
+    // The drawing canvas remains 1366x1080 and is scaled in paint()/resized().
+    setSize(683, 540);
     setResizable(true, true);
     setResizeLimits(683, 540, 1708, 1350);
     styleKnob(speed); styleKnob(amount); styleKnob(sustain);
