@@ -32,6 +32,9 @@ public:
     float getDetectedHz() const noexcept { return detectedHz.load(); }
     float getCorrectionCents() const noexcept { return correctionCents.load(); }
 
+    // Shared mapping for the UI readout and the future correction-time engine.
+    static float speedControlToMilliseconds(float controlValue) noexcept;
+
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameters();
     void updatePitchEstimate(const juce::AudioBuffer<float>& buffer);

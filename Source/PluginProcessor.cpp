@@ -8,13 +8,23 @@ MetaTuneInspiredAudioProcessor::MetaTuneInspiredAudioProcessor()
 {
 }
 
+float MetaTuneInspiredAudioProcessor::speedControlToMilliseconds(float controlValue) noexcept
+{
+    const float p = juce::jlimit(0.0f, 100.0f, controlValue);
+    // 0 -> 200 ms; 30 -> 30 ms; 100 -> -3 ms, matching the user-facing dial.
+    if (p <= 30.0f)
+        return 200.0f - (170.0f * p / 30.0f);
+    return 30.0f - (33.0f * (p - 30.0f) / 70.0f);
+}
+
 juce::AudioProcessorValueTreeState::ParameterLayout MetaTuneInspiredAudioProcessor::createParameters()
 {
     using namespace juce;
     AudioProcessorValueTreeState::ParameterLayout p;
     p.add(std::make_unique<AudioParameterFloat>("speed", "Speed", NormalisableRange<float>(0.0f, 100.0f, 0.1f), 30.0f));
     p.add(std::make_unique<AudioParameterFloat>("amount", "Amount", NormalisableRange<float>(0.0f, 100.0f, 0.1f), 100.0f));
-    p.add(std::make_unique<AudioParameterFloat>("sustain", "Sustain", NormalisableRange<float>(0.0f, 100.0f, 0.1f), 0.0f));
+    // Signed values: negative slows retuning on held notes, positive speeds it up.
+    p.add(std::make_unique<AudioParameterFloat>("sustain", "Sustain", NormalisableRange<float>(-100.0f, 100.0f, 1.0f), 0.0f));
     p.add(std::make_unique<AudioParameterBool>("stabilizer", "Note Stabilizer", true));
     p.add(std::make_unique<AudioParameterBool>("lowLatency", "Low Latency", true));
     p.add(std::make_unique<AudioParameterChoice>("scale", "Scale", StringArray{"Chromatic","Major","Minor"}, 0));
@@ -84,7 +94,9 @@ void MetaTuneInspiredAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
     const int scale = (int)parameters.getRawParameterValue("scale")->load();
     const int root = (int)parameters.getRawParameterValue("root")->load();
     const float amount = parameters.getRawParameterValue("amount")->load() / 100.0f;
-    const float speed = parameters.getRawParameterValue("speed")->load();
+    const float speedControl = parameters.getRawParameterValue("speed")->load();
+    const float retuneTimeMs = speedControlToMilliseconds(speedControl);
+    const float sustain = parameters.getRawParameterValue("sustain")->load();
 
     static constexpr int major[] = {0,2,4,5,7,9,11};
     static constexpr int minor[] = {0,2,3,5,7,8,10};
@@ -104,10 +116,10 @@ void MetaTuneInspiredAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
     const float cents = (target - note) * 100.0f;
     correctionCents.store(cents);
 
-    // Build-safe milestone: estimate pitch and target correction but leave audio
-    // transparent until a real pitch-shifting engine is implemented. JUCE 8 does
-    // not provide juce::dsp::PitchShifter.
-    juce::ignoreUnused(target, speed);
+    // Build-safe milestone: calculate the selected target, correction strength,
+    // retune time (ms), and signed sustain response. Audio remains pass-through
+    // until a dedicated real-time pitch-shifting engine is integrated.
+    juce::ignoreUnused(target, amount, retuneTimeMs, sustain);
 }
 
 void MetaTuneInspiredAudioProcessor::getStateInformation(juce::MemoryBlock& dest)

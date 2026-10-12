@@ -8,37 +8,6 @@ const juce::Colour text(0xffe7e5e9), muted(0xffa7a5aa);
 constexpr float pitchReferenceMinHz = 415.3047f; // A440 - 1 semitone
 constexpr float pitchReferenceMaxHz = 466.1638f; // A440 + 1 semitone
 
-// UI conversion for the project's existing normalized 0..100 Speed parameter.
-// The display range is 200 ms down to -3 ms. The taper preserves the familiar
-// setting 30 as 30 ms and reserves extra dial travel for the hard-tune region.
-// The DSP must use this same conversion when calculating correction time.
-float speedMillisecondsFromControl(float controlValue)
-{
-    const float p = juce::jlimit(0.0f, 100.0f, controlValue);
-    if (p <= 30.0f)
-        return 200.0f - (170.0f * p / 30.0f); // 0 -> 200 ms; 30 -> 30 ms
-    return 30.0f - (33.0f * (p - 30.0f) / 70.0f); // 30 -> 30 ms; 100 -> -3 ms
-}
-
-// Keep the older APVTS 0..100 sustain storage compatible while exposing the
-// intended signed UI range. A one-time state marker prevents remapping saved
-// negative Sustain settings every time the editor is reopened.
-void ensureSignedSustainState(juce::AudioProcessorValueTreeState& state)
-{
-    const juce::Identifier versionKey("signedSustainRangeVersion");
-    if ((int)state.state.getProperty(versionKey, 0) >= 1)
-        return;
-
-    if (auto* raw = state.getRawParameterValue("sustain"))
-    {
-        const float legacyValue = juce::jlimit(0.0f, 100.0f, raw->load());
-        const float encoded = (legacyValue + 100.0f) * 0.5f;
-        if (auto* parameter = state.getParameter("sustain"))
-            parameter->setValueNotifyingHost(encoded / 100.0f);
-    }
-    state.state.setProperty(versionKey, 1, nullptr);
-}
-
 // Use named typefaces and JUCE 8 portable metrics consistently throughout the UI.
 // This build uses a JUCE version that does not expose Direct2D hinting through
 // FontOptions, so we avoid that newer API and rely on portable metrics/fallbacks.
@@ -177,6 +146,15 @@ juce::Image createOrbArtwork()
     g.drawEllipse(319.0f, 215.0f, 303.0f, 302.0f, 7.8f);
     g.setColour(juce::Colour(0xffe9d9ff).withAlpha(0.92f));
     g.drawEllipse(323.0f, 219.0f, 295.0f, 294.0f, 1.7f);
+    for (int bloom = 9; bloom >= 1; --bloom)
+    {
+        const float grow = (float)bloom * 2.0f;
+        g.setColour(juce::Colour(0xffa875ff).withAlpha(0.035f * (10 - bloom)));
+        g.drawEllipse(319.0f - grow, 215.0f - grow,
+                      303.0f + grow * 2.0f, 302.0f + grow * 2.0f, 5.0f + (float)(bloom % 3));
+    }
+    g.setColour(juce::Colour(0xffaa7aff).withAlpha(0.78f));
+    g.drawEllipse(319.0f, 215.0f, 303.0f, 302.0f, 5.0f);
 
     // Inner 2-tone plasma globe. A cloudy gradient, fine particle edge and curved energy seam
     // mimic the cyan-left / magenta-right glass surface from the reference screenshot.
@@ -218,7 +196,7 @@ juce::Image createOrbArtwork()
     cyanLobe.cubicTo(407.0f, 406.0f, 388.0f, 385.0f, 383.0f, 359.0f);
     cyanLobe.cubicTo(379.0f, 340.0f, 375.0f, 325.0f, 382.0f, 313.0f);
     cyanLobe.closeSubPath();
-    g.setColour(juce::Colour(0xff38cce9).withAlpha(0.28f));
+    g.setColour(juce::Colour(0xff38d9f4).withAlpha(0.43f));
     g.fillPath(cyanLobe);
 
     juce::Path magentaLobe;
@@ -228,7 +206,7 @@ juce::Image createOrbArtwork()
     magentaLobe.cubicTo(488.0f, 363.0f, 501.0f, 343.0f, 485.0f, 327.0f);
     magentaLobe.cubicTo(474.0f, 316.0f, 464.0f, 303.0f, 477.0f, 295.0f);
     magentaLobe.closeSubPath();
-    g.setColour(juce::Colour(0xfff078dd).withAlpha(0.30f));
+    g.setColour(juce::Colour(0xffff83e6).withAlpha(0.42f));
     g.fillPath(magentaLobe);
 
     // A few hazy highlights deepen the glass without obscuring the lightning.
@@ -269,7 +247,7 @@ juce::Image createOrbArtwork()
         if (dx * dx + dy * dy > 1.0f) continue;
         const bool left = px < 470.5f;
         auto cloud = left ? juce::Colour(0xff72dcf7) : juce::Colour(0xffe09be9);
-        g.setColour(cloud.withAlpha((i % 9 == 0) ? 0.46f : 0.19f));
+        g.setColour(cloud.withAlpha((i % 9 == 0) ? 0.62f : 0.29f));
         const float dot = (i % 13 == 0) ? 1.4f : 0.7f;
         g.fillEllipse(px, py, dot, dot);
     }
@@ -347,6 +325,25 @@ juce::Image createOrbArtwork()
     g.drawEllipse(243.0f, 143.0f, 454.0f, 450.0f, 2.5f);
     g.setColour(juce::Colour(0xfffdfaff).withAlpha(0.56f));
     g.drawEllipse(246.0f, 146.0f, 448.0f, 444.0f, 1.1f);
+
+    // Final high-energy frosted shell. Wider overlapping strokes create a visible
+    // silver-white volume even over near-black backgrounds; sparse points preserve
+    // the organic rather than perfectly geometric edge.
+    for (int layer = 17; layer >= 1; --layer)
+    {
+        const float spread = (float)layer * 1.35f;
+        const float alpha = 0.045f + 0.012f * (18 - layer);
+        const float thickness = 3.0f + (float)(layer % 4) * 2.2f;
+        g.setColour(juce::Colour(0xfff4efff).withAlpha(alpha));
+        g.drawEllipse(242.0f - spread, 142.0f - spread,
+                      456.0f + spread * 2.0f, 452.0f + spread * 2.0f, thickness);
+    }
+    g.setColour(juce::Colour(0xffeee8fa).withAlpha(0.32f));
+    g.drawEllipse(240.0f, 140.0f, 460.0f, 456.0f, 15.0f);
+    g.setColour(juce::Colour(0xfff8f4ff).withAlpha(0.54f));
+    g.drawEllipse(243.0f, 143.0f, 454.0f, 450.0f, 6.0f);
+    g.setColour(juce::Colour(0xfffffcff).withAlpha(0.92f));
+    g.drawEllipse(246.0f, 146.0f, 448.0f, 444.0f, 2.4f);
 
     return image;
 }
@@ -520,7 +517,7 @@ public:
         }
 
         const juce::String value = isSpeed
-            ? juce::String(speedMillisecondsFromControl((float)slider.getValue()), 1)
+            ? juce::String(MetaTuneInspiredAudioProcessor::speedControlToMilliseconds((float)slider.getValue()), 1)
             : juce::String(slider.getValue(), 0);
         g.setColour(juce::Colour(0xfff0edf4));
         const float valueFontSize = juce::jlimit(isSustain ? 11.0f : 13.0f,
@@ -610,7 +607,7 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     sustain.setTooltip("Sustain response changes how retuning reacts on held notes; negative values slow it down and positive values speed it up.");
     styleKnob(speed); styleKnob(amount); styleKnob(sustain);
     sustain.setRange(-100.0, 100.0, 1.0);
-    sustain.setLookAndFeel(&metaTuneKnobLookAndFeel);
+    speed.setLookAndFeel(&metaTuneKnobLookAndFeel);
     amount.setLookAndFeel(&metaTuneKnobLookAndFeel);
     sustain.setLookAndFeel(&metaTuneKnobLookAndFeel);
     speed.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
@@ -650,32 +647,15 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     const char* notes[] = {"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
     for (int i=0;i<12;++i) root.addItem(notes[i], i+1);
 
-    ensureSignedSustainState(processor.parameters);
-    if (auto* rawSustain = processor.parameters.getRawParameterValue("sustain"))
-        sustain.setValue(rawSustain->load() * 2.0f - 100.0f, juce::dontSendNotification);
-
     speedAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor.parameters,"speed",speed);
     amountAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor.parameters,"amount",amount);
     auto beginUndoableEdit = [this]() { undoState = processor.parameters.copyState(); hasUndoState = true; hasRedoState = false; };
     auto finishUndoableEdit = [this]() { redoState = processor.parameters.copyState(); hasRedoState = hasUndoState; };
     speed.onDragStart = beginUndoableEdit; speed.onDragEnd = finishUndoableEdit;
     amount.onDragStart = beginUndoableEdit; amount.onDragEnd = finishUndoableEdit;
-    sustain.onDragStart = [this, beginUndoableEdit]()
-    {
-        if (auto* parameter = processor.parameters.getParameter("sustain")) parameter->beginChangeGesture();
-        beginUndoableEdit();
-    };
-    sustain.onDragEnd = [this, finishUndoableEdit]()
-    {
-        if (auto* parameter = processor.parameters.getParameter("sustain")) parameter->endChangeGesture();
-        finishUndoableEdit();
-    };
-    sustain.onValueChange = [this]()
-    {
-        if (auto* parameter = processor.parameters.getParameter("sustain"))
-            parameter->setValueNotifyingHost((float)((sustain.getValue() + 100.0) / 200.0));
-        repaint();
-    };
+    sustain.onDragStart = beginUndoableEdit;
+    sustain.onDragEnd = finishUndoableEdit;
+    sustain.onValueChange = [this]() { repaint(); };
     scaleAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor.parameters,"scale",scale);
     rootAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor.parameters,"root",root);
     stabAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(processor.parameters,"stabilizer",stabilizer);
@@ -950,6 +930,39 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     // once at design resolution and composite it during subsequent repaints.
     static const juce::Image orbArtwork = createOrbArtwork();
     g.drawImageAt(orbArtwork, 185, 85);
+    // Keep the edge luminous at compact host scale as well as inside the cached bitmap.
+    for (int shell = 8; shell >= 1; --shell)
+    {
+        const float spread = (float)shell * 1.6f;
+        g.setColour(juce::Colour(0xfff7f2ff).withAlpha(0.035f + 0.012f * (9 - shell)));
+        g.drawEllipse(238.0f - spread, 138.0f - spread,
+                      465.0f + spread * 2.0f, 460.0f + spread * 2.0f,
+                      4.0f + (float)(shell % 3) * 2.0f);
+    }
+    g.setColour(juce::Colour(0xfff8f4ff).withAlpha(0.34f));
+    g.drawEllipse(241.0f, 141.0f, 459.0f, 454.0f, 3.4f);
+    g.setColour(juce::Colour(0xffa77aff).withAlpha(0.16f));
+    g.drawEllipse(316.0f, 212.0f, 309.0f, 308.0f, 14.0f);
+
+    // Extra post-composite plasma bloom: this is intentionally drawn above the
+    // cached artwork so the cyan/magenta core remains vivid at 50% host scaling.
+    juce::Path plasmaClip;
+    plasmaClip.addEllipse(370.0f, 270.0f, 201.0f, 190.0f);
+    g.saveState();
+    g.reduceClipRegion(plasmaClip);
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff48d9f4).withAlpha(0.30f),
+                                           415.0f, 354.0f,
+                                           juce::Colour(0xff48d9f4).withAlpha(0.0f),
+                                           478.0f, 360.0f, true));
+    g.fillEllipse(368.0f, 275.0f, 146.0f, 162.0f);
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xffff8fdf).withAlpha(0.30f),
+                                           526.0f, 347.0f,
+                                           juce::Colour(0xffff8fdf).withAlpha(0.0f),
+                                           464.0f, 361.0f, true));
+    g.fillEllipse(425.0f, 278.0f, 147.0f, 164.0f);
+    g.setColour(juce::Colour(0xffe8d7ff).withAlpha(0.16f));
+    g.drawEllipse(373.0f, 273.0f, 195.0f, 184.0f, 10.0f);
+    g.restoreState();
 
     // Left group selector rail
     g.setColour(juce::Colour(0xff18181b)); g.fillRoundedRectangle(-15,150,73,430,22.0f);
@@ -1220,9 +1233,6 @@ void MetaTuneInspiredAudioProcessorEditor::loadPresetFromFile()
                 if (file.loadFileAsData(block))
                 {
                     safeThis->processor.setStateInformation(block.getData(), (int)block.getSize());
-                    ensureSignedSustainState(safeThis->processor.parameters);
-                    if (auto* rawSustain = safeThis->processor.parameters.getRawParameterValue("sustain"))
-                        safeThis->sustain.setValue(rawSustain->load() * 2.0f - 100.0f, juce::dontSendNotification);
                     safeThis->selectedPresetName = file.getFileNameWithoutExtension();
                     safeThis->selectedNoteIndex = juce::jlimit(0, 11, safeThis->root.getSelectedItemIndex());
                     if (safeThis->scale.getSelectedItemIndex() != 0)
@@ -1526,11 +1536,10 @@ void MetaTuneInspiredAudioProcessorEditor::resized()
 }
 void MetaTuneInspiredAudioProcessorEditor::timerCallback()
 {
-    // Host automation/state restoration writes the encoded 0..100 APVTS value;
-    // mirror it into the visible signed -100..+100 Sustain control.
+    // Mirror host automation/state restoration from the signed APVTS parameter.
     if (auto* rawSustain = processor.parameters.getRawParameterValue("sustain"))
     {
-        const double signedValue = (double)rawSustain->load() * 2.0 - 100.0;
+        const double signedValue = (double)rawSustain->load();
         if (std::abs(sustain.getValue() - signedValue) > 0.51)
             sustain.setValue(signedValue, juce::dontSendNotification);
     }
