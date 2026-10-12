@@ -205,13 +205,26 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     const float sx=getWidth()/1366.0f, sy=getHeight()/1080.0f;
     g.addTransform(juce::AffineTransform::scale(sx,sy));
     g.fillAll(bg);
+
+    // Very subtle material grain across the two large surfaces. Deterministic
+    // points avoid flicker while giving the flat panels a more finished look.
+    for (int i = 0; i < 1050; ++i)
+    {
+        const int px = (i * 97 + (i % 11) * 31) % 1366;
+        const int py = 60 + ((i * 53 + (i % 17) * 19) % 615);
+        const bool onDark = px < 755 || py > 460;
+        g.setColour((onDark ? juce::Colour(0xff77727f) : juce::Colour(0xffa19ba8))
+                        .withAlpha((i % 7 == 0) ? 0.035f : 0.014f));
+        g.fillRect(px, py, (i % 3 == 0) ? 2 : 1, 1);
+    }
+
     // Top chrome
     g.setColour(juce::Colour(0xff303034)); g.fillRect(0,0,1366,59);
     g.setColour(juce::Colour(0xff151517)); g.fillRect(0,58,1366,2);
     g.setColour(text); g.setFont(juce::Font(juce::FontOptions(24.0f)));
     g.drawText("S",20,7,35,44,juce::Justification::centred);
     g.setColour(juce::Colour(0xff202023)); g.fillRect(68,6,73,48);
-    g.setColour(muted); g.drawText("MENU",76,9,57,40,juce::Justification::centred);
+    g.setColour(muted); g.setFont(juce::Font(juce::FontOptions(12.0f,juce::Font::bold))); g.drawText("MENU",76,9,57,40,juce::Justification::centred);
     g.setColour(juce::Colour(0xff141416)); g.fillRect(143,7,245,47);
     g.setColour(muted); g.setFont(juce::Font(juce::FontOptions(16.0f,juce::Font::italic)));
     g.drawText("No preset selected",162,10,205,39,juce::Justification::centredLeft);
@@ -226,8 +239,14 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.drawText("metaTune",508,6,471,48,juce::Justification::centred);
     g.setColour(juce::Colour(0xffa36bff).withAlpha(0.10f));
     g.drawLine(535.0f, 49.0f, 952.0f, 49.0f, 1.0f);
-    g.setColour(muted); g.setFont(juce::Font(juce::FontOptions(23.0f)));
-    g.drawText("UNDO     REDO      A  >  B      HELP",985,7,365,45,juce::Justification::centred);
+    g.setColour(muted); g.setFont(juce::Font(juce::FontOptions(17.0f)));
+    g.drawText("UNDO",986,7,45,45,juce::Justification::centred);
+    g.drawText("REDO",1035,7,45,45,juce::Justification::centred);
+    g.drawText("SYNC",1081,7,45,45,juce::Justification::centred);
+    g.setFont(juce::Font(juce::FontOptions(19.0f,juce::Font::bold)));
+    g.drawText("A  >  B",1130,7,115,45,juce::Justification::centred);
+    g.setFont(juce::Font(juce::FontOptions(15.0f)));
+    g.drawText("HELP",1260,7,86,45,juce::Justification::centred);
 
     // Main surface and dramatic diagonal split
     g.setColour(juce::Colour(0xff09090b)); g.fillRect(0,60,1366,615);
@@ -248,6 +267,23 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xff513c76).withAlpha(0.32f));
     g.fillEllipse(408.0f, 307.0f, 125.0f, 120.0f);
     g.setColour(juce::Colour(0xff66616e)); g.drawEllipse(241,141,459,454,3.0f);
+
+    // Speckled energy rim inspired by the original's luminous particle orb.
+    // It is static (not random per frame), so it remains stable while resizing.
+    for (int i = 0; i < 1900; ++i)
+    {
+        const float a = (float)i * 2.39996323f;
+        const float jitter = (float)((i * 37) % 101) / 100.0f;
+        const float rr = 226.0f + (jitter - 0.5f) * 17.0f;
+        const float px = 470.0f + std::cos(a) * rr;
+        const float py = 368.0f + std::sin(a) * rr * 0.98f;
+        const float dot = (i % 9 == 0) ? 2.0f : 1.0f;
+        const auto glow = (i % 5 == 0) ? juce::Colour(0xffe3d8ff)
+                         : ((i % 3 == 0) ? juce::Colour(0xffb78cff)
+                                         : juce::Colour(0xffaaa5b7));
+        g.setColour(glow.withAlpha((i % 6 == 0) ? 0.20f : 0.065f));
+        g.fillEllipse(px, py, dot, dot);
+    }
     g.setColour(juce::Colour(0xff7652a9)); g.drawEllipse(319,215,303,302,8.0f);
     g.setColour(juce::Colour(0xffb9a2ff)); g.drawEllipse(370,270,201,190,5.0f);
     // Fine highlight strokes create a more dimensional glass-ring appearance.
@@ -312,6 +348,23 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
         g.setColour(col.withAlpha((i%5==0)?0.95f:0.45f)); g.fillRect(x,739.0f,7.0f,19.0f);
         g.setColour(col.withAlpha((i%7==0)?0.95f:0.30f)); g.fillRect(x+2.0f,762.0f,6.0f,18.0f);
     }
+
+    // Tone-volume / scale control strip at the left of the keyboard.
+    g.setColour(juce::Colour(0xff171719)); g.fillRect(0,788,165,287);
+    g.setColour(juce::Colour(0xff38383d)); g.drawLine(0.0f,788.0f,1366.0f,788.0f,1.0f);
+    g.setColour(muted); g.setFont(juce::Font(juce::FontOptions(15.0f,juce::Font::bold)));
+    g.drawText("Tone Volume",24,801,125,25,juce::Justification::centredLeft);
+    g.setColour(juce::Colour(0xff070708)); g.fillRoundedRectangle(10,833,145,19,9.0f);
+    g.setColour(juce::Colour(0xff713a46)); g.fillRoundedRectangle(14,837,92,11,5.0f);
+    g.setColour(juce::Colour(0xffd0a3b9)); g.fillRect(103,834,3,17);
+    g.setColour(juce::Colour(0xff252329)); g.fillRoundedRectangle(12,875,141,169,15.0f);
+    g.setColour(juce::Colour(0xffd7c8df)); g.setFont(juce::Font(juce::FontOptions(44.0f,juce::Font::bold)));
+    g.drawText("—",12,902,141,58,juce::Justification::centred);
+    g.setColour(muted); g.setFont(juce::Font(juce::FontOptions(16.0f,juce::Font::bold)));
+    g.drawText("hover to",15,960,135,24,juce::Justification::centred);
+    g.drawText("set scale",15,983,135,24,juce::Justification::centred);
+    g.setColour(purple); g.setFont(juce::Font(juce::FontOptions(15.0f,juce::Font::bold)));
+    g.drawText("Chromatic",16,1048,140,25,juce::Justification::centredLeft);
 
     // Keyboard and right status rail
     drawPiano(g,{165,788,1047,287});
