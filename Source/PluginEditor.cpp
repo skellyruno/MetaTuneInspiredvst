@@ -12,64 +12,138 @@ public:
                           float sliderPos, float startAngle, float endAngle,
                           juce::Slider& slider) override
     {
-        const float side = (float) juce::jmin(width, height);
+        const float side = (float)juce::jmin(width, height);
         const float cx = x + width * 0.5f;
         const float cy = y + height * 0.5f;
-        const float radius = side * 0.43f;
-        const float ringRadius = radius * 0.88f;
-        const float start = startAngle;
-        const float end = endAngle;
-        const auto accent = slider.getName() == "Amount" ? pink : purple;
+        const bool isSpeed = slider.getName() == "Speed";
+        const bool isAmount = slider.getName() == "Amount";
+        const float radius = side * (isSpeed ? 0.435f : (isAmount ? 0.435f : 0.425f));
+        const float tickRadius = radius * 0.82f;
+        const juce::Colour accent = isAmount ? pink : purple;
 
-        g.setColour(juce::Colour(0xff08080a));
-        g.fillEllipse(cx - radius - 7.0f, cy - radius - 7.0f,
-                      (radius + 7.0f) * 2.0f, (radius + 7.0f) * 2.0f);
-        g.setColour(juce::Colour(0xff3a393f));
-        g.drawEllipse(cx - radius - 5.0f, cy - radius - 5.0f,
-                      (radius + 5.0f) * 2.0f, (radius + 5.0f) * 2.0f, 2.0f);
-        g.setColour(juce::Colour(0xff19191d));
+        // Deep, machined outer housing with two edge bevels.
+        g.setColour(juce::Colour(0xff050506).withAlpha(0.82f));
+        g.fillEllipse(cx - radius - 10.0f, cy - radius - 9.0f,
+                      (radius + 10.0f) * 2.0f, (radius + 9.0f) * 2.0f);
+        g.setColour(juce::Colour(0xff424148));
+        g.drawEllipse(cx - radius - 7.0f, cy - radius - 7.0f,
+                      (radius + 7.0f) * 2.0f, (radius + 7.0f) * 2.0f, 1.4f);
+        g.setColour(juce::Colour(0xff09090b));
         g.fillEllipse(cx - radius, cy - radius, radius * 2.0f, radius * 2.0f);
+        g.setColour(juce::Colour(0xff202025));
+        g.drawEllipse(cx - radius + 3.0f, cy - radius + 3.0f,
+                      (radius - 3.0f) * 2.0f, (radius - 3.0f) * 2.0f, 1.0f);
 
-        // Fine segmented scale, like the hardware-style MetaTune dials.
-        const int ticks = 71;
+        // The open C-shaped housing is an important visual signature of Speed.
+        juce::Path casing;
+        casing.addCentredArc(cx, cy, radius + 5.0f, radius + 5.0f, 0.0f,
+                             startAngle, endAngle, true);
+        g.setColour(juce::Colour(0xff030304));
+        g.strokePath(casing, juce::PathStrokeType(isSpeed ? 15.0f : 9.0f,
+                                                  juce::PathStrokeType::curved,
+                                                  juce::PathStrokeType::rounded));
+        g.setColour(juce::Colour(0xff393940));
+        g.strokePath(casing, juce::PathStrokeType(isSpeed ? 8.0f : 4.2f,
+                                                  juce::PathStrokeType::curved,
+                                                  juce::PathStrokeType::rounded));
+        juce::Path rimHighlight;
+        rimHighlight.addCentredArc(cx - 0.6f, cy - 0.6f, radius + 8.2f, radius + 8.2f,
+                                   0.0f, startAngle + 0.08f, endAngle - 0.08f, true);
+        g.setColour(juce::Colour(0xff85818d).withAlpha(0.30f));
+        g.strokePath(rimHighlight, juce::PathStrokeType(0.9f));
+
+        // Cut a true notch into the face-side of the Speed housing so its opening
+        // is visible even at the compact 683 x 540 default size.
+        if (isSpeed)
+        {
+            const float gapStart = endAngle;
+            const float gapEnd = startAngle + juce::MathConstants<float>::twoPi;
+            const float outerR = radius + 12.0f;
+            const float innerR = radius * 0.75f;
+            juce::Path notch;
+            for (int i = 0; i <= 20; ++i)
+            {
+                const float t = (float)i / 20.0f;
+                const float a = gapStart + (gapEnd - gapStart) * t;
+                const float px = cx + std::cos(a) * outerR;
+                const float py = cy + std::sin(a) * outerR;
+                if (i == 0) notch.startNewSubPath(px, py);
+                else notch.lineTo(px, py);
+            }
+            for (int i = 20; i >= 0; --i)
+            {
+                const float t = (float)i / 20.0f;
+                const float a = gapStart + (gapEnd - gapStart) * t;
+                notch.lineTo(cx + std::cos(a) * innerR, cy + std::sin(a) * innerR);
+            }
+            notch.closeSubPath();
+            g.setColour(juce::Colour(0xff29292c));
+            g.fillPath(notch);
+            g.setColour(juce::Colour(0xff17171a).withAlpha(0.8f));
+            g.drawLine(cx + std::cos(gapStart) * innerR, cy + std::sin(gapStart) * innerR,
+                       cx + std::cos(gapStart) * outerR, cy + std::sin(gapStart) * outerR, 1.0f);
+            g.drawLine(cx + std::cos(gapEnd) * innerR, cy + std::sin(gapEnd) * innerR,
+                       cx + std::cos(gapEnd) * outerR, cy + std::sin(gapEnd) * outerR, 1.0f);
+        }
+
+        // Small segmented LEDs and major marks at fifth-tick intervals.
+        const int ticks = isSpeed ? 63 : (isAmount ? 57 : 37);
         for (int i = 0; i < ticks; ++i)
         {
-            const float t = (float) i / (float) (ticks - 1);
-            const float a = start + (end - start) * t;
-            const float inner = ringRadius - (i % 5 == 0 ? 7.0f : 3.5f);
-            const float outer = ringRadius + 1.0f;
-            juce::Line<float> tick(cx + std::cos(a) * inner, cy + std::sin(a) * inner,
-                                   cx + std::cos(a) * outer, cy + std::sin(a) * outer);
-            g.setColour(t <= sliderPos ? accent.withAlpha(0.96f) : juce::Colour(0xff4a494f));
-            g.drawLine(tick, i % 5 == 0 ? 1.7f : 1.0f);
+            const float t = (float)i / (float)(ticks - 1);
+            const float angle = startAngle + (endAngle - startAngle) * t;
+            const float innerR = tickRadius - ((i % 5 == 0) ? 5.0f : 2.8f);
+            const float outerR = tickRadius + 1.3f;
+            const juce::Line<float> tick(cx + std::cos(angle) * innerR,
+                                         cy + std::sin(angle) * innerR,
+                                         cx + std::cos(angle) * outerR,
+                                         cy + std::sin(angle) * outerR);
+            juce::Colour led = accent;
+            if (isSpeed && t > 0.72f)
+                led = pink.interpolatedWith(cyan, (t - 0.72f) / 0.28f);
+            else if (isSpeed)
+                led = purple.interpolatedWith(pink, t * 0.82f);
+            g.setColour(t <= sliderPos ? led.withAlpha(0.98f)
+                                       : juce::Colour(0xff514f58).withAlpha(0.78f));
+            g.drawLine(tick, i % 5 == 0 ? 1.5f : 0.9f);
         }
 
         juce::Path progress;
-        progress.addCentredArc(cx, cy, ringRadius - 4.0f, ringRadius - 4.0f, 0.0f,
-                               start, start + (end - start) * sliderPos, true);
-        g.setColour(accent.withAlpha(0.95f));
-        g.strokePath(progress, juce::PathStrokeType(4.0f, juce::PathStrokeType::curved,
+        progress.addCentredArc(cx, cy, tickRadius - 4.0f, tickRadius - 4.0f, 0.0f,
+                               startAngle, startAngle + (endAngle - startAngle) * sliderPos, true);
+        g.setColour(accent.withAlpha(0.13f));
+        g.strokePath(progress, juce::PathStrokeType(7.0f, juce::PathStrokeType::curved,
                                                     juce::PathStrokeType::rounded));
-        const float thumbAngle = start + (end - start) * sliderPos;
-        g.setColour(cyan);
-        g.fillEllipse(cx + std::cos(thumbAngle) * (ringRadius - 4.0f) - 5.0f,
-                      cy + std::sin(thumbAngle) * (ringRadius - 4.0f) - 5.0f, 10.0f, 10.0f);
+        g.setColour(accent.withAlpha(0.92f));
+        g.strokePath(progress, juce::PathStrokeType(isSpeed ? 2.8f : 2.3f,
+                                                    juce::PathStrokeType::curved,
+                                                    juce::PathStrokeType::rounded));
 
-        juce::String value;
-        if (slider.getName() == "Speed") value = juce::String(slider.getValue(), 1);
-        else value = juce::String(slider.getValue(), 0);
-        g.setColour(text);
-        g.setFont(juce::Font(juce::FontOptions(side * 0.16f, juce::Font::bold)));
-        g.drawText(value, juce::Rectangle<float>(cx - radius * 0.72f, cy - 14.0f,
-                                                  radius * 1.44f, 31.0f), juce::Justification::centred);
-        g.setColour(muted);
-        g.setFont(juce::Font(juce::FontOptions(juce::jlimit(10.0f, 14.0f, side * 0.055f),
+        const float thumbAngle = startAngle + (endAngle - startAngle) * sliderPos;
+        const float thumbR = tickRadius - 4.0f;
+        g.setColour(juce::Colour(0xff070708));
+        g.fillEllipse(cx + std::cos(thumbAngle) * thumbR - 5.4f,
+                      cy + std::sin(thumbAngle) * thumbR - 5.4f, 10.8f, 10.8f);
+        g.setColour(cyan);
+        g.fillEllipse(cx + std::cos(thumbAngle) * thumbR - 4.2f,
+                      cy + std::sin(thumbAngle) * thumbR - 4.2f, 8.4f, 8.4f);
+
+        const juce::String value = isSpeed ? juce::String(slider.getValue(), 1)
+                                           : juce::String(slider.getValue(), 0);
+        g.setColour(juce::Colour(0xfff0edf4));
+        g.setFont(juce::Font(juce::FontOptions(juce::jlimit(13.0f, 23.0f, side * 0.185f),
                                                juce::Font::bold)));
-        g.drawText(slider.getName(), juce::Rectangle<float>(cx - radius * 0.72f, cy + 14.0f,
-                                                             radius * 1.44f, 23.0f), juce::Justification::centred);
+        g.drawText(value, juce::Rectangle<float>(cx - radius * 0.72f, cy - side * 0.10f,
+                                                  radius * 1.44f, side * 0.27f),
+                   juce::Justification::centred);
+        g.setColour(muted);
+        g.setFont(juce::Font(juce::FontOptions(juce::jlimit(9.0f, 14.0f, side * 0.105f),
+                                               juce::Font::bold)));
+        g.drawText(slider.getName(), juce::Rectangle<float>(cx - radius * 0.72f, cy + side * 0.08f,
+                                                             radius * 1.44f, side * 0.22f),
+                   juce::Justification::centred);
     }
 };
-
 MetaTuneKnobLookAndFeel metaTuneKnobLookAndFeel;
 }
 
@@ -81,8 +155,8 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     setSize(683, 540);
     setResizable(true, true);
     setResizeLimits(683, 540, 1708, 1350);
-    styleKnob(speed); styleKnob(amount); styleKnob(sustain);
     speed.setName("Speed"); amount.setName("Amount"); sustain.setName("Sustain");
+    styleKnob(speed); styleKnob(amount); styleKnob(sustain);
     speed.setLookAndFeel(&metaTuneKnobLookAndFeel);
     amount.setLookAndFeel(&metaTuneKnobLookAndFeel);
     sustain.setLookAndFeel(&metaTuneKnobLookAndFeel);
@@ -92,7 +166,7 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     speedLabel.setText("Speed", juce::dontSendNotification);
     amountLabel.setText("Amount", juce::dontSendNotification);
     noteReadout.setJustificationType(juce::Justification::centred);
-    noteReadout.setFont(juce::Font(juce::FontOptions(38.0f, juce::Font::bold)));
+    noteReadout.setFont(juce::Font(juce::FontOptions(42.0f, juce::Font::bold)));
     status.setJustificationType(juce::Justification::centredLeft);
     presetLabel.setText("No preset selected", juce::dontSendNotification);
     presetLabel.setJustificationType(juce::Justification::centredLeft);
@@ -141,6 +215,12 @@ void MetaTuneInspiredAudioProcessorEditor::styleKnob(juce::Slider& s)
 {
     s.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
     s.setRange(0.0,100.0,0.1);
+    if (s.getName() == "Speed")
+        s.setRotaryParameters(0.56f, 5.55f, true);
+    else if (s.getName() == "Amount")
+        s.setRotaryParameters(0.72f, 5.62f, true);
+    else
+        s.setRotaryParameters(0.84f, 5.44f, true);
     s.setColour(juce::Slider::rotarySliderFillColourId, purple);
     s.setColour(juce::Slider::rotarySliderOutlineColourId, juce::Colour(0xff37373c));
     s.setColour(juce::Slider::thumbColourId, cyan);
@@ -174,69 +254,84 @@ void MetaTuneInspiredAudioProcessorEditor::drawKnob(juce::Graphics& g, juce::Rec
 
 void MetaTuneInspiredAudioProcessorEditor::drawPiano(juce::Graphics& g, juce::Rectangle<int> area)
 {
-    // Chromatic note strip above the actual seven-white-key octave. Keeping the
-    // label strip chromatic mirrors MetaTune while the keyboard uses real piano geometry.
     const char* names[] = { "C", "C #", "D", "D #", "E", "F", "F #", "G", "G #", "A", "A #", "B" };
-    const int labelH = 52;
+    const bool blackNote[] = { false, true, false, true, false, false, true, false, true, false, true, false };
+    const int labelH = juce::jmin(52, area.getHeight() / 4);
+    const int keyTop = area.getY() + labelH;
+    const int keyH = area.getBottom() - keyTop;
     const int labelW = area.getWidth() / 12;
+
+    // Upper chromatic note-name row.
     for (int i = 0; i < 12; ++i)
     {
         const int x = area.getX() + i * labelW;
-        g.setColour((i % 2 == 0) ? juce::Colour(0xff77777b) : juce::Colour(0xff68686d));
+        g.setColour(blackNote[i] ? juce::Colour(0xff343439) : juce::Colour(0xff737378));
         g.fillRect(x, area.getY(), labelW - 1, labelH);
-        g.setColour(juce::Colour(0xff202024));
+        g.setColour(juce::Colour(0xff1c1c20));
         g.drawRect(x, area.getY(), labelW - 1, labelH, 1);
         g.setColour(text);
-        g.setFont(juce::Font(juce::FontOptions(14.0f, juce::Font::bold)));
-        g.drawText(names[i], x, area.getY() + 2, labelW - 1, labelH - 4, juce::Justification::centred);
+        g.setFont(juce::Font(juce::FontOptions(juce::jlimit(9.0f, 15.0f, labelH * 0.29f),
+                                               juce::Font::bold)));
+        g.drawText(names[i], x, area.getY() + 1, labelW - 1, labelH - 2,
+                   juce::Justification::centred);
     }
 
-    const int keyY = area.getY() + labelH;
-    const int keyH = area.getHeight() - labelH;
-    const int whiteCount = 7;
-    const float whiteW = (float) area.getWidth() / (float) whiteCount;
-    const juce::Colour topWhite(0xffa078ff), bottomWhite(0xff8d70d4);
-    // Seven full-width white keys with subtle vertical lighting and clear gaps.
-    for (int i = 0; i < whiteCount; ++i)
+    // The lower keyboard has seven natural keys, each with its own subtle
+    // vertical tone gradient and a thin illuminated edge.
+    const float naturalW = (float)area.getWidth() / 7.0f;
+    const juce::Colour naturalTop(0xff77777b);
+    const juce::Colour naturalBottom(0xffb1a0e2);
+    for (int i = 0; i < 7; ++i)
     {
-        const float x = area.getX() + i * whiteW;
-        juce::ColourGradient gradient(topWhite, x, (float)keyY,
-                                      bottomWhite, x, (float)(keyY + keyH), false);
-        gradient.addColour(0.48, juce::Colour(0xff9b7bf0));
-        g.setGradientFill(gradient);
-        g.fillRect(x + 0.5f, (float)keyY, whiteW - 1.0f, (float)keyH);
-        g.setColour(juce::Colour(0xff29252f));
-        g.drawRect(x, (float)keyY, whiteW, (float)keyH, 1.25f);
-        g.setColour(juce::Colour(0xffd7c7ff).withAlpha(0.20f));
-        g.drawLine(x + 2.0f, (float)keyY + 2.0f, x + whiteW - 2.0f, (float)keyY + 2.0f, 1.0f);
+        const float x = (float)area.getX() + naturalW * (float)i;
+        juce::Rectangle<float> key(x, (float)keyTop, naturalW - 1.0f, (float)keyH);
+        g.setColour(juce::Colour(0xff080809));
+        g.fillRect(key.translated(0.0f, 2.0f));
+        g.setGradientFill(juce::ColourGradient(naturalTop, key.getX(), key.getY(),
+                                               naturalBottom, key.getX(), key.getBottom(), false));
+        g.fillRect(key);
+        g.setColour(juce::Colour(0xff27262c));
+        g.drawRect(key, 1.0f);
+        g.setColour(juce::Colour(0xffe9ddff).withAlpha(0.34f));
+        g.drawLine(key.getX() + 2.0f, key.getY() + 1.0f,
+                   key.getRight() - 2.0f, key.getY() + 1.0f, 1.4f);
+        g.setColour(juce::Colour(0xffb791ff).withAlpha(i % 2 == 0 ? 0.12f : 0.06f));
+        g.fillRect(key.reduced(3.0f, 0.0f));
     }
 
-    // Black keys sit between the natural notes, with rounded lower corners and
-    // a dark top-to-bottom gradient. There is intentionally no key after E or B.
-    const int blackAfterWhite[] = { 0, 1, 3, 4, 5 };
-    const float blackW = whiteW * 0.54f;
-    const float blackH = keyH * 0.60f;
+    // Black keys are centered over the gaps after C, D, F, G and A.
+    const int blackAfter[] = { 0, 1, 3, 4, 5 };
+    const float blackW = naturalW * 0.48f;
+    const float blackH = (float)keyH * 0.59f;
     for (int i = 0; i < 5; ++i)
     {
-        const float x = area.getX() + (blackAfterWhite[i] + 1) * whiteW - blackW * 0.5f;
-        const float y = (float)keyY;
-        juce::Path key;
-        key.startNewSubPath(x, y);
-        key.lineTo(x + blackW, y);
-        key.lineTo(x + blackW, y + blackH - 12.0f);
-        key.quadraticTo(x + blackW, y + blackH, x + blackW - 12.0f, y + blackH);
-        key.lineTo(x + 12.0f, y + blackH);
-        key.quadraticTo(x, y + blackH, x, y + blackH - 12.0f);
-        key.closeSubPath();
-        juce::ColourGradient blackGradient(juce::Colour(0xff303034), x, y,
-                                           juce::Colour(0xff111113), x, y + blackH, false);
-        blackGradient.addColour(0.55, juce::Colour(0xff202023));
-        g.setGradientFill(blackGradient);
-        g.fillPath(key);
-        g.setColour(juce::Colour(0xff050506));
-        g.strokePath(key, juce::PathStrokeType(2.0f));
-        g.setColour(juce::Colour(0xff77717f).withAlpha(0.30f));
-        g.drawLine(x + 2.0f, y + 2.0f, x + blackW - 2.0f, y + 2.0f, 1.0f);
+        const float boundary = (float)area.getX() + (float)(blackAfter[i] + 1) * naturalW;
+        const float x = boundary - blackW * 0.5f;
+        const float y = (float)keyTop;
+        juce::Path shadow;
+        shadow.addRoundedRectangle(x - 2.0f, y + 3.0f, blackW + 4.0f, blackH + 3.0f, 8.5f);
+        g.setColour(juce::Colour(0xff020203).withAlpha(0.85f));
+        g.fillPath(shadow);
+
+        juce::Path blackKey;
+        blackKey.startNewSubPath(x, y);
+        blackKey.lineTo(x + blackW, y);
+        blackKey.lineTo(x + blackW, y + blackH - 10.0f);
+        blackKey.quadraticTo(x + blackW, y + blackH, x + blackW - 9.0f, y + blackH);
+        blackKey.lineTo(x + 9.0f, y + blackH);
+        blackKey.quadraticTo(x, y + blackH, x, y + blackH - 10.0f);
+        blackKey.closeSubPath();
+        g.setColour(juce::Colour(0xff080809));
+        g.fillPath(blackKey);
+        g.setColour(juce::Colour(0xff424148));
+        g.strokePath(blackKey, juce::PathStrokeType(1.1f));
+
+        juce::Path bevel;
+        bevel.startNewSubPath(x + 2.0f, y + 3.0f);
+        bevel.lineTo(x + 2.0f, y + blackH - 11.0f);
+        bevel.quadraticTo(x + 2.0f, y + blackH - 3.0f, x + 10.0f, y + blackH - 3.0f);
+        g.setColour(juce::Colour(0xff797681).withAlpha(0.27f));
+        g.strokePath(bevel, juce::PathStrokeType(1.0f));
     }
 }
 
@@ -292,61 +387,107 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xff09090b)); g.fillRect(0,60,1366,615);
     juce::Path right; right.startNewSubPath(755,60); right.lineTo(1366,60); right.lineTo(1366,675); right.lineTo(1120,675); right.closeSubPath();
     g.setColour(juce::Colour(0xff29292c)); g.fillPath(right);
-    g.setColour(juce::Colour(0xff111113)); g.fillEllipse(238,138,465,460);
-    // Multi-layer ambient halo, kept subtle so it scales cleanly at small sizes.
-    for (int i = 12; i >= 1; --i)
-    {
-        const float inset = (float)i * 2.8f;
-        g.setColour(juce::Colour(0xffa56bff).withAlpha(0.012f * (13 - i)));
-        g.drawEllipse(319.0f - inset, 215.0f - inset,
-                      303.0f + inset * 2.0f, 302.0f + inset * 2.0f, 2.2f);
-    }
-    // Faint inner haze and split cyan/magenta energy around the note core.
-    g.setColour(juce::Colour(0xff33223f).withAlpha(0.42f));
-    g.fillEllipse(392.0f, 291.0f, 157.0f, 151.0f);
-    g.setColour(juce::Colour(0xff513c76).withAlpha(0.32f));
-    g.fillEllipse(408.0f, 307.0f, 125.0f, 120.0f);
-    g.setColour(juce::Colour(0xff66616e)); g.drawEllipse(241,141,459,454,3.0f);
+    // Large visualizer orb: frosted particle shell, wide violet aura and split-energy centre.
+    g.setColour(juce::Colour(0xff08080a)); g.fillEllipse(238,138,465,460);
 
-    // Speckled energy rim inspired by the original's luminous particle orb.
-    // It is static (not random per frame), so it remains stable while resizing.
-    for (int i = 0; i < 1900; ++i)
+    // Layered glow around the outer glass shell.
+    for (int i = 15; i >= 1; --i)
     {
-        const float a = (float)i * 2.39996323f;
-        const float jitter = (float)((i * 37) % 101) / 100.0f;
-        const float rr = 226.0f + (jitter - 0.5f) * 17.0f;
-        const float px = 470.0f + std::cos(a) * rr;
-        const float py = 368.0f + std::sin(a) * rr * 0.98f;
-        const float dot = (i % 9 == 0) ? 2.0f : 1.0f;
-        const auto glow = (i % 5 == 0) ? juce::Colour(0xffe3d8ff)
-                         : ((i % 3 == 0) ? juce::Colour(0xffb78cff)
-                                         : juce::Colour(0xffaaa5b7));
-        g.setColour(glow.withAlpha((i % 6 == 0) ? 0.20f : 0.065f));
+        const float inset = (float)i * 1.8f;
+        g.setColour(juce::Colour(0xffd8cbf3).withAlpha(0.010f * (16 - i)));
+        g.drawEllipse(241.0f - inset, 141.0f - inset,
+                      459.0f + inset * 2.0f, 454.0f + inset * 2.0f, 2.3f);
+    }
+
+    // Uneven points form a frosted, almost noisy ring rather than a perfect outline.
+    for (int i = 0; i < 2800; ++i)
+    {
+        const float angle = (float)i * 2.39996323f;
+        const float j1 = (float)((i * 37) % 101) / 100.0f;
+        const float j2 = (float)((i * 19 + 23) % 97) / 96.0f;
+        const float radius = 225.0f + (j1 - 0.5f) * 25.0f + (j2 - 0.5f) * 11.0f;
+        const float px = 470.0f + std::cos(angle) * radius;
+        const float py = 368.0f + std::sin(angle) * radius * 0.985f;
+        const float dot = (i % 13 == 0) ? 2.4f : ((i % 4 == 0) ? 1.35f : 0.75f);
+        juce::Colour particle = juce::Colour(0xffded9e8);
+        if (i % 8 == 0) particle = juce::Colour(0xffc8a5ff);
+        if (i % 17 == 0) particle = juce::Colour(0xff8ce5ff);
+        const float alpha = (i % 11 == 0) ? 0.36f : ((i % 3 == 0) ? 0.15f : 0.065f);
+        g.setColour(particle.withAlpha(alpha));
         g.fillEllipse(px, py, dot, dot);
     }
-    g.setColour(juce::Colour(0xff7652a9)); g.drawEllipse(319,215,303,302,8.0f);
-    g.setColour(juce::Colour(0xffb9a2ff)); g.drawEllipse(370,270,201,190,5.0f);
-    // Fine highlight strokes create a more dimensional glass-ring appearance.
-    juce::Path glassHighlight;
-    glassHighlight.addArc(373.0f, 273.0f, 195.0f, 184.0f, 3.55f, 5.15f, true);
-    g.setColour(juce::Colour(0xffd8c7ff).withAlpha(0.45f));
-    g.strokePath(glassHighlight, juce::PathStrokeType(1.5f));
+    g.setColour(juce::Colour(0xffefebf8).withAlpha(0.18f));
+    g.drawEllipse(242.0f, 142.0f, 456.0f, 452.0f, 2.6f);
+    g.setColour(juce::Colour(0xff625d6e).withAlpha(0.58f));
+    g.drawEllipse(247.0f, 147.0f, 446.0f, 442.0f, 1.0f);
 
-    juce::Path cyanHighlight;
-    cyanHighlight.addArc(377.0f, 277.0f, 188.0f, 177.0f, 1.55f, 2.45f, true);
-    g.setColour(juce::Colour(0xff68dfff).withAlpha(0.65f));
-    g.strokePath(cyanHighlight, juce::PathStrokeType(2.0f));
-    g.setColour(juce::Colour(0xffbb72e8)); g.setFont(juce::Font(juce::FontOptions(54.0f)));
-    // Draw a small lightning mark with vector geometry instead of a font glyph.
+    // Violet corona with a soft multi-layer edge.
+    g.setColour(juce::Colour(0xff08080b).withAlpha(0.78f));
+    g.fillEllipse(284.0f, 181.0f, 372.0f, 374.0f);
+    for (int i = 13; i >= 1; --i)
+    {
+        const float grow = (float)i * 1.45f;
+        g.setColour(juce::Colour(0xffa77aff).withAlpha(0.026f * (14 - i)));
+        g.drawEllipse(319.0f - grow, 215.0f - grow,
+                      303.0f + 2.0f * grow, 302.0f + 2.0f * grow, 2.3f);
+    }
+    g.setColour(juce::Colour(0xff7753ac));
+    g.drawEllipse(319.0f, 215.0f, 303.0f, 302.0f, 7.0f);
+    g.setColour(juce::Colour(0xffc1a5ff).withAlpha(0.58f));
+    g.drawEllipse(323.0f, 219.0f, 295.0f, 294.0f, 1.3f);
+
+    // Inner orb uses translucent cyan and magenta fields with a textured highlight.
+    g.setColour(juce::Colour(0xff19151f));
+    g.fillEllipse(366.0f, 266.0f, 209.0f, 198.0f);
+    g.setColour(juce::Colour(0xff6b3c94).withAlpha(0.35f));
+    g.fillEllipse(378.0f, 278.0f, 185.0f, 175.0f);
+
+    juce::Path cyanField;
+    cyanField.startNewSubPath(388.0f, 302.0f);
+    cyanField.cubicTo(372.0f, 327.0f, 382.0f, 373.0f, 411.0f, 401.0f);
+    cyanField.cubicTo(430.0f, 417.0f, 450.0f, 422.0f, 470.0f, 423.0f);
+    cyanField.lineTo(470.0f, 365.0f);
+    cyanField.closeSubPath();
+    g.setColour(juce::Colour(0xff38c9ed).withAlpha(0.14f));
+    g.fillPath(cyanField);
+
+    juce::Path magentaField;
+    magentaField.startNewSubPath(470.0f, 291.0f);
+    magentaField.cubicTo(504.0f, 299.0f, 541.0f, 325.0f, 552.0f, 355.0f);
+    magentaField.cubicTo(563.0f, 392.0f, 534.0f, 421.0f, 492.0f, 427.0f);
+    magentaField.lineTo(470.0f, 365.0f);
+    magentaField.closeSubPath();
+    g.setColour(juce::Colour(0xffd65be0).withAlpha(0.16f));
+    g.fillPath(magentaField);
+
+    // Finer inner rim and a short curved plasma streak.
+    juce::Path innerRim;
+    innerRim.addEllipse(370.0f, 270.0f, 201.0f, 190.0f);
+    g.setColour(juce::Colour(0xfff0e2ff).withAlpha(0.72f));
+    g.strokePath(innerRim, juce::PathStrokeType(3.5f));
+    g.setColour(juce::Colour(0xffe8c9ff).withAlpha(0.15f));
+    g.strokePath(innerRim, juce::PathStrokeType(9.0f));
+
+    juce::Path plasma;
+    plasma.startNewSubPath(397.0f, 383.0f);
+    plasma.cubicTo(419.0f, 376.0f, 446.0f, 353.0f, 466.0f, 330.0f);
+    plasma.cubicTo(489.0f, 305.0f, 516.0f, 301.0f, 532.0f, 312.0f);
+    g.setColour(juce::Colour(0xffd4a0ff).withAlpha(0.42f));
+    g.strokePath(plasma, juce::PathStrokeType(2.0f, juce::PathStrokeType::curved,
+                                               juce::PathStrokeType::rounded));
+
+    // Lightning is vector-drawn, so no missing glyphs at small DPI scales.
     juce::Path bolt;
-    bolt.startNewSubPath(469.0f, 326.0f);
-    bolt.lineTo(451.0f, 353.0f);
-    bolt.lineTo(466.0f, 353.0f);
-    bolt.lineTo(458.0f, 378.0f);
-    bolt.lineTo(483.0f, 345.0f);
-    bolt.lineTo(468.0f, 345.0f);
+    bolt.startNewSubPath(477.0f, 326.0f);
+    bolt.lineTo(455.0f, 354.0f);
+    bolt.lineTo(469.0f, 354.0f);
+    bolt.lineTo(461.0f, 380.0f);
+    bolt.lineTo(486.0f, 345.0f);
+    bolt.lineTo(472.0f, 345.0f);
     bolt.closeSubPath();
-    g.setColour(juce::Colour(0xffbb72e8));
+    g.setColour(juce::Colour(0xffc66dff).withAlpha(0.15f));
+    g.fillPath(bolt, juce::AffineTransform::translation(1.0f, 1.0f));
+    g.setColour(juce::Colour(0xffc66dff));
     g.fillPath(bolt);
 
     // Left group selector rail
@@ -379,6 +520,8 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
 
     // Heatmaps
     g.setColour(juce::Colour(0xff1d1d20)); g.fillRect(0,734,1366,53);
+    g.setColour(juce::Colour(0xff0b0b0d)); g.fillRect(160,738,1052,45);
+    g.setColour(juce::Colour(0xff303036)); g.drawLine(160.0f,760.0f,1212.0f,760.0f,1.0f);
     g.setColour(muted); g.setFont(juce::Font(juce::FontOptions(14.0f,juce::Font::bold)));
     g.drawText("Input",32,736,105,24,juce::Justification::centredLeft);
     g.drawText("Output",32,760,105,24,juce::Justification::centredLeft);
@@ -399,7 +542,7 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xffd0a3b9)); g.fillRect(103,834,3,17);
     g.setColour(juce::Colour(0xff252329)); g.fillRoundedRectangle(12,875,141,169,15.0f);
     g.setColour(juce::Colour(0xffd7c8df)); g.setFont(juce::Font(juce::FontOptions(44.0f,juce::Font::bold)));
-    g.drawText("--",12,902,141,58,juce::Justification::centred);
+    g.drawText("—",12,902,141,58,juce::Justification::centred);
     g.setColour(muted); g.setFont(juce::Font(juce::FontOptions(16.0f,juce::Font::bold)));
     g.drawText("hover to",15,960,135,24,juce::Justification::centred);
     g.drawText("set scale",15,983,135,24,juce::Justification::centred);
