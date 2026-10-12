@@ -5,6 +5,8 @@ namespace {
 const juce::Colour bg(0xff101012), panel(0xff242427), panel2(0xff18181b);
 const juce::Colour purple(0xffa36bff), pink(0xffdf83c5), cyan(0xff66dfff);
 const juce::Colour text(0xffe7e5e9), muted(0xffa7a5aa);
+constexpr float pitchReferenceMinHz = 415.3047f; // A440 - 1 semitone
+constexpr float pitchReferenceMaxHz = 466.1638f; // A440 + 1 semitone
 
 // Use named typefaces and JUCE 8 portable metrics consistently throughout the UI.
 // This build uses a JUCE version that does not expose Direct2D hinting through
@@ -37,39 +39,54 @@ juce::Image createOrbArtwork()
     g.addTransform(juce::AffineTransform::translation(-originX, -originY));
     // Center orb - layered dark glass, frosted particle shell, violet neon halo and split-color core.
     constexpr float orbCx = 470.0f, orbCy = 368.0f;
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff151319), orbCx - 42.0f, orbCy - 55.0f,
-                                           juce::Colour(0xff030304), orbCx + 228.0f, orbCy + 226.0f, true));
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff302a39), orbCx - 54.0f, orbCy - 72.0f,
+                                           juce::Colour(0xff08070c), orbCx + 228.0f, orbCy + 226.0f, true));
     g.fillEllipse(238.0f, 138.0f, 465.0f, 460.0f);
 
-    // Frosted light shell: broad low-opacity strokes build a soft silver-white volume.
-    // The strongest edge is intentionally at the top-left, like the reference orb.
-    g.setColour(juce::Colour(0xffe8e3f1).withAlpha(0.018f));
-    g.drawEllipse(233.0f, 133.0f, 475.0f, 470.0f, 27.0f);
-    g.setColour(juce::Colour(0xffe8e3f1).withAlpha(0.024f));
+    // Brighter frosted glass volume. The reference has a clearly visible cloudy
+    // silver shell, so build several broader and stronger translucent edge layers.
+    g.setColour(juce::Colour(0xffe8e3f1).withAlpha(0.075f));
+    g.drawEllipse(226.0f, 126.0f, 489.0f, 484.0f, 32.0f);
+    g.setColour(juce::Colour(0xffe8e3f1).withAlpha(0.085f));
+    g.drawEllipse(233.0f, 133.0f, 475.0f, 470.0f, 25.0f);
+    g.setColour(juce::Colour(0xfff1edf7).withAlpha(0.115f));
     g.drawEllipse(238.0f, 138.0f, 465.0f, 460.0f, 18.0f);
-    g.setColour(juce::Colour(0xfff1edf7).withAlpha(0.034f));
+    g.setColour(juce::Colour(0xfff5f0ff).withAlpha(0.15f));
     g.drawEllipse(242.0f, 142.0f, 457.0f, 452.0f, 11.0f);
-    g.setColour(juce::Colour(0xffdcd6e6).withAlpha(0.042f));
+    g.setColour(juce::Colour(0xffe7e0f2).withAlpha(0.17f));
     g.drawEllipse(245.0f, 145.0f, 451.0f, 446.0f, 5.0f);
-    for (int i = 18; i >= 1; --i)
+
+    // A cool-white top-left haze and a subtle violet lower rim lift the sphere
+    // off the background rather than letting it disappear into black.
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xfff0eaff).withAlpha(0.18f),
+                                           345.0f, 205.0f,
+                                           juce::Colour(0xffa77cff).withAlpha(0.0f),
+                                           555.0f, 415.0f, true));
+    g.fillEllipse(230.0f, 130.0f, 480.0f, 475.0f);
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff82dfff).withAlpha(0.085f),
+                                           620.0f, 425.0f,
+                                           juce::Colour(0xff82dfff).withAlpha(0.0f),
+                                           465.0f, 368.0f, true));
+    g.fillEllipse(238.0f, 138.0f, 465.0f, 460.0f);
+    for (int i = 22; i >= 1; --i)
     {
-        const float grow = (float)i * 1.55f;
-        const float alpha = 0.012f + 0.0026f * (18 - i);
+        const float grow = (float)i * 1.45f;
+        const float alpha = 0.045f + 0.0045f * (22 - i);
         g.setColour(juce::Colour(0xffeeeaf6).withAlpha(alpha));
         g.drawEllipse(241.0f - grow, 141.0f - grow, 459.0f + grow * 2.0f,
-                      454.0f + grow * 2.0f, 2.0f + (float)(i % 3) * 0.30f);
+                      454.0f + grow * 2.0f, 2.0f + (float)(i % 3) * 0.35f);
     }
 
     // Static deterministic noise lets the frosted shell look organic without flickering.
     // Radial jitter creates dense white particles and a smaller number of violet/cyan sparks.
-    for (int i = 0; i < 4200; ++i)
+    for (int i = 0; i < 6200; ++i)
     {
         const unsigned int h1 = (unsigned int)i * 747796405u + 2891336453u;
         const unsigned int h2 = (unsigned int)i * 277803737u + 1013904223u;
         const float a = (float)i * 2.39996323f + (float)(h1 & 1023u) * 0.00019f;
         const float rj = (float)(h2 % 10000u) / 10000.0f;
         const float cluster = (float)((h1 >> 8u) % 1000u) / 1000.0f;
-        const float radius = 218.0f + (rj - 0.5f) * 29.0f + (cluster - 0.5f) * 7.0f;
+        const float radius = 219.0f + (rj - 0.5f) * 39.0f + (cluster - 0.5f) * 10.0f;
         const float px = orbCx + std::cos(a) * radius;
         const float py = orbCy + std::sin(a) * radius * 0.982f;
         const float dot = (i % 17 == 0) ? 3.0f : ((i % 5 == 0) ? 1.8f : 0.9f);
@@ -77,14 +94,14 @@ juce::Image createOrbArtwork()
         if (i % 11 == 0) particle = juce::Colour(0xffd9c9f7);
         if (i % 37 == 0) particle = juce::Colour(0xff95dfff);
         const float angleLight = juce::jlimit(0.45f, 1.35f, 0.82f + 0.42f * -std::sin(a));
-        const float brightness = ((i % 13 == 0) ? 0.70f : ((i % 4 == 0) ? 0.38f : 0.15f)) * angleLight;
-        g.setColour(particle.withAlpha(juce::jmin(0.92f, brightness)));
+        const float brightness = ((i % 13 == 0) ? 0.94f : ((i % 4 == 0) ? 0.64f : 0.29f)) * angleLight;
+        g.setColour(particle.withAlpha(juce::jmin(0.98f, brightness)));
         g.fillEllipse(px, py, dot, dot);
     }
 
     // Fine drifting flecks spread through the shell's thickness: this breaks the
     // perfect circular edge and creates the luminous grain seen in the original.
-    for (int i = 0; i < 1450; ++i)
+    for (int i = 0; i < 2350; ++i)
     {
         const unsigned int h1 = (unsigned int)i * 2246822519u + 3266489917u;
         const unsigned int h2 = (unsigned int)i * 3266489917u + 668265263u;
@@ -95,7 +112,7 @@ juce::Image createOrbArtwork()
         const float size = (i % 23 == 0) ? 3.5f : ((i % 7 == 0) ? 2.0f : 0.9f);
         const auto tint = (i % 19 == 0) ? juce::Colour(0xffc7afff)
                          : ((i % 31 == 0) ? juce::Colour(0xffa9e6ff) : juce::Colour(0xffece7f4));
-        const float alpha = (i % 17 == 0) ? 0.28f : ((i % 4 == 0) ? 0.13f : 0.045f);
+        const float alpha = (i % 17 == 0) ? 0.46f : ((i % 4 == 0) ? 0.25f : 0.095f);
         g.setColour(tint.withAlpha(alpha));
         g.fillEllipse(px, py, size, size);
     }
@@ -105,29 +122,31 @@ juce::Image createOrbArtwork()
     g.drawEllipse(243.0f, 143.0f, 454.0f, 450.0f, 1.5f);
     g.setColour(juce::Colour(0xff6d6879).withAlpha(0.62f));
     g.drawEllipse(250.0f, 150.0f, 440.0f, 436.0f, 1.0f);
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff121116), 390.0f, 260.0f,
-                                           juce::Colour(0xff050506), 470.0f, 550.0f, true));
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff1a1720), 390.0f, 260.0f,
+                                           juce::Colour(0xff08070b), 470.0f, 550.0f, true));
     g.fillEllipse(280.0f, 178.0f, 380.0f, 380.0f);
 
     // Violet halo - numerous soft strokes underneath a crisp neon ring.
     for (int i = 12; i >= 1; --i)
     {
         const float inset = (float)i * 1.8f;
-        g.setColour(juce::Colour(0xffa875ff).withAlpha(0.024f * (13 - i)));
+        g.setColour(juce::Colour(0xffa875ff).withAlpha(0.048f * (13 - i)));
         g.drawEllipse(319.0f - inset, 215.0f - inset,
                       303.0f + inset * 2.0f, 302.0f + inset * 2.0f, 3.0f + (float)(i % 2));
     }
-    g.setColour(juce::Colour(0xffa47aff).withAlpha(0.22f));
-    g.drawEllipse(316.0f, 212.0f, 309.0f, 308.0f, 15.0f);
-    g.setColour(juce::Colour(0xff9064df));
-    g.drawEllipse(319.0f, 215.0f, 303.0f, 302.0f, 6.5f);
-    g.setColour(juce::Colour(0xffd0b7ff).withAlpha(0.42f));
-    g.drawEllipse(323.0f, 219.0f, 295.0f, 294.0f, 1.2f);
+    g.setColour(juce::Colour(0xffa47aff).withAlpha(0.46f));
+    g.drawEllipse(312.0f, 208.0f, 317.0f, 316.0f, 19.0f);
+    g.setColour(juce::Colour(0xff8f5cff).withAlpha(0.52f));
+    g.drawEllipse(316.0f, 212.0f, 309.0f, 308.0f, 13.0f);
+    g.setColour(juce::Colour(0xffa77aff));
+    g.drawEllipse(319.0f, 215.0f, 303.0f, 302.0f, 7.4f);
+    g.setColour(juce::Colour(0xffe2ccff).withAlpha(0.76f));
+    g.drawEllipse(323.0f, 219.0f, 295.0f, 294.0f, 1.5f);
 
     // Inner 2-tone plasma globe. A cloudy gradient, fine particle edge and curved energy seam
     // mimic the cyan-left / magenta-right glass surface from the reference screenshot.
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff251e31), 411.0f, 294.0f,
-                                           juce::Colour(0xff100f16), 518.0f, 443.0f, true));
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff493658), 411.0f, 294.0f,
+                                           juce::Colour(0xff17131f), 518.0f, 443.0f, true));
     g.fillEllipse(370.0f, 270.0f, 201.0f, 190.0f);
 
     // Overlapping radial colour fields form cloudy energy rather than a hard vertical split.
@@ -137,19 +156,19 @@ juce::Image createOrbArtwork()
     g.saveState();
     g.reduceClipRegion(innerGlassClip);
 
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff62dff5).withAlpha(0.42f),
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff62dff5).withAlpha(0.68f),
                                            414.0f, 355.0f,
                                            juce::Colour(0xff4acde7).withAlpha(0.0f),
                                            482.0f, 355.0f, true));
     g.fillEllipse(365.0f, 293.0f, 155.0f, 150.0f);
 
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xffe18ce4).withAlpha(0.38f),
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xffe18ce4).withAlpha(0.62f),
                                            519.0f, 349.0f,
                                            juce::Colour(0xffb65cc9).withAlpha(0.0f),
                                            584.0f, 349.0f, true));
     g.fillEllipse(427.0f, 281.0f, 155.0f, 166.0f);
 
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff8571ff).withAlpha(0.28f),
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xffa08bff).withAlpha(0.46f),
                                            462.0f, 407.0f,
                                            juce::Colour(0xff6651d0).withAlpha(0.0f),
                                            462.0f, 473.0f, true));
@@ -162,7 +181,7 @@ juce::Image createOrbArtwork()
     internalShade.cubicTo(550.0f, 407.0f, 518.0f, 427.0f, 489.0f, 435.0f);
     internalShade.lineTo(471.0f, 364.0f);
     internalShade.closeSubPath();
-    g.setColour(juce::Colour(0xff120d1b).withAlpha(0.12f));
+    g.setColour(juce::Colour(0xff120d1b).withAlpha(0.045f));
     g.fillPath(internalShade);
     g.restoreState();
 
@@ -181,7 +200,7 @@ juce::Image createOrbArtwork()
         if (dx * dx + dy * dy > 1.0f) continue;
         const bool left = px < 470.5f;
         auto cloud = left ? juce::Colour(0xff72dcf7) : juce::Colour(0xffe09be9);
-        g.setColour(cloud.withAlpha((i % 9 == 0) ? 0.18f : 0.055f));
+        g.setColour(cloud.withAlpha((i % 9 == 0) ? 0.28f : 0.095f));
         const float dot = (i % 13 == 0) ? 1.4f : 0.7f;
         g.fillEllipse(px, py, dot, dot);
     }
@@ -205,10 +224,10 @@ juce::Image createOrbArtwork()
     }
     juce::Path innerRim;
     innerRim.addEllipse(370.0f, 270.0f, 201.0f, 190.0f);
-    g.setColour(juce::Colour(0xfff0e4ff).withAlpha(0.48f));
-    g.strokePath(innerRim, juce::PathStrokeType(2.2f));
-    g.setColour(juce::Colour(0xffb6a0dd).withAlpha(0.22f));
-    g.strokePath(innerRim, juce::PathStrokeType(6.5f));
+    g.setColour(juce::Colour(0xfff6edff).withAlpha(0.80f));
+    g.strokePath(innerRim, juce::PathStrokeType(2.7f));
+    g.setColour(juce::Colour(0xffb6a0dd).withAlpha(0.34f));
+    g.strokePath(innerRim, juce::PathStrokeType(8.0f));
 
     juce::Path plasma;
     plasma.startNewSubPath(395.0f, 383.0f);
@@ -241,7 +260,7 @@ juce::Image createOrbArtwork()
     bolt.lineTo(486.0f, 345.0f);
     bolt.lineTo(472.0f, 345.0f);
     bolt.closeSubPath();
-    g.setColour(juce::Colour(0xffc66dff).withAlpha(0.18f));
+    g.setColour(juce::Colour(0xffc66dff).withAlpha(0.28f));
     g.fillPath(bolt, juce::AffineTransform::translation(1.2f, 1.2f));
     g.setColour(juce::Colour(0xffd077ff));
     g.fillPath(bolt);
@@ -546,7 +565,23 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     rootAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor.parameters,"root",root);
     stabAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(processor.parameters,"stabilizer",stabilizer);
     latencyAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(processor.parameters,"lowLatency",lowLatency);
+    stabilizer.setEnabled(!lowLatency.getToggleState());
+    lowLatency.onClick = [this]()
+    {
+        if (lowLatency.getToggleState())
+            stabilizer.setToggleState(false, juce::sendNotificationSync);
+        stabilizer.setEnabled(!lowLatency.getToggleState());
+        repaint();
+    };
+    stabilizer.onClick = [this]()
+    {
+        if (stabilizer.getToggleState() && lowLatency.getToggleState())
+            lowLatency.setToggleState(false, juce::sendNotificationSync);
+        stabilizer.setEnabled(!lowLatency.getToggleState());
+        repaint();
+    };
     selectedNoteIndex = juce::jlimit(0, 11, root.getSelectedItemIndex() < 0 ? 4 : root.getSelectedItemIndex());
+    lastNonChromaticScaleMode = scale.getSelectedItemIndex() == 2 ? 2 : 1;
     slotA = processor.parameters.copyState();
     slotB = slotA.createCopy();
     scale.onChange = [this]() { repaint(); };
@@ -823,11 +858,17 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(purple); g.setFont(uiFont(14.0f,juce::Font::bold));
     for(int i=0;i<4;++i) g.drawText(i == activeNoteGroup ? "1" : "0",30,206+i*91,24,18,juce::Justification::centred);
 
-    // Decorative outer orb and signal-status lamp.
-    g.setColour(juce::Colour(0xff5a5a5d)); g.fillEllipse(146,557,40,40);
-    g.setColour(juce::Colour(0xff8b8b8e)); g.drawEllipse(146,557,40,40,1.5f);
-    g.setColour(juce::Colour(0xffb9a2ff).withAlpha(0.22f)); g.fillEllipse(154,565,24,24);
-    g.setColour(juce::Colour(0xffb8b5bf)); g.fillEllipse(158,569,16,16);
+    // Doubler dot from the guide: drag left/right for width, up/down for wet/dry.
+    const float doublerDotX = 120.0f + doublerWidth * 100.0f;
+    const float doublerDotY = 620.0f - doublerMix * 90.0f;
+    g.setColour(juce::Colour(0xff5a5a5d));
+    g.fillEllipse(doublerDotX - 20.0f, doublerDotY - 20.0f, 40.0f, 40.0f);
+    g.setColour(juce::Colour(0xff8b8b8e));
+    g.drawEllipse(doublerDotX - 20.0f, doublerDotY - 20.0f, 40.0f, 40.0f, 1.5f);
+    g.setColour(juce::Colour(0xffb9a2ff).withAlpha(0.22f));
+    g.fillEllipse(doublerDotX - 12.0f, doublerDotY - 12.0f, 24.0f, 24.0f);
+    g.setColour(juce::Colour(0xffb8b5bf));
+    g.fillEllipse(doublerDotX - 8.0f, doublerDotY - 8.0f, 16.0f, 16.0f);
     g.setColour(juce::Colour(0xff3c3b42)); g.drawLine(0.0f, 673.0f, 1366.0f, 673.0f, 1.0f);
 
     // Lower selector strip
@@ -924,10 +965,21 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.drawText(globalBypass ? "Bypassed" : "Bypass",1225,900,130,24,juce::Justification::centredLeft);
     g.setColour(muted); g.drawText("Pitch Reference",1225,958,130,24,juce::Justification::centredLeft);
     g.setColour(juce::Colour(0xff070708)); g.fillRoundedRectangle(1218,987,140,19,10.0f);
-    g.setColour(juce::Colour(0xffbdb4ce)); g.fillRoundedRectangle(1218.0f + (pitchReferenceHz - 432.0f) * 5.8f, 987.0f, 4.0f, 19.0f, 2.0f);
+    const float referenceT = juce::jlimit(0.0f, 1.0f,
+        (pitchReferenceHz - pitchReferenceMinHz) / (pitchReferenceMaxHz - pitchReferenceMinHz));
+    g.setColour(juce::Colour(0xffbdb4ce));
+    g.fillRoundedRectangle(1218.0f + 136.0f * referenceT, 987.0f, 4.0f, 19.0f, 2.0f);
     g.setColour(text); g.drawText(juce::String(pitchReferenceHz, 1) + " Hz",1220,1015,136,25,juce::Justification::centred);
     g.setColour(juce::Colour(0xff202024)); g.fillRect(0,1050,1366,30);
-    g.setColour(purple); g.drawText(currentScaleName,24,1052,140,26,juce::Justification::centredLeft);
+    const bool chromaticActive = scale.getSelectedItemIndex() == 0;
+    if (chromaticActive)
+    {
+        g.setColour(purple.withAlpha(0.22f));
+        g.fillRoundedRectangle(10.0f, 1051.0f, 126.0f, 25.0f, 6.0f);
+    }
+    g.setColour(chromaticActive ? juce::Colour(0xffd9c0ff) : purple);
+    g.setFont(uiFont(15.0f, juce::Font::bold));
+    g.drawText("Chromatic", 24, 1052, 112, 26, juce::Justification::centredLeft);
 }
 
 
@@ -948,6 +1000,8 @@ void MetaTuneInspiredAudioProcessorEditor::setRootNote(int noteIndex)
 void MetaTuneInspiredAudioProcessorEditor::setScaleMode(int modeIndex)
 {
     const int index = juce::jlimit(0, 2, modeIndex);
+    if (index != 0)
+        lastNonChromaticScaleMode = index;
     if (scale.getSelectedItemIndex() != index)
     {
         undoState = processor.parameters.copyState();
@@ -996,6 +1050,7 @@ void MetaTuneInspiredAudioProcessorEditor::openHeaderMenu()
             safeThis->showDetectedNotes = true;
             safeThis->pitchReferenceHz = 440.0f;
             safeThis->selectedPresetName = "No preset selected";
+            safeThis->stabilizer.setEnabled(!safeThis->lowLatency.getToggleState());
             safeThis->repaint();
         }
     });
@@ -1053,6 +1108,11 @@ void MetaTuneInspiredAudioProcessorEditor::loadPresetFromFile()
                     safeThis->processor.setStateInformation(block.getData(), (int)block.getSize());
                     safeThis->selectedPresetName = file.getFileNameWithoutExtension();
                     safeThis->selectedNoteIndex = juce::jlimit(0, 11, safeThis->root.getSelectedItemIndex());
+                    if (safeThis->scale.getSelectedItemIndex() != 0)
+                        safeThis->lastNonChromaticScaleMode = safeThis->scale.getSelectedItemIndex();
+                    if (safeThis->lowLatency.getToggleState() && safeThis->stabilizer.getToggleState())
+                        safeThis->stabilizer.setToggleState(false, juce::sendNotificationSync);
+                    safeThis->stabilizer.setEnabled(!safeThis->lowLatency.getToggleState());
                     safeThis->repaint();
                 }
                 else
@@ -1063,6 +1123,50 @@ void MetaTuneInspiredAudioProcessorEditor::loadPresetFromFile()
             }
             safeThis->loadChooser.reset();
         });
+}
+
+void MetaTuneInspiredAudioProcessorEditor::mouseDrag(const juce::MouseEvent& event)
+{
+    if (orbDragMode == 0)
+        return;
+
+    const float sx = getWidth() / 1366.0f;
+    const float sy = getHeight() / 1080.0f;
+    const float designX = event.position.x / juce::jmax(0.0001f, sx);
+    const float designY = event.position.y / juce::jmax(0.0001f, sy);
+
+    if (orbDragMode == 3)
+    {
+        doublerWidth = juce::jlimit(0.0f, 1.0f, doublerDragStartWidth + (designX - orbDragStartX) / 100.0f);
+        doublerMix = juce::jlimit(0.0f, 1.0f, doublerDragStartMix + (orbDragStartY - designY) / 90.0f);
+        repaint();
+        return;
+    }
+    if (orbDragMode == 4)
+    {
+        toneVolume = juce::jlimit(0.0f, 1.0f, (designX - 10.0f) / 145.0f);
+        repaint();
+        return;
+    }
+    if (orbDragMode == 5)
+    {
+        const float t = juce::jlimit(0.0f, 1.0f, (designX - 1218.0f) / 140.0f);
+        pitchReferenceHz = pitchReferenceMinHz + t * (pitchReferenceMaxHz - pitchReferenceMinHz);
+        pitchReferenceHz = (float)(juce::roundToInt(pitchReferenceHz * 10.0f) / 10.0f);
+        repaint();
+        return;
+    }
+
+    const float delta = (orbDragStartY - designY) * 0.42f;
+    if (orbDragMode == 1)
+        speed.setValue(juce::jlimit(0.0, 100.0, orbDragStartValue + delta), juce::sendNotificationSync);
+    else if (orbDragMode == 2)
+        amount.setValue(juce::jlimit(0.0, 100.0, orbDragStartValue + delta), juce::sendNotificationSync);
+}
+
+void MetaTuneInspiredAudioProcessorEditor::mouseUp(const juce::MouseEvent&)
+{
+    orbDragMode = 0;
 }
 
 void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& event)
@@ -1140,6 +1244,45 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
         return;
     }
 
+    // Doubler dot: the documented horizontal/vertical gesture changes width and wet/dry.
+    const float dotX = 120.0f + doublerWidth * 100.0f;
+    const float dotY = 620.0f - doublerMix * 90.0f;
+    if (std::abs(x - dotX) <= 23.0f && std::abs(y - dotY) <= 23.0f)
+    {
+        orbDragMode = 3;
+        orbDragStartX = x;
+        orbDragStartY = y;
+        doublerDragStartWidth = doublerWidth;
+        doublerDragStartMix = doublerMix;
+        return;
+    }
+
+    // The guide documents orb gestures as alternate ways to adjust Speed and Amount.
+    // Drag the small inner globe for Speed; drag the frosted outer shell for Amount.
+    const float orbDx = x - 470.0f;
+    const float orbDy = y - 365.0f;
+    const float orbRadius = std::sqrt(orbDx * orbDx + orbDy * orbDy);
+    if (orbRadius <= 101.0f)
+    {
+        orbDragMode = 1;
+        orbDragStartY = y;
+        orbDragStartValue = (float)speed.getValue();
+        undoState = processor.parameters.copyState();
+        hasUndoState = true;
+        hasRedoState = false;
+        return;
+    }
+    if (orbRadius >= 184.0f && orbRadius <= 235.0f)
+    {
+        orbDragMode = 2;
+        orbDragStartY = y;
+        orbDragStartValue = (float)amount.getValue();
+        undoState = processor.parameters.copyState();
+        hasUndoState = true;
+        hasRedoState = false;
+        return;
+    }
+
     // The left note-bank rail is selectable and highlights the active bank.
     if (x >= 0.0f && x < 58.0f && y >= 220.0f && y < 590.0f)
     {
@@ -1199,8 +1342,9 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
     if (x >= 1212.0f && y >= 940.0f && y < 1045.0f)
     {
         const float t = juce::jlimit(0.0f, 1.0f, (x - 1218.0f) / 140.0f);
-        pitchReferenceHz = 432.0f + t * 10.0f;
+        pitchReferenceHz = pitchReferenceMinHz + t * (pitchReferenceMaxHz - pitchReferenceMinHz);
         pitchReferenceHz = (float)(juce::roundToInt(pitchReferenceHz * 10.0f) / 10.0f);
+        orbDragMode = 5;
         repaint(); return;
     }
 
@@ -1226,12 +1370,17 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
     if (x >= 0.0f && x < 165.0f && y >= 822.0f && y < 860.0f)
     {
         toneVolume = juce::jlimit(0.0f, 1.0f, (x - 10.0f) / 145.0f);
+        orbDragMode = 4;
         repaint(); return;
     }
 
     // Clicking the left scale card opens the same functional root/scale chooser.
     if (x < 165.0f && y >= 875.0f && y < 1045.0f) { openHeaderMenu(); return; }
-    if (x < 165.0f && y >= 1045.0f && y < 1080.0f) { openHeaderMenu(); return; }
+    if (x < 165.0f && y >= 1045.0f && y < 1080.0f)
+    {
+        setScaleMode(scale.getSelectedItemIndex() == 0 ? lastNonChromaticScaleMode : 0);
+        return;
+    }
 }
 
 void MetaTuneInspiredAudioProcessorEditor::resized()
