@@ -13,7 +13,9 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     noteReadout.setJustificationType(juce::Justification::centred);
     noteReadout.setFont(juce::Font(juce::FontOptions(42.0f, juce::Font::bold)));
     status.setJustificationType(juce::Justification::centredLeft);
-    for (auto* c : { (juce::Component*)&speed, &amount, &sustain, &scale, &root, &stabilizer, &lowLatency, &speedLabel, &amountLabel, &noteReadout, &status })
+    juce::Component* components[] = { &speed, &amount, &sustain, &scale, &root, &stabilizer, &lowLatency,
+                                      &speedLabel, &amountLabel, &noteReadout, &status };
+    for (auto* c : components)
         addAndMakeVisible(c);
 
     scale.addItem("Chromatic", 1); scale.addItem("Major", 2); scale.addItem("Minor", 3);
