@@ -5,6 +5,26 @@ const juce::Colour bg(0xff101012), panel(0xff242427), panel2(0xff18181b);
 const juce::Colour purple(0xffa36bff), pink(0xffdf83c5), cyan(0xff66dfff);
 const juce::Colour text(0xffe7e5e9), muted(0xffa7a5aa);
 
+// Use named typefaces and JUCE 8 portable metrics consistently throughout the UI.
+// Disabling Direct2D bitmap hinting keeps glyphs closer to JUCE's outline renderer.
+juce::Font uiFont(float height, int style = juce::Font::plain)
+{
+    auto options = juce::FontOptions("Segoe UI", height, style)
+        .withMetricsKind(juce::TypefaceMetricsKind::portable)
+        .withDirect2DHinting(false)
+        .withFallbacks(std::vector<juce::String>{ "Arial", "Tahoma" });
+    return juce::Font(options);
+}
+
+juce::Font digitalFont(float height, int style = juce::Font::bold)
+{
+    auto options = juce::FontOptions("Consolas", height, style)
+        .withMetricsKind(juce::TypefaceMetricsKind::portable)
+        .withDirect2DHinting(false)
+        .withFallbacks(std::vector<juce::String>{ "Segoe UI", "Arial" });
+    return juce::Font(options);
+}
+
 class MetaTuneKnobLookAndFeel final : public juce::LookAndFeel_V4
 {
 public:
@@ -103,6 +123,11 @@ public:
                 led = pink.interpolatedWith(cyan, (t - 0.72f) / 0.28f);
             else if (isSpeed)
                 led = purple.interpolatedWith(pink, t * 0.82f);
+            if (t <= sliderPos)
+            {
+                g.setColour(led.withAlpha(isSpeed ? 0.16f : 0.11f));
+                g.drawLine(tick, isSpeed ? 4.5f : 3.4f);
+            }
             g.setColour(t <= sliderPos ? led.withAlpha(0.98f)
                                        : juce::Colour(0xff514f58).withAlpha(0.78f));
             g.drawLine(tick, i % 5 == 0 ? 1.5f : 0.9f);
@@ -131,17 +156,65 @@ public:
         const juce::String value = isSpeed ? juce::String(slider.getValue(), 1)
                                            : juce::String(slider.getValue(), 0);
         g.setColour(juce::Colour(0xfff0edf4));
-        g.setFont(juce::Font(juce::FontOptions(juce::jlimit(13.0f, 23.0f, side * 0.185f),
-                                               juce::Font::bold)));
+        g.setFont(digitalFont(juce::jlimit(13.0f, 23.0f, side * 0.185f),
+                                                   juce::Font::bold));
         g.drawText(value, juce::Rectangle<float>(cx - radius * 0.72f, cy - side * 0.10f,
                                                   radius * 1.44f, side * 0.27f),
                    juce::Justification::centred);
         g.setColour(muted);
-        g.setFont(juce::Font(juce::FontOptions(juce::jlimit(9.0f, 14.0f, side * 0.105f),
-                                               juce::Font::bold)));
+        g.setFont(uiFont(juce::jlimit(9.0f, 14.0f, side * 0.105f),
+                                               juce::Font::bold));
         g.drawText(slider.getName(), juce::Rectangle<float>(cx - radius * 0.72f, cy + side * 0.08f,
                                                              radius * 1.44f, side * 0.22f),
                    juce::Justification::centred);
+    }
+
+    juce::Font getComboBoxFont(juce::ComboBox& box) override
+    {
+        const float h = juce::jlimit(8.0f, 15.0f, (float)box.getHeight() * 0.48f);
+        return uiFont(h, juce::Font::plain);
+    }
+
+    juce::Font getPopupMenuFont() override
+    {
+        return uiFont(12.0f, juce::Font::plain);
+    }
+
+    juce::Font getLabelFont(juce::Label& label) override
+    {
+        const float h = juce::jlimit(8.0f, 20.0f, (float)label.getHeight() * 0.45f);
+        return uiFont(h, juce::Font::plain);
+    }
+
+    void drawToggleButton(juce::Graphics& g, juce::ToggleButton& button,
+                          bool highlighted, bool down) override
+    {
+        juce::ignoreUnused(highlighted, down);
+        const auto bounds = button.getLocalBounds().toFloat();
+        const float h = bounds.getHeight();
+        const float sw = juce::jlimit(19.0f, 32.0f, h * 1.25f);
+        const float sh = juce::jlimit(9.0f, 15.0f, h * 0.58f);
+        const float x = bounds.getX() + 1.0f;
+        const float y = bounds.getCentreY() - sh * 0.5f;
+        const bool on = button.getToggleState();
+
+        g.setColour(on ? juce::Colour(0xff7251a1) : juce::Colour(0xff111114));
+        g.fillRoundedRectangle(x, y, sw, sh, sh * 0.5f);
+        g.setColour(on ? juce::Colour(0xffd5aaff) : juce::Colour(0xff46444c));
+        g.drawRoundedRectangle(x, y, sw, sh, sh * 0.5f, 1.0f);
+
+        const float knob = sh - 3.0f;
+        const float kx = on ? x + sw - knob - 1.5f : x + 1.5f;
+        g.setColour(on ? juce::Colour(0xfff0d9ff) : juce::Colour(0xff929098));
+        g.fillEllipse(kx, y + 1.5f, knob, knob);
+
+        g.setColour(button.findColour(juce::ToggleButton::textColourId));
+        g.setFont(uiFont(juce::jlimit(8.0f, 14.0f, h * 0.46f), juce::Font::bold));
+        g.drawText(button.getButtonText(),
+                   juce::Rectangle<float>(x + sw + 5.0f, bounds.getY(),
+                                          juce::jmax(0.0f, bounds.getRight() - x - sw - 5.0f),
+                                          bounds.getHeight()),
+                   juce::Justification::centredLeft, true);
     }
 };
 MetaTuneKnobLookAndFeel metaTuneKnobLookAndFeel;
@@ -166,18 +239,21 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     speedLabel.setText("Speed", juce::dontSendNotification);
     amountLabel.setText("Amount", juce::dontSendNotification);
     noteReadout.setJustificationType(juce::Justification::centred);
-    noteReadout.setFont(juce::Font(juce::FontOptions(42.0f, juce::Font::bold)));
+    noteReadout.setFont(uiFont(42.0f, juce::Font::bold));
+    noteReadout.setColour(juce::Label::textColourId, juce::Colour(0xfff2edf8));
+    status.setColour(juce::Label::textColourId, juce::Colour(0xffdbd8e0));
     status.setJustificationType(juce::Justification::centredLeft);
     presetLabel.setText("No preset selected", juce::dontSendNotification);
     presetLabel.setJustificationType(juce::Justification::centredLeft);
 
     juce::Component* components[] = { &speed, &amount, &sustain, &scale, &root, &stabilizer, &lowLatency,
-                                      &noteReadout, &status, &presetLabel };
+                                      &noteReadout, &status };
     for (auto* c : components) addAndMakeVisible(c);
 
     scale.addItem("Chromatic", 1); scale.addItem("Major", 2); scale.addItem("Minor", 3);
     for (auto* combo : { &scale, &root })
     {
+        combo->setLookAndFeel(&metaTuneKnobLookAndFeel);
         combo->setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff242429));
         combo->setColour(juce::ComboBox::textColourId, text);
         combo->setColour(juce::ComboBox::outlineColourId, juce::Colour(0xff77777e));
@@ -209,6 +285,8 @@ MetaTuneInspiredAudioProcessorEditor::~MetaTuneInspiredAudioProcessorEditor()
     sustain.setLookAndFeel(nullptr);
     stabilizer.setLookAndFeel(nullptr);
     lowLatency.setLookAndFeel(nullptr);
+    scale.setLookAndFeel(nullptr);
+    root.setLookAndFeel(nullptr);
 }
 
 void MetaTuneInspiredAudioProcessorEditor::styleKnob(juce::Slider& s)
@@ -246,15 +324,15 @@ void MetaTuneInspiredAudioProcessorEditor::drawKnob(juce::Graphics& g, juce::Rec
     juce::Path fill;
     fill.addCentredArc(c.x,c.y,rad,rad,0,start,start+(end-start)*juce::jlimit(0.0f,1.0f,value/100.0f),true);
     g.setColour(accent); g.strokePath(fill,juce::PathStrokeType(5.0f));
-    g.setColour(text); g.setFont(juce::Font(juce::FontOptions(r.getWidth()*0.18f,juce::Font::bold)));
+    g.setColour(text); g.setFont(uiFont(r.getWidth()*0.18f,juce::Font::bold));
     g.drawText(number, r.withY(c.y-17).withHeight(34),juce::Justification::centred);
-    g.setColour(muted); g.setFont(juce::Font(juce::FontOptions(15.0f,juce::Font::bold)));
+    g.setColour(muted); g.setFont(uiFont(15.0f,juce::Font::bold));
     g.drawText(label,r.withY(c.y+18).withHeight(25),juce::Justification::centred);
 }
 
 void MetaTuneInspiredAudioProcessorEditor::drawPiano(juce::Graphics& g, juce::Rectangle<int> area)
 {
-    const char* names[] = { "C", "C #", "D", "D #", "E", "F", "F #", "G", "G #", "A", "A #", "B" };
+    const char* names[] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
     const bool blackNote[] = { false, true, false, true, false, false, true, false, true, false, true, false };
     const int labelH = juce::jmin(52, area.getHeight() / 4);
     const int keyTop = area.getY() + labelH;
@@ -270,8 +348,8 @@ void MetaTuneInspiredAudioProcessorEditor::drawPiano(juce::Graphics& g, juce::Re
         g.setColour(juce::Colour(0xff1c1c20));
         g.drawRect(x, area.getY(), labelW - 1, labelH, 1);
         g.setColour(text);
-        g.setFont(juce::Font(juce::FontOptions(juce::jlimit(9.0f, 15.0f, labelH * 0.29f),
-                                               juce::Font::bold)));
+        g.setFont(uiFont(juce::jlimit(9.0f, 15.0f, labelH * 0.29f),
+                                               juce::Font::bold));
         g.drawText(names[i], x, area.getY() + 1, labelW - 1, labelH - 2,
                    juce::Justification::centred);
     }
@@ -321,7 +399,8 @@ void MetaTuneInspiredAudioProcessorEditor::drawPiano(juce::Graphics& g, juce::Re
         blackKey.lineTo(x + 9.0f, y + blackH);
         blackKey.quadraticTo(x, y + blackH, x, y + blackH - 10.0f);
         blackKey.closeSubPath();
-        g.setColour(juce::Colour(0xff080809));
+        g.setGradientFill(juce::ColourGradient(juce::Colour(0xff29282e), x, y,
+                                               juce::Colour(0xff050506), x + blackW, y + blackH, false));
         g.fillPath(blackKey);
         g.setColour(juce::Colour(0xff424148));
         g.strokePath(blackKey, juce::PathStrokeType(1.1f));
@@ -356,39 +435,48 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     // Top chrome
     g.setColour(juce::Colour(0xff303034)); g.fillRect(0,0,1366,59);
     g.setColour(juce::Colour(0xff151517)); g.fillRect(0,58,1366,2);
-    g.setColour(text); g.setFont(juce::Font(juce::FontOptions(24.0f)));
+    g.setColour(text); g.setFont(uiFont(24.0f));
     g.drawText("S",20,7,35,44,juce::Justification::centred);
     g.setColour(juce::Colour(0xff202023)); g.fillRect(68,6,73,48);
-    g.setColour(muted); g.setFont(juce::Font(juce::FontOptions(12.0f,juce::Font::bold))); g.drawText("MENU",76,9,57,40,juce::Justification::centred);
+    g.setColour(muted); g.setFont(uiFont(12.0f,juce::Font::bold)); g.drawText("MENU",76,9,57,40,juce::Justification::centred);
     g.setColour(juce::Colour(0xff141416)); g.fillRect(143,7,245,47);
-    g.setColour(muted); g.setFont(juce::Font(juce::FontOptions(16.0f,juce::Font::italic)));
+    g.setColour(muted); g.setFont(uiFont(16.0f,juce::Font::italic));
     g.drawText("No preset selected",162,10,205,39,juce::Justification::centredLeft);
     g.setColour(juce::Colour(0xff29292d)); g.fillRect(390,7,43,47);
     g.fillRect(435,7,72,47);
-    g.setColour(muted); g.setFont(juce::Font(juce::FontOptions(19.0f)));
+    g.setColour(muted); g.setFont(uiFont(19.0f));
     g.drawText("SAVE",450,10,40,38,juce::Justification::centred);
     g.setColour(juce::Colour(0xff1b1a20)); g.fillRect(508,6,471,48);
     g.setColour(juce::Colour(0xffa36bff).withAlpha(0.22f));
     g.fillRect(508,6,471,2);
-    g.setColour(juce::Colour(0xffd9caff)); g.setFont(juce::Font(juce::FontOptions(27.0f,juce::Font::bold)));
+    g.setColour(juce::Colour(0xffd9caff)); g.setFont(uiFont(27.0f,juce::Font::bold));
     g.drawText("metaTune",508,6,471,48,juce::Justification::centred);
     g.setColour(juce::Colour(0xffa36bff).withAlpha(0.10f));
     g.drawLine(535.0f, 49.0f, 952.0f, 49.0f, 1.0f);
-    g.setColour(muted); g.setFont(juce::Font(juce::FontOptions(17.0f)));
+    g.setColour(muted); g.setFont(uiFont(17.0f));
     g.drawText("UNDO",986,7,45,45,juce::Justification::centred);
     g.drawText("REDO",1035,7,45,45,juce::Justification::centred);
     g.drawText("SYNC",1081,7,45,45,juce::Justification::centred);
-    g.setFont(juce::Font(juce::FontOptions(19.0f,juce::Font::bold)));
+    g.setFont(uiFont(19.0f,juce::Font::bold));
     g.drawText("A  >  B",1130,7,115,45,juce::Justification::centred);
-    g.setFont(juce::Font(juce::FontOptions(15.0f)));
+    g.setFont(uiFont(15.0f));
     g.drawText("HELP",1260,7,86,45,juce::Justification::centred);
 
     // Main surface and dramatic diagonal split
     g.setColour(juce::Colour(0xff09090b)); g.fillRect(0,60,1366,615);
     juce::Path right; right.startNewSubPath(755,60); right.lineTo(1366,60); right.lineTo(1366,675); right.lineTo(1120,675); right.closeSubPath();
-    g.setColour(juce::Colour(0xff29292c)); g.fillPath(right);
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff202023), 760.0f, 60.0f,
+                                           juce::Colour(0xff343438), 1366.0f, 675.0f, false));
+    g.fillPath(right);
+    juce::Path splitHighlight;
+    splitHighlight.startNewSubPath(755.0f, 60.0f);
+    splitHighlight.lineTo(1120.0f, 675.0f);
+    g.setColour(juce::Colour(0xff5a575f).withAlpha(0.18f));
+    g.strokePath(splitHighlight, juce::PathStrokeType(2.0f));
     // Large visualizer orb: frosted particle shell, wide violet aura and split-energy centre.
-    g.setColour(juce::Colour(0xff08080a)); g.fillEllipse(238,138,465,460);
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff1b1920), 385.0f, 240.0f,
+                                           juce::Colour(0xff050506), 505.0f, 520.0f, true));
+    g.fillEllipse(238,138,465,460);
 
     // Layered glow around the outer glass shell.
     for (int i = 15; i >= 1; --i)
@@ -416,6 +504,12 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
         g.setColour(particle.withAlpha(alpha));
         g.fillEllipse(px, py, dot, dot);
     }
+    for (int glow = 5; glow >= 1; --glow)
+    {
+        g.setColour(juce::Colour(0xffe8e0ff).withAlpha(0.018f * (6 - glow)));
+        g.drawEllipse(242.0f - glow * 0.8f, 142.0f - glow * 0.8f,
+                      456.0f + glow * 1.6f, 452.0f + glow * 1.6f, 3.0f);
+    }
     g.setColour(juce::Colour(0xffefebf8).withAlpha(0.18f));
     g.drawEllipse(242.0f, 142.0f, 456.0f, 452.0f, 2.6f);
     g.setColour(juce::Colour(0xff625d6e).withAlpha(0.58f));
@@ -437,9 +531,10 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.drawEllipse(323.0f, 219.0f, 295.0f, 294.0f, 1.3f);
 
     // Inner orb uses translucent cyan and magenta fields with a textured highlight.
-    g.setColour(juce::Colour(0xff19151f));
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff3a234d), 423.0f, 300.0f,
+                                             juce::Colour(0xff101117), 483.0f, 458.0f, true));
     g.fillEllipse(366.0f, 266.0f, 209.0f, 198.0f);
-    g.setColour(juce::Colour(0xff6b3c94).withAlpha(0.35f));
+    g.setColour(juce::Colour(0xff6b3c94).withAlpha(0.26f));
     g.fillEllipse(378.0f, 278.0f, 185.0f, 175.0f);
 
     juce::Path cyanField;
@@ -492,11 +587,11 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
 
     // Left group selector rail
     g.setColour(juce::Colour(0xff18181b)); g.fillRoundedRectangle(-15,150,73,430,22.0f);
-    g.setColour(purple); g.setFont(juce::Font(juce::FontOptions(15.0f,juce::Font::bold)));
+    g.setColour(purple); g.setFont(uiFont(15.0f,juce::Font::bold));
     g.drawText("NOTES",5,170,48,40,juce::Justification::centred);
-    g.setColour(muted); g.setFont(juce::Font(juce::FontOptions(19.0f,juce::Font::bold)));
+    g.setColour(muted); g.setFont(uiFont(19.0f,juce::Font::bold));
     for(int i=0;i<4;++i) g.drawText(juce::String(i+1),13,232+i*91,38,42,juce::Justification::centred);
-    g.setColour(purple); g.setFont(juce::Font(juce::FontOptions(14.0f,juce::Font::bold)));
+    g.setColour(purple); g.setFont(uiFont(14.0f,juce::Font::bold));
     for(int i=0;i<4;++i) g.drawText("0",30,206+i*91,24,18,juce::Justification::centred);
 
     // Decorative outer orb and signal-status lamp.
@@ -508,7 +603,7 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
 
     // Lower selector strip
     g.setColour(juce::Colour(0xff27272b)); g.fillRect(0,676,1366,57);
-    g.setColour(muted); g.setFont(juce::Font(juce::FontOptions(15.0f,juce::Font::bold)));
+    g.setColour(muted); g.setFont(uiFont(15.0f,juce::Font::bold));
     g.drawText("Select",30,688,95,32,juce::Justification::centredLeft);
     g.setColour(purple); g.fillRoundedRectangle(167,686,114,35,17.0f);
     g.setColour(text); 
@@ -522,7 +617,7 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xff1d1d20)); g.fillRect(0,734,1366,53);
     g.setColour(juce::Colour(0xff0b0b0d)); g.fillRect(160,738,1052,45);
     g.setColour(juce::Colour(0xff303036)); g.drawLine(160.0f,760.0f,1212.0f,760.0f,1.0f);
-    g.setColour(muted); g.setFont(juce::Font(juce::FontOptions(14.0f,juce::Font::bold)));
+    g.setColour(muted); g.setFont(uiFont(14.0f,juce::Font::bold));
     g.drawText("Input",32,736,105,24,juce::Justification::centredLeft);
     g.drawText("Output",32,760,105,24,juce::Justification::centredLeft);
     for(int i=0;i<100;++i) {
@@ -535,24 +630,25 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     // Tone-volume / scale control strip at the left of the keyboard.
     g.setColour(juce::Colour(0xff171719)); g.fillRect(0,788,165,287);
     g.setColour(juce::Colour(0xff38383d)); g.drawLine(0.0f,788.0f,1366.0f,788.0f,1.0f);
-    g.setColour(muted); g.setFont(juce::Font(juce::FontOptions(15.0f,juce::Font::bold)));
+    g.setColour(muted); g.setFont(uiFont(15.0f,juce::Font::bold));
     g.drawText("Tone Volume",24,801,125,25,juce::Justification::centredLeft);
     g.setColour(juce::Colour(0xff070708)); g.fillRoundedRectangle(10,833,145,19,9.0f);
     g.setColour(juce::Colour(0xff713a46)); g.fillRoundedRectangle(14,837,92,11,5.0f);
     g.setColour(juce::Colour(0xffd0a3b9)); g.fillRect(103,834,3,17);
     g.setColour(juce::Colour(0xff252329)); g.fillRoundedRectangle(12,875,141,169,15.0f);
-    g.setColour(juce::Colour(0xffd7c8df)); g.setFont(juce::Font(juce::FontOptions(44.0f,juce::Font::bold)));
-    g.drawText("—",12,902,141,58,juce::Justification::centred);
-    g.setColour(muted); g.setFont(juce::Font(juce::FontOptions(16.0f,juce::Font::bold)));
-    g.drawText("hover to",15,960,135,24,juce::Justification::centred);
-    g.drawText("set scale",15,983,135,24,juce::Justification::centred);
-    g.setColour(purple); g.setFont(juce::Font(juce::FontOptions(15.0f,juce::Font::bold)));
-    g.drawText("Chromatic",16,1048,140,25,juce::Justification::centredLeft);
+    g.setColour(juce::Colour(0xffe7d9ef)); g.setFont(uiFont(50.0f,juce::Font::bold));
+    g.drawText("E",12,891,141,58,juce::Justification::centred);
+    g.setColour(muted); g.setFont(uiFont(16.0f,juce::Font::bold));
+    g.drawText("custom",15,943,135,22,juce::Justification::centred);
+    g.drawText("hover to",15,969,135,22,juce::Justification::centred);
+    g.drawText("set scale",15,990,135,22,juce::Justification::centred);
+    g.setColour(purple); g.setFont(uiFont(15.0f,juce::Font::bold));
+    g.drawText("SCALE",16,1048,140,25,juce::Justification::centredLeft);
 
     // Keyboard and right status rail
     drawPiano(g,{165,788,1047,287});
     g.setColour(juce::Colour(0xff222226)); g.fillRect(1212,734,154,341);
-    g.setColour(muted); g.setFont(juce::Font(juce::FontOptions(14.0f,juce::Font::bold)));
+    g.setColour(muted); g.setFont(uiFont(14.0f,juce::Font::bold));
     g.drawText("In / Out",1225,741,130,24,juce::Justification::centredLeft);
     g.drawText("HeatMaps",1225,761,130,24,juce::Justification::centredLeft);
     g.drawText("Detected",1225,800,130,24,juce::Justification::centredLeft);
@@ -574,13 +670,17 @@ void MetaTuneInspiredAudioProcessorEditor::resized()
     amount.setBounds(1090*sx,395*sy,225*sx,225*sy);
     speedLabel.setBounds(960*sx,320*sy,220*sx,25*sy);
     amountLabel.setBounds(1097*sx,575*sy,220*sx,25*sy);
-    scale.setBounds(165*sx,686*sy,125*sx,35*sy);
-    root.setBounds(300*sx,686*sy,78*sx,35*sy);
-    stabilizer.setBounds(1000*sx,686*sy,160*sx,35*sy);
-    lowLatency.setBounds(1200*sx,686*sy,150*sx,35*sy);
+    scale.setBounds(165*sx,686*sy,176*sx,35*sy);
+    root.setBounds(350*sx,686*sy,100*sx,35*sy);
+    stabilizer.setBounds(990*sx,686*sy,185*sx,35*sy);
+    lowLatency.setBounds(1177*sx,686*sy,175*sx,35*sy);
     noteReadout.setBounds(360*sx,365*sy,230*sx,70*sy);
     status.setBounds(32*sx,610*sy,600*sx,25*sy);
-    presetLabel.setBounds(160*sx,8*sy,220*sx,35*sy);
+    const float uiScale = juce::jmin(sx, sy);
+    noteReadout.setFont(uiFont(juce::jlimit(16.0f, 42.0f, 42.0f * uiScale),
+                              juce::Font::bold));
+    status.setFont(uiFont(juce::jlimit(8.0f, 15.0f, 15.0f * uiScale),
+                          juce::Font::bold));
 }
 void MetaTuneInspiredAudioProcessorEditor::timerCallback()
 {
