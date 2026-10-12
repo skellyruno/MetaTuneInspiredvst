@@ -76,8 +76,11 @@ MetaTuneKnobLookAndFeel metaTuneKnobLookAndFeel;
 MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaTuneInspiredAudioProcessor& p)
  : AudioProcessorEditor(&p), processor(p)
 {
-    setSize(1080, 850);
-    setResizable(false, false);
+    // Start at 65% of the reference canvas (35% smaller), while allowing the host
+    // editor to be resized. All custom drawing and child controls scale together.
+    setSize(888, 702);
+    setResizable(true, true);
+    setResizeLimits(683, 540, 1708, 1350);
     styleKnob(speed); styleKnob(amount); styleKnob(sustain);
     speed.setName("Speed"); amount.setName("Amount"); sustain.setName("Sustain");
     speed.setLookAndFeel(&metaTuneKnobLookAndFeel);
@@ -180,8 +183,14 @@ void MetaTuneInspiredAudioProcessorEditor::drawPiano(juce::Graphics& g, juce::Re
         g.setColour(juce::Colour(0xff202024)); g.drawRect(x,area.getY(),w-1,52,1);
         g.setColour(text); g.setFont(juce::Font(juce::FontOptions(15.0f,juce::Font::bold)));
         g.drawText(names[i],x,area.getY()+3,w-1,45,juce::Justification::centred);
-        g.setColour((i%3==0 || i==4 || i==9) ? juce::Colour(0xffa079ff) : juce::Colour(0xff6550a0));
+        const bool highlighted = (i == 0 || i == 2 || i == 4 || i == 5 || i == 7 || i == 9 || i == 11);
+        g.setColour(highlighted ? juce::Colour(0xff8d68e8) : juce::Colour(0xff51436f));
         g.fillRect((float)x,(float)(area.getY()+53),(float)(w-1),(float)(area.getHeight()-53));
+        if (highlighted)
+        {
+            g.setColour(juce::Colour(0xffd2baff).withAlpha(0.24f));
+            g.fillRect((float)x,(float)(area.getY()+53),(float)(w-1),3.0f);
+        }
         g.setColour(juce::Colour(0xff29282f)); g.drawRect((float)x,(float)(area.getY()+53),(float)(w-1),(float)(area.getHeight()-53),1.0f);
     }
     for(int i=0;i<12;++i) if(black[i]) {
@@ -211,8 +220,12 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(muted); g.setFont(juce::Font(juce::FontOptions(19.0f)));
     g.drawText("SAVE",450,10,40,38,juce::Justification::centred);
     g.setColour(juce::Colour(0xff1b1a20)); g.fillRect(508,6,471,48);
+    g.setColour(juce::Colour(0xffa36bff).withAlpha(0.22f));
+    g.fillRect(508,6,471,2);
     g.setColour(juce::Colour(0xffd9caff)); g.setFont(juce::Font(juce::FontOptions(27.0f,juce::Font::bold)));
     g.drawText("metaTune",508,6,471,48,juce::Justification::centred);
+    g.setColour(juce::Colour(0xffa36bff).withAlpha(0.10f));
+    g.drawLine(535.0f, 49.0f, 952.0f, 49.0f, 1.0f);
     g.setColour(muted); g.setFont(juce::Font(juce::FontOptions(23.0f)));
     g.drawText("UNDO     REDO      A  >  B      HELP",985,7,365,45,juce::Justification::centred);
 
@@ -221,16 +234,27 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     juce::Path right; right.startNewSubPath(755,60); right.lineTo(1366,60); right.lineTo(1366,675); right.lineTo(1120,675); right.closeSubPath();
     g.setColour(juce::Colour(0xff29292c)); g.fillPath(right);
     g.setColour(juce::Colour(0xff111113)); g.fillEllipse(238,138,465,460);
-    // Layered translucent rings add the soft luminous halo of the reference UI.
-    for (int i = 7; i >= 1; --i)
+    // Multi-layer ambient halo, kept subtle so it scales cleanly at small sizes.
+    for (int i = 12; i >= 1; --i)
     {
-        g.setColour(juce::Colour(0xffa56bff).withAlpha(0.018f * (8 - i)));
-        g.drawEllipse(319.0f - i * 1.8f, 215.0f - i * 1.8f,
-                      303.0f + i * 3.6f, 302.0f + i * 3.6f, 2.0f);
+        const float inset = (float)i * 2.8f;
+        g.setColour(juce::Colour(0xffa56bff).withAlpha(0.012f * (13 - i)));
+        g.drawEllipse(319.0f - inset, 215.0f - inset,
+                      303.0f + inset * 2.0f, 302.0f + inset * 2.0f, 2.2f);
     }
+    // Faint inner haze and split cyan/magenta energy around the note core.
+    g.setColour(juce::Colour(0xff33223f).withAlpha(0.42f));
+    g.fillEllipse(392.0f, 291.0f, 157.0f, 151.0f);
+    g.setColour(juce::Colour(0xff513c76).withAlpha(0.32f));
+    g.fillEllipse(408.0f, 307.0f, 125.0f, 120.0f);
     g.setColour(juce::Colour(0xff66616e)); g.drawEllipse(241,141,459,454,3.0f);
     g.setColour(juce::Colour(0xff7652a9)); g.drawEllipse(319,215,303,302,8.0f);
     g.setColour(juce::Colour(0xffb9a2ff)); g.drawEllipse(370,270,201,190,5.0f);
+    // Fine highlight strokes create a more dimensional glass-ring appearance.
+    g.setColour(juce::Colour(0xffd8c7ff).withAlpha(0.45f));
+    g.drawArc(373.0f, 273.0f, 195.0f, 184.0f, 3.55f, 5.15f, true, 1.5f);
+    g.setColour(juce::Colour(0xff68dfff).withAlpha(0.65f));
+    g.drawArc(377.0f, 277.0f, 188.0f, 177.0f, 1.55f, 2.45f, true, 2.0f);
     g.setColour(juce::Colour(0xffbb72e8)); g.setFont(juce::Font(juce::FontOptions(54.0f)));
     // Draw a small lightning mark with vector geometry instead of a font glyph.
     juce::Path bolt;
@@ -253,9 +277,12 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(purple); g.setFont(juce::Font(juce::FontOptions(14.0f,juce::Font::bold)));
     for(int i=0;i<4;++i) g.drawText("0",30,206+i*91,24,18,juce::Justification::centred);
 
-    // Decorative outer orb and control labels
+    // Decorative outer orb and signal-status lamp.
     g.setColour(juce::Colour(0xff5a5a5d)); g.fillEllipse(146,557,40,40);
     g.setColour(juce::Colour(0xff8b8b8e)); g.drawEllipse(146,557,40,40,1.5f);
+    g.setColour(juce::Colour(0xffb9a2ff).withAlpha(0.22f)); g.fillEllipse(154,565,24,24);
+    g.setColour(juce::Colour(0xffb8b5bf)); g.fillEllipse(158,569,16,16);
+    g.setColour(juce::Colour(0xff3c3b42)); g.drawLine(0.0f, 673.0f, 1366.0f, 673.0f, 1.0f);
 
     // Lower selector strip
     g.setColour(juce::Colour(0xff27272b)); g.fillRect(0,676,1366,57);
@@ -265,6 +292,8 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(text); 
     g.setColour(juce::Colour(0xff18181b)); g.fillRoundedRectangle(298,686,310,35,17.0f);
     g.setColour(juce::Colour(0xff09090a)); g.fillRoundedRectangle(685,684,657,39,19.0f);
+    g.setColour(juce::Colour(0xff35343b)); g.drawRoundedRectangle(685,684,657,39,19.0f,1.0f);
+    g.setColour(juce::Colour(0xffd58acb).withAlpha(0.13f)); g.fillRoundedRectangle(778,687,82,32,15.0f);
     g.setColour(muted); g.drawText("None       Short       Mid       Long",700,686,285,35,juce::Justification::centredLeft);
 
     // Heatmaps
