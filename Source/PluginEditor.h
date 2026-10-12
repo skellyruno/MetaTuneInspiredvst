@@ -57,6 +57,13 @@ private:
     float pitchReferenceHz = 440.0f;
     float orbRotationRadians = 0.0f;
 
+    // One-shot Orb boot animation: fast spin, rising light, then settle into
+    // continuous Speed-driven motion. Timestamp uses JUCE's wrap-safe ms counter.
+    juce::uint32 orbStartupStartedAtMs = 0;
+    float orbStartupProgress = 0.0f;
+    float orbStartupGlow = 0.0f;
+    bool orbStartupComplete = false;
+
     juce::ValueTree slotA, slotB, undoState, redoState;
     juce::String selectedPresetName { "No preset selected" };
     bool hasUndoState = false;
