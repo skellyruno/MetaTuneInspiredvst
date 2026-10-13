@@ -131,7 +131,6 @@ void MetaTuneInspiredAudioProcessor::estimatePitchFromHistory() noexcept
     constexpr int frameSize = 1024;
     constexpr int maxLagStorage = 512;
     constexpr float minimumRms = 0.0025f;
-    constexpr float yinThreshold = 0.18f;
     constexpr float minimumConfidence = 0.60f;
 
     if (pitchHistorySamples < frameSize || currentSampleRate < 8000.0)
@@ -159,6 +158,7 @@ void MetaTuneInspiredAudioProcessor::estimatePitchFromHistory() noexcept
         constexpr int n = 1024;
         constexpr int lagStorage = 512;
         constexpr float rmsFloor = 0.0025f;
+        constexpr float yinThreshold = 0.18f;
         constexpr float confidenceFloor = 0.60f;
         if (pitchHistorySamples < sourceSamples)
             return false;
