@@ -2,6 +2,7 @@
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
 #include <memory>
+#include <array>
 
 class MetaTuneInspiredAudioProcessorEditor final : public juce::AudioProcessorEditor,
                                                     private juce::Timer
@@ -56,6 +57,14 @@ private:
     float toneVolume = 0.65f;
     float pitchReferenceHz = 440.0f;
     float orbRotationRadians = 0.0f;
+
+    // UI-thread history for the rolling input/output note HeatMaps.
+    static constexpr int heatmapColumnCount = 100;
+    std::array<int, heatmapColumnCount> heatmapInputNotes {};
+    std::array<int, heatmapColumnCount> heatmapOutputNotes {};
+    std::array<float, heatmapColumnCount> heatmapConfidence {};
+    int heatmapWriteIndex = 0;
+    float visualizerActivity = 0.0f;
 
     // One-shot Orb boot animation: fast spin, rising light, then settle into
     // continuous Speed-driven motion. Timestamp uses JUCE's wrap-safe ms counter.

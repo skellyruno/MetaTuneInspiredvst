@@ -748,6 +748,10 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     setSize(683, 540);
     setResizable(true, true);
     setResizeLimits(683, 540, 1708, 1350);
+    heatmapInputNotes.fill(-1);
+    heatmapOutputNotes.fill(-1);
+    heatmapConfidence.fill(0.0f);
+    pitchReferenceHz = processor.getPitchReferenceHz();
     speed.setName("Speed"); amount.setName("Amount"); sustain.setName("Sustain");
     speed.setTooltip("Retune Speed: 200 ms (natural) down to -3 ms (hard tune)");
     amount.setTooltip("Correction Amount: 0% to 100%");
@@ -807,22 +811,14 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     rootAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor.parameters,"root",root);
     stabAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(processor.parameters,"stabilizer",stabilizer);
     latencyAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(processor.parameters,"lowLatency",lowLatency);
-    stabilizer.setEnabled(!lowLatency.getToggleState());
-    lowLatency.onClick = [this]()
-    {
-        if (lowLatency.getToggleState())
-            stabilizer.setToggleState(false, juce::sendNotificationSync);
-        stabilizer.setEnabled(!lowLatency.getToggleState());
-        repaint();
-    };
-    stabilizer.onClick = [this]()
-    {
-        if (stabilizer.getToggleState() && lowLatency.getToggleState())
-            lowLatency.setToggleState(false, juce::sendNotificationSync);
-        stabilizer.setEnabled(!lowLatency.getToggleState());
-        repaint();
-    };
+    // Note Stabilizer and Low Latency are independently selectable in MetaTune.
+    // Low Latency switches detector analysis windows; Stabilizer filters brief notes.
+    stabilizer.setEnabled(true);
+    lowLatency.onClick = [this]() { repaint(); };
+    stabilizer.onClick = [this]() { repaint(); };
     selectedNoteIndex = juce::jlimit(0, 11, root.getSelectedItemIndex() < 0 ? 4 : root.getSelectedItemIndex());
+    if (auto* stabilizerTime = processor.parameters.getRawParameterValue("stabilizerTime"))
+        selectedCorrectionTime = juce::jlimit(0, 3, (int) std::lround(stabilizerTime->load()));
     lastNonChromaticScaleMode = scale.getSelectedItemIndex() == 2 ? 2 : 1;
     slotA = processor.parameters.copyState();
     slotB = slotA.createCopy();
@@ -898,8 +894,14 @@ void MetaTuneInspiredAudioProcessorEditor::drawPiano(juce::Graphics& g, juce::Re
     const int keyH = area.getBottom() - keyTop;
     const float semitoneW = (float)area.getWidth() / 12.0f;
     const int chosenNote = juce::jlimit(0, 11, selectedNoteIndex);
+    const float liveHz = processor.getDetectedHz();
+    const float liveConfidence = processor.getPitchConfidence();
+    const bool hasLivePitch = liveHz > 0.0f && liveConfidence >= 0.60f;
+    const int detectedNote = hasLivePitch
+        ? ((int)std::lround(69.0f + 12.0f * std::log2(liveHz / processor.getPitchReferenceHz())) % 12 + 12) % 12
+        : -1;
 
-    // Chromatic note names form a narrow header strip; the selected root has a violet edge.
+    // Chromatic note names form a narrow header strip; root is violet, detected pitch is cyan.
     for (int i = 0; i < 12; ++i)
     {
         const float x = (float)area.getX() + i * semitoneW;
@@ -911,6 +913,11 @@ void MetaTuneInspiredAudioProcessorEditor::drawPiano(juce::Graphics& g, juce::Re
         {
             g.setColour(juce::Colour(0xffc9a7ff).withAlpha(0.35f));
             g.fillRect(x + 1.0f, (float)area.getY() + 1.0f, semitoneW - 3.0f, 3.0f);
+        }
+        if (i == detectedNote)
+        {
+            g.setColour(cyan.withAlpha(0.96f));
+            g.fillRect(x + 1.0f, (float)area.getBottom() - 4.0f, semitoneW - 3.0f, 3.0f);
         }
         g.setColour(text);
         g.setFont(uiFont(juce::jlimit(9.0f, 15.0f, (float)labelH * 0.29f), juce::Font::bold));
@@ -945,6 +952,13 @@ void MetaTuneInspiredAudioProcessorEditor::drawPiano(juce::Graphics& g, juce::Re
                    key.getRight() - 2.0f, key.getY() + 1.2f, selected ? 2.1f : 1.1f);
         g.setColour(juce::Colour(0xffb48aff).withAlpha(selected ? 0.28f : (i % 2 == 0 ? 0.15f : 0.075f)));
         g.fillRect(key.reduced(2.0f, 0.0f));
+        if (hasLivePitch && detectedNote == naturalSemitones[i])
+        {
+            g.setColour(cyan.withAlpha(0.18f));
+            g.fillRect(key.reduced(3.0f, 0.0f));
+            g.setColour(cyan.withAlpha(0.92f));
+            g.drawRect(key, 1.7f);
+        }
     }
 
     // Authentic-looking black-key overlays are positioned using the chromatic lane centers,
@@ -979,8 +993,9 @@ void MetaTuneInspiredAudioProcessorEditor::drawPiano(juce::Graphics& g, juce::Re
         dark.addColour(0.45, juce::Colour(0xff1c1c20));
         g.setGradientFill(dark);
         g.fillPath(key);
-        g.setColour(chosenNote == semitone ? juce::Colour(0xffd9b6ff) : juce::Colour(0xff48464f));
-        g.strokePath(key, juce::PathStrokeType(chosenNote == semitone ? 1.8f : 1.0f));
+        const bool liveBlackKey = hasLivePitch && detectedNote == semitone;
+        g.setColour(liveBlackKey ? cyan : (chosenNote == semitone ? juce::Colour(0xffd9b6ff) : juce::Colour(0xff48464f)));
+        g.strokePath(key, juce::PathStrokeType((liveBlackKey || chosenNote == semitone) ? 1.8f : 1.0f));
         g.setColour(juce::Colour(0xff8a8592).withAlpha(0.30f));
         g.drawLine(x + 2.0f, y + 2.0f, x + blackW - 2.0f, y + 2.0f, 1.0f);
     }
@@ -1083,7 +1098,9 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     // Amount changes outer-orb diameter, Speed rotates the inner plasma, and Doubler
     // shows two offset rings with blue haze controlled by the Doubler mix gesture.
     const float amountNorm = juce::jlimit(0.0f, 1.0f, (float)amount.getValue() / 100.0f);
-    const float orbScale = 0.86f + 0.14f * amountNorm;
+    const float orbScale = (0.86f + 0.14f * amountNorm) * (1.0f + 0.006f * visualizerActivity);
+    const float inputActivity = juce::jlimit(0.0f, 1.0f, visualizerActivity);
+    const float pitchLock = juce::jlimit(0.0f, 1.0f, processor.getPitchConfidence());
     constexpr float orbCentreX = 470.0f, orbCentreY = 365.0f;
 
     g.saveState();
@@ -1151,16 +1168,18 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     for (int shell = 16; shell >= 1; --shell)
     {
         const float spread = (float)shell * 1.25f;
-        const float alpha = 0.045f + 0.012f * (17 - shell);
-        const float thickness = 9.0f + (float)((shell + 1) % 4) * 4.0f;
-        g.setColour(juce::Colour(0xfff9f6ff).withAlpha(alpha));
+        const float alpha = 0.045f + 0.012f * (17 - shell)
+                          + 0.045f * inputActivity + 0.025f * pitchLock;
+        const float thickness = 9.0f + (float)((shell + 1) % 4) * 4.0f
+                              + 1.5f * inputActivity;
+        g.setColour(juce::Colour(0xfff9f6ff).withAlpha(juce::jmin(0.70f, alpha)));
         g.drawEllipse(238.0f - spread, 138.0f - spread,
                       465.0f + spread * 2.0f, 460.0f + spread * 2.0f, thickness);
     }
     juce::Path shellSpecular;
     shellSpecular.addArc(241.0f, 141.0f, 459.0f, 454.0f, 3.28f, 5.18f, true);
-    g.setColour(juce::Colour(0xfffffdff).withAlpha(0.22f + 0.07f * blurStrength));
-    g.strokePath(shellSpecular, juce::PathStrokeType(12.0f, juce::PathStrokeType::curved,
+    g.setColour(juce::Colour(0xfffffdff).withAlpha(0.22f + 0.07f * blurStrength + 0.12f * inputActivity));
+    g.strokePath(shellSpecular, juce::PathStrokeType(12.0f + 3.0f * inputActivity, juce::PathStrokeType::curved,
                                                       juce::PathStrokeType::rounded));
     g.setColour(juce::Colour(0xfffffdff).withAlpha(0.80f));
     g.strokePath(shellSpecular, juce::PathStrokeType(2.8f, juce::PathStrokeType::curved,
@@ -1305,11 +1324,48 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.drawText("Output",32,760,105,24,juce::Justification::centredLeft);
     if (showHeatMaps)
     {
-        for(int i=0;i<100;++i) {
-            float x=165.0f+i*10.2f;
-            auto col=(i%17<4) ? purple : ((i%13<3) ? cyan : juce::Colour(0xff39343f));
-            g.setColour(col.withAlpha((i%5==0)?0.95f:0.45f)); g.fillRect(x,739.0f,7.0f,19.0f);
-            g.setColour(col.withAlpha((i%7==0)?0.95f:0.30f)); g.fillRect(x+2.0f,762.0f,6.0f,18.0f);
+        const auto noteTint = [](int note, bool output) -> juce::Colour
+        {
+            if (note < 0) return juce::Colour(0xff27252d);
+            const int pc = (note % 12 + 12) % 12;
+            static const juce::Colour hues[] = {
+                juce::Colour(0xff9470ff), juce::Colour(0xff65dff6),
+                juce::Colour(0xff8b72ee), juce::Colour(0xff65dff6),
+                juce::Colour(0xffca83ee), juce::Colour(0xff67d7f1),
+                juce::Colour(0xff9375ed), juce::Colour(0xff68dff3),
+                juce::Colour(0xffa27aff), juce::Colour(0xff65d7f1),
+                juce::Colour(0xffcf7edc), juce::Colour(0xff9879f2)
+            };
+            const auto base = hues[pc];
+            return output ? base.interpolatedWith(juce::Colour(0xffff86d8), 0.26f) : base;
+        };
+
+        for (int i = 0; i < heatmapColumnCount; ++i)
+        {
+            const int historyIndex = (heatmapWriteIndex + i) % heatmapColumnCount;
+            const float x = 165.0f + (float)i * 10.2f;
+            const float strength = juce::jlimit(0.0f, 1.0f, heatmapConfidence[(size_t)historyIndex]);
+            const int inputNote = heatmapInputNotes[(size_t)historyIndex];
+            const int outputNote = heatmapOutputNotes[(size_t)historyIndex];
+            g.setColour(juce::Colour(0xff0a0a0d));
+            g.fillRect(x, 739.0f, 7.0f, 19.0f);
+            g.fillRect(x, 762.0f, 7.0f, 18.0f);
+            if (inputNote >= 0)
+            {
+                const auto inputColour = noteTint(inputNote, false);
+                g.setColour(inputColour.withAlpha(0.30f + 0.68f * strength));
+                g.fillRect(x, 739.0f, 6.0f, 19.0f);
+                g.setColour(inputColour.withAlpha(0.14f + 0.42f * strength));
+                g.fillRect(x + 1.0f, 741.0f, 2.0f, 15.0f);
+            }
+            if (outputNote >= 0)
+            {
+                const auto outputColour = noteTint(outputNote, true);
+                g.setColour(outputColour.withAlpha(0.26f + 0.70f * strength));
+                g.fillRect(x, 762.0f, 6.0f, 18.0f);
+                g.setColour(outputColour.withAlpha(0.12f + 0.44f * strength));
+                g.fillRect(x + 2.0f, 764.0f, 2.0f, 14.0f);
+            }
         }
     }
     else
@@ -1543,6 +1599,8 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDrag(const juce::MouseEvent& eve
         const float t = juce::jlimit(0.0f, 1.0f, (designX - 1218.0f) / 140.0f);
         pitchReferenceHz = pitchReferenceMinHz + t * (pitchReferenceMaxHz - pitchReferenceMinHz);
         pitchReferenceHz = (float)(juce::roundToInt(pitchReferenceHz * 10.0f) / 10.0f);
+        if (auto* parameter = processor.parameters.getParameter("pitchReference"))
+            parameter->setValueNotifyingHost(parameter->convertTo0to1(pitchReferenceHz));
         repaint();
         return;
     }
@@ -1736,6 +1794,8 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
         const float t = juce::jlimit(0.0f, 1.0f, (x - 1218.0f) / 140.0f);
         pitchReferenceHz = pitchReferenceMinHz + t * (pitchReferenceMaxHz - pitchReferenceMinHz);
         pitchReferenceHz = (float)(juce::roundToInt(pitchReferenceHz * 10.0f) / 10.0f);
+        if (auto* parameter = processor.parameters.getParameter("pitchReference"))
+            parameter->setValueNotifyingHost(parameter->convertTo0to1(pitchReferenceHz));
         orbDragMode = 5;
         repaint(); return;
     }
@@ -1753,6 +1813,8 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
             else if (x < 815.0f) selectedCorrectionTime = 1;
             else if (x < 885.0f) selectedCorrectionTime = 2;
             else selectedCorrectionTime = 3;
+            if (auto* parameter = processor.parameters.getParameter("stabilizerTime"))
+                parameter->setValueNotifyingHost(parameter->convertTo0to1((float)selectedCorrectionTime));
             repaint(); return;
         }
     }
@@ -1835,13 +1897,37 @@ void MetaTuneInspiredAudioProcessorEditor::timerCallback()
             sustain.setValue(signedValue, juce::dontSendNotification);
     }
 
-    const float hz=processor.getDetectedHz();
-    if(hz>0.0f) {
+    pitchReferenceHz = processor.getPitchReferenceHz();
+    if (auto* stabilizerTime = processor.parameters.getRawParameterValue("stabilizerTime"))
+        selectedCorrectionTime = juce::jlimit(0, 3, (int) std::lround(stabilizerTime->load()));
+    const float hz = processor.getDetectedHz();
+    const float confidence = processor.getPitchConfidence();
+
+    // Feed a rolling 3.3-second note history to the two HeatMap lanes.
+    heatmapInputNotes[(size_t)heatmapWriteIndex] = -1;
+    heatmapOutputNotes[(size_t)heatmapWriteIndex] = -1;
+    heatmapConfidence[(size_t)heatmapWriteIndex] = 0.0f;
+    if (hz > 0.0f && confidence >= 0.60f)
+    {
+        const int inputMidi = (int) std::lround(69.0f + 12.0f * std::log2(hz / processor.getPitchReferenceHz()));
+        const int outputMidi = (int) std::lround(processor.getSmoothedTargetMidiNote());
+        heatmapInputNotes[(size_t)heatmapWriteIndex] = (inputMidi % 12 + 12) % 12;
+        heatmapOutputNotes[(size_t)heatmapWriteIndex] = (outputMidi % 12 + 12) % 12;
+        heatmapConfidence[(size_t)heatmapWriteIndex] = confidence;
+    }
+    heatmapWriteIndex = (heatmapWriteIndex + 1) % heatmapColumnCount;
+
+    const float activityTarget = juce::jlimit(0.0f, 1.0f, processor.getInputRms() * 9.0f)
+                               * (0.30f + 0.70f * confidence);
+    visualizerActivity = juce::jlimit(0.0f, 1.0f,
+        visualizerActivity * 0.78f + activityTarget * 0.22f);
+
+    if (hz > 0.0f && confidence >= 0.60f) {
         const int midi=(int)std::round(processor.getDetectedMidiNote());
         static const char* names[]={"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
         noteReadout.setText(names[(midi%12+12)%12],juce::dontSendNotification);
         noteReadout.setVisible(showDetectedNotes);
-        status.setText(juce::String(hz,1)+" Hz   -   correction "+juce::String(processor.getCorrectionCents(),1)+" cents",juce::dontSendNotification);
+        status.setText(juce::String(hz,1)+" Hz   -   "+juce::String(confidence * 100.0f, 0)+"% confidence   -   "+juce::String(processor.getCorrectionCents(),1)+" cents",juce::dontSendNotification);
     } else {
         noteReadout.setText("",juce::dontSendNotification);
         noteReadout.setVisible(false);
