@@ -62,8 +62,10 @@ void MetaTuneInspiredAudioProcessor::prepareToPlay(double sr, int maxBlock)
     // 512 effective samples gives a ~10.7 ms frame at 48 kHz; the long path uses
     // 1024 effective samples for lower voices and more stable octave decisions.
     shortAnalysisDecimation = juce::jmax(1, juce::roundToInt((float)currentSampleRate / 48000.0f));
+    mediumAnalysisDecimation = juce::jmax(1, juce::roundToInt((float)currentSampleRate / 32000.0f));
     longAnalysisDecimation = juce::jmax(2, juce::roundToInt((float)currentSampleRate / 24000.0f));
     shortAnalysisWindowSamples = 512 * shortAnalysisDecimation;
+    mediumAnalysisWindowSamples = 768 * mediumAnalysisDecimation;
     longAnalysisWindowSamples = 1024 * longAnalysisDecimation;
     pitchAnalysisHopSamples = juce::jmax(128, juce::roundToInt((float)currentSampleRate * 0.004f));
 
@@ -78,6 +80,7 @@ void MetaTuneInspiredAudioProcessor::prepareToPlay(double sr, int maxBlock)
     doublerWritePosition = 0;
     pitchShiftPhase = 0.25f;
     currentPitchRatio = 1.0f;
+    pitchShiftWet = 0.0f;
     doublerLfoPhase = 0.0f;
     smoothedDoublerWidth = doublerWidthParameter != nullptr
         ? juce::jlimit(0.0f, 1.0f, doublerWidthParameter->load(std::memory_order_relaxed) / 100.0f) : 0.46f;
@@ -122,29 +125,36 @@ bool MetaTuneInspiredAudioProcessor::isBusesLayoutSupported(const BusesLayout& l
 
 void MetaTuneInspiredAudioProcessor::updatePitchEstimate(const juce::AudioBuffer<float>& buffer)
 {
-    // Feed a fixed-size mono ring buffer from every callback, including small
-    // 32/64/128/256-sample ASIO/FL Studio blocks. No allocation occurs here.
-    const int channels = buffer.getNumChannels();
+    // Feed a fixed-size history from every callback, including tiny FL Studio/ASIO
+    // blocks. Analyse the stronger input channel instead of averaging L/R, because
+    // wide or polarity-inverted stereo vocals can cancel when naively downmixed.
+    const int channels = juce::jmin(2, buffer.getNumChannels());
     const int samples = buffer.getNumSamples();
     if (channels <= 0 || samples <= 0)
         return;
 
-    double blockEnergy = 0.0;
+    std::array<double, 2> channelEnergy { 0.0, 0.0 };
+    for (int channel = 0; channel < channels; ++channel)
+    {
+        const auto* input = buffer.getReadPointer(channel);
+        double energy = 0.0;
+        for (int i = 0; i < samples; ++i)
+            energy += (double) input[i] * (double) input[i];
+        channelEnergy[(size_t)channel] = energy;
+    }
+
+    const int analysisChannel = channels > 1 && channelEnergy[1] > channelEnergy[0] ? 1 : 0;
+    const auto* analysis = buffer.getReadPointer(analysisChannel);
     for (int i = 0; i < samples; ++i)
     {
-        float mono = 0.0f;
-        for (int c = 0; c < channels; ++c)
-            mono += buffer.getReadPointer(c)[i];
-        mono /= (float) channels;
-        blockEnergy += (double) mono * (double) mono;
-
-        pitchHistory[(size_t) pitchHistoryWritePosition] = mono;
+        const float sample = analysis[i];
+        pitchHistory[(size_t) pitchHistoryWritePosition] = sample;
         pitchHistoryWritePosition = (pitchHistoryWritePosition + 1) % pitchHistorySize;
         pitchHistorySamples = juce::jmin(pitchHistorySize, pitchHistorySamples + 1);
         ++samplesSincePitchAnalysis;
 
-        // 256 samples at a time keeps tracking responsive without a full YIN
-        // computation on every tiny host callback.
+        // The analysis hop is sample-rate-aware (about 4 ms), so tracking still
+        // runs on hosts that deliver 32/64/128/256-sample callbacks.
         if (samplesSincePitchAnalysis >= pitchAnalysisHopSamples)
         {
             samplesSincePitchAnalysis -= pitchAnalysisHopSamples;
@@ -152,7 +162,8 @@ void MetaTuneInspiredAudioProcessor::updatePitchEstimate(const juce::AudioBuffer
         }
     }
 
-    inputRms.store((float) std::sqrt(blockEnergy / (double) samples), std::memory_order_relaxed);
+    const double strongestEnergy = channelEnergy[(size_t)analysisChannel];
+    inputRms.store((float) std::sqrt(strongestEnergy / (double) samples), std::memory_order_relaxed);
 }
 
 void MetaTuneInspiredAudioProcessor::estimatePitchFromHistory() noexcept
@@ -166,7 +177,11 @@ void MetaTuneInspiredAudioProcessor::estimatePitchFromHistory() noexcept
 
     auto rejectFrame = [this]() noexcept
     {
-        pitchConfidence.store(0.0f, std::memory_order_relaxed);
+        // Decay confidence over a few analysis hops instead of dropping it to zero
+        // on the first unvoiced/consonant frame. The processor can smoothly release
+        // correction while the UI continues to show only high-confidence notes.
+        const float previousConfidence = pitchConfidence.load(std::memory_order_relaxed);
+        pitchConfidence.store(previousConfidence * 0.78f, std::memory_order_relaxed);
         if (++consecutiveUnvoicedAnalyses >= 3)
         {
             detectedHz.store(0.0f, std::memory_order_relaxed);
@@ -298,6 +313,14 @@ void MetaTuneInspiredAudioProcessor::estimatePitchFromHistory() noexcept
                                (float) currentSampleRate / (float) shortAnalysisDecimation,
                                90.0f, true, estimateHz, confidence);
 
+    // Mid frame catches lower-tenor/alto notes without immediately paying the
+    // latency of the long bass frame. It is only evaluated if the short frame
+    // cannot find a confident fundamental.
+    if (!voiced && pitchHistorySamples >= mediumAnalysisWindowSamples)
+        voiced = analyseWindow(mediumAnalysisWindowSamples, mediumAnalysisDecimation,
+                               (float) currentSampleRate / (float) mediumAnalysisDecimation,
+                               70.0f, true, estimateHz, confidence);
+
     if (!voiced && pitchHistorySamples >= longAnalysisWindowSamples)
         voiced = analyseWindow(longAnalysisWindowSamples, longAnalysisDecimation,
                                (float) currentSampleRate / (float) longAnalysisDecimation,
@@ -324,7 +347,9 @@ void MetaTuneInspiredAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
 
     const float hz = detectedHz.load(std::memory_order_relaxed);
     const float confidence = pitchConfidence.load(std::memory_order_relaxed);
-    const bool voiced = hz > 0.0f && confidence >= 0.60f;
+    // Audio-side hysteresis is deliberately lower than the UI's visual lock threshold.
+    // The display remains confidence-gated at 0.60, but the shifter releases over ~1-2 hops.
+    const bool voiced = hz > 0.0f && confidence >= 0.48f;
     const bool bypassed = globalBypassParameter != nullptr
         && globalBypassParameter->load(std::memory_order_relaxed) > 0.5f;
 
@@ -501,64 +526,71 @@ void MetaTuneInspiredAudioProcessor::processPitchShifter(juce::AudioBuffer<float
     const float retuneMs = effectiveRetuneTimeMs.load(std::memory_order_relaxed);
     const float ratioAlpha = retuneMs <= 0.05f ? 1.0f
         : 1.0f - std::exp(-1.0f / (float)(currentSampleRate * 0.0008));
+    const float activationAlpha = 1.0f - std::exp(-1.0f / (float)(currentSampleRate * 0.006));
     const float fixedDelay = (float)pitchShiftBaseDelaySamples + (float)pitchShiftWindowSamples * 0.5f;
     constexpr float unityEpsilon = 0.00025f;
     constexpr float pi = juce::MathConstants<float>::pi;
 
+    // Four-point Catmull-Rom interpolation is smoother at fractional delays than
+    // linear interpolation, with no allocation or external DSP dependency.
     auto readDelay = [this](int channel, float delaySamples) noexcept -> float
     {
         float readPosition = (float)pitchShiftWritePosition - delaySamples;
-        if (readPosition < 0.0f)
-            readPosition += (float)pitchShiftBufferSize;
-        if (readPosition >= (float)pitchShiftBufferSize)
-            readPosition -= (float)pitchShiftBufferSize;
-        const int i0 = (int)readPosition;
-        const int i1 = (i0 + 1) % pitchShiftBufferSize;
-        const float frac = readPosition - (float)i0;
+        if (readPosition < 0.0f) readPosition += (float)pitchShiftBufferSize;
+        if (readPosition >= (float)pitchShiftBufferSize) readPosition -= (float)pitchShiftBufferSize;
+        const int i1 = (int)readPosition;
+        const int i0 = (i1 - 1 + pitchShiftBufferSize) % pitchShiftBufferSize;
+        const int i2 = (i1 + 1) % pitchShiftBufferSize;
+        const int i3 = (i1 + 2) % pitchShiftBufferSize;
+        const float t = readPosition - (float)i1;
         const auto& line = pitchShiftDelayLine[(size_t)channel];
-        return line[(size_t)i0] + (line[(size_t)i1] - line[(size_t)i0]) * frac;
+        const float p0 = line[(size_t)i0], p1 = line[(size_t)i1];
+        const float p2 = line[(size_t)i2], p3 = line[(size_t)i3];
+        const float a = -0.5f * p0 + 1.5f * p1 - 1.5f * p2 + 0.5f * p3;
+        const float b = p0 - 2.5f * p1 + 2.0f * p2 - 0.5f * p3;
+        const float c = -0.5f * p0 + 0.5f * p2;
+        return ((a * t + b) * t + c) * t + p1;
     };
 
+    const float targetWet = std::abs(semitoneShift) > 0.004f ? 1.0f : 0.0f;
     for (int i = 0; i < samples; ++i)
     {
         currentPitchRatio += (desiredRatio - currentPitchRatio) * ratioAlpha;
         if (std::abs(currentPitchRatio - 1.0f) < unityEpsilon)
             currentPitchRatio = 1.0f;
+        pitchShiftWet += (targetWet - pitchShiftWet) * activationAlpha;
+        pitchShiftWet = juce::jlimit(0.0f, 1.0f, pitchShiftWet);
+
+        float phaseA = pitchShiftPhase;
+        float phaseB = phaseA + 0.5f;
+        if (phaseB >= 1.0f) phaseB -= 1.0f;
+        const float sinA = std::sin(pi * phaseA);
+        const float weightA = sinA * sinA;
+        const float weightB = 1.0f - weightA;
+        const float delayA = (float)pitchShiftBaseDelaySamples
+                           + phaseA * (float)pitchShiftWindowSamples;
+        const float delayB = (float)pitchShiftBaseDelaySamples
+                           + phaseB * (float)pitchShiftWindowSamples;
 
         for (int channel = 0; channel < channels; ++channel)
         {
             auto* data = buffer.getWritePointer(channel);
             pitchShiftDelayLine[(size_t)channel][(size_t)pitchShiftWritePosition] = data[i];
 
-            if (currentPitchRatio == 1.0f)
-            {
-                // Unity ratio is genuinely transparent apart from the reported fixed delay;
-                // avoid a two-tap comb filter when no correction is required.
-                data[i] = readDelay(channel, fixedDelay);
-            }
-            else
-            {
-                float phaseA = pitchShiftPhase;
-                float phaseB = phaseA + 0.5f;
-                if (phaseB >= 1.0f) phaseB -= 1.0f;
-                const float sinA = std::sin(pi * phaseA);
-                const float weightA = sinA * sinA;
-                const float weightB = 1.0f - weightA;
-                const float delayA = (float)pitchShiftBaseDelaySamples
-                                   + phaseA * (float)pitchShiftWindowSamples;
-                const float delayB = (float)pitchShiftBaseDelaySamples
-                                   + phaseB * (float)pitchShiftWindowSamples;
-                const float a = readDelay(channel, delayA);
-                const float b = readDelay(channel, delayB);
-                data[i] = a * weightA + b * weightB;
-            }
+            const float alignedDry = readDelay(channel, fixedDelay);
+            const float headA = readDelay(channel, delayA);
+            const float headB = readDelay(channel, delayB);
+            const float shifted = headA * weightA + headB * weightB;
+            // Fade between a latency-matched unity path and the two-head shifter so
+            // Amount=0/unvoiced changes do not abruptly switch timbre or click.
+            data[i] = alignedDry + (shifted - alignedDry) * pitchShiftWet;
         }
 
         if (currentPitchRatio == 1.0f)
             pitchShiftPhase = 0.25f;
         else
         {
-            // y[n] = x[n - D[n]]; D' = 1 - ratio therefore changes pitch by ratio.
+            // Variable delay slope D' = 1 - ratio gives the desired pitch ratio.
             pitchShiftPhase += (1.0f - currentPitchRatio) / (float)pitchShiftWindowSamples;
             pitchShiftPhase -= std::floor(pitchShiftPhase);
         }
@@ -587,15 +619,20 @@ void MetaTuneInspiredAudioProcessor::processDoubler(juce::AudioBuffer<float>& bu
     auto readDelay = [this](int channel, float delaySamples) noexcept -> float
     {
         float readPosition = (float)doublerWritePosition - delaySamples;
-        if (readPosition < 0.0f)
-            readPosition += (float)pitchShiftBufferSize;
-        if (readPosition >= (float)pitchShiftBufferSize)
-            readPosition -= (float)pitchShiftBufferSize;
-        const int i0 = (int)readPosition;
-        const int i1 = (i0 + 1) % pitchShiftBufferSize;
-        const float frac = readPosition - (float)i0;
+        if (readPosition < 0.0f) readPosition += (float)pitchShiftBufferSize;
+        if (readPosition >= (float)pitchShiftBufferSize) readPosition -= (float)pitchShiftBufferSize;
+        const int i1 = (int)readPosition;
+        const int i0 = (i1 - 1 + pitchShiftBufferSize) % pitchShiftBufferSize;
+        const int i2 = (i1 + 1) % pitchShiftBufferSize;
+        const int i3 = (i1 + 2) % pitchShiftBufferSize;
+        const float t = readPosition - (float)i1;
         const auto& line = doublerDelayLine[(size_t)channel];
-        return line[(size_t)i0] + (line[(size_t)i1] - line[(size_t)i0]) * frac;
+        const float p0 = line[(size_t)i0], p1 = line[(size_t)i1];
+        const float p2 = line[(size_t)i2], p3 = line[(size_t)i3];
+        const float a = -0.5f * p0 + 1.5f * p1 - 1.5f * p2 + 0.5f * p3;
+        const float b = p0 - 2.5f * p1 + 2.0f * p2 - 0.5f * p3;
+        const float c = -0.5f * p0 + 0.5f * p2;
+        return ((a * t + b) * t + c) * t + p1;
     };
 
     for (int i = 0; i < samples; ++i)

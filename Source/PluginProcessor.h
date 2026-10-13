@@ -59,6 +59,8 @@ private:
     static constexpr int pitchShiftBufferSize = 8192;
     int shortAnalysisDecimation = 1;
     int shortAnalysisWindowSamples = 512;
+    int mediumAnalysisDecimation = 1;
+    int mediumAnalysisWindowSamples = 768;
     int longAnalysisDecimation = 2;
     int longAnalysisWindowSamples = 2048;
     int pitchAnalysisHopSamples = 256;
@@ -86,6 +88,7 @@ private:
     int pitchShiftBaseDelaySamples = 24;
     float pitchShiftPhase = 0.25f;
     float currentPitchRatio = 1.0f;
+    float pitchShiftWet = 0.0f;
     int doublerWritePosition = 0;
     float doublerLfoPhase = 0.0f;
     float smoothedDoublerWidth = 0.46f;

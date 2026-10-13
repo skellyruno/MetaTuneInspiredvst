@@ -465,7 +465,7 @@ juce::Image createInnerOrbArtwork()
                                                  juce::PathStrokeType::rounded));
 
     // Dense deterministic grain produces the grainy texture rather than a smooth gradient.
-    for (int i = 0; i < 2600; ++i)
+    for (int i = 0; i < 3900; ++i)
     {
         const unsigned int h1 = (unsigned int)i * 747796405u + 2891336453u;
         const unsigned int h2 = (unsigned int)i * 2246822519u + 3266489917u;
@@ -485,8 +485,26 @@ juce::Image createInnerOrbArtwork()
         g.fillEllipse(px, py, size, size);
     }
 
+    // Extra turbulent micro-clouds: overlapping translucent, off-axis eddies avoid
+    // the clean symmetric blobs that make the orb look like a flat gradient.
+    for (int i = 0; i < 34; ++i)
+    {
+        const unsigned int h1 = (unsigned int)i * 747796405u + 2891336453u;
+        const unsigned int h2 = (unsigned int)i * 277803737u + 1013904223u;
+        const float cx = 39.0f + (float)(h1 % 15000u) / 100.0f;
+        const float cy = 38.0f + (float)(h2 % 13000u) / 100.0f;
+        const float w = 15.0f + (float)((h1 >> 7u) % 3200u) / 100.0f;
+        const float h = 12.0f + (float)((h2 >> 9u) % 2600u) / 100.0f;
+        const bool cool = ((h1 >> 15u) & 1u) == 0u;
+        const juce::Colour colour = cool ? juce::Colour(0xff29dff3) : juce::Colour(0xffff66d7);
+        const float alpha = 0.035f + (float)((h2 >> 18u) % 100u) / 1000.0f;
+        g.setGradientFill(juce::ColourGradient(colour.withAlpha(alpha), cx, cy,
+                                               colour.withAlpha(0.0f), cx + w * 0.8f, cy + h, true));
+        g.fillEllipse(cx - w * 0.5f, cy - h * 0.5f, w, h);
+    }
+
     // Soft cloudy turbulence across the lower half gives the core depth.
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff3fbef4).withAlpha(0.28f),
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff3fbef4).withAlpha(0.32f),
                                            80.0f, 144.0f,
                                            juce::Colour(0xff3fbef4).withAlpha(0.0f),
                                            130.0f, 179.0f, true));
@@ -896,117 +914,144 @@ void MetaTuneInspiredAudioProcessorEditor::drawPiano(juce::Graphics& g, juce::Re
 {
     static const char* names[] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
     static const bool blackNote[] = { false, true, false, true, false, false, true, false, true, false, true, false };
+    static const int majorScale[] = { 0, 2, 4, 5, 7, 9, 11 };
+    static const int minorScale[] = { 0, 2, 3, 5, 7, 8, 10 };
+
     const int labelH = juce::jmin(52, area.getHeight() / 4);
     const int keyTop = area.getY() + labelH;
     const int keyH = area.getBottom() - keyTop;
-    const float semitoneW = (float)area.getWidth() / 12.0f;
-    const int chosenNote = juce::jlimit(0, 11, selectedNoteIndex);
+    const float laneW = (float)area.getWidth() / 12.0f;
+    const int chosenRoot = juce::jlimit(0, 11, root.getSelectedItemIndex() < 0 ? selectedNoteIndex : root.getSelectedItemIndex());
+    const int scaleMode = scale.getSelectedItemIndex(); // 0 chromatic, 1 major, 2 minor
     const float liveHz = processor.getDetectedHz();
-    const float liveConfidence = processor.getPitchConfidence();
-    const bool hasLivePitch = liveHz > 0.0f && liveConfidence >= 0.60f;
-    const int detectedNote = hasLivePitch
-        ? ((int)std::lround(69.0f + 12.0f * std::log2(liveHz / processor.getPitchReferenceHz())) % 12 + 12) % 12
-        : -1;
+    const float confidence = processor.getPitchConfidence();
+    const bool hasLivePitch = liveHz > 0.0f && confidence >= 0.60f;
+    const float pitchReference = juce::jmax(1.0f, processor.getPitchReferenceHz());
+    const int liveInputPc = hasLivePitch
+        ? ((int)std::lround(69.0f + 12.0f * std::log2(liveHz / pitchReference)) % 12 + 12) % 12 : -1;
+    const int liveTargetPc = hasLivePitch
+        ? ((int)std::lround(processor.getSmoothedTargetMidiNote()) % 12 + 12) % 12 : -1;
 
-    // Chromatic note names form a narrow header strip; root is violet, detected pitch is cyan.
-    for (int i = 0; i < 12; ++i)
+    const auto isAllowed = [scaleMode, chosenRoot](int noteIndex) noexcept
     {
-        const float x = (float)area.getX() + i * semitoneW;
-        g.setColour(blackNote[i] ? juce::Colour(0xff343439) : juce::Colour(0xff77777b));
-        g.fillRect(x, (float)area.getY(), semitoneW - 1.0f, (float)labelH);
+        if (scaleMode == 0) return true;
+        const int relative = (noteIndex - chosenRoot + 12) % 12;
+        const int* intervals = scaleMode == 1 ? majorScale : minorScale;
+        for (int degreeIndex = 0; degreeIndex < 7; ++degreeIndex)
+            if (relative == intervals[degreeIndex]) return true;
+        return false;
+    };
+
+    // MetaTune's keyboard is a 12-lane chromatic grid rather than a conventional
+    // seven-key piano width: the header and illuminated lower lanes line up exactly.
+    for (int note = 0; note < 12; ++note)
+    {
+        const float x = (float)area.getX() + (float)note * laneW;
+        const bool allowed = isAllowed(note);
+        const bool isRoot = note == chosenRoot;
+        const bool isInput = note == liveInputPc;
+        const bool isTarget = note == liveTargetPc;
+
+        juce::Colour header = blackNote[note] ? juce::Colour(0xff35343a) : juce::Colour(0xff77777b);
+        if (!allowed) header = header.interpolatedWith(juce::Colour(0xff242328), 0.42f);
+        if (isRoot) header = header.interpolatedWith(juce::Colour(0xff8e68db), 0.28f);
+        g.setColour(header);
+        g.fillRect(x, (float)area.getY(), laneW - 1.0f, (float)labelH);
         g.setColour(juce::Colour(0xff202024));
-        g.drawRect(x, (float)area.getY(), semitoneW - 1.0f, (float)labelH, 1.0f);
-        if (i == chosenNote)
+        g.drawRect(x, (float)area.getY(), laneW - 1.0f, (float)labelH, 1.0f);
+        if (isRoot)
         {
-            g.setColour(juce::Colour(0xffc9a7ff).withAlpha(0.35f));
-            g.fillRect(x + 1.0f, (float)area.getY() + 1.0f, semitoneW - 3.0f, 3.0f);
+            g.setColour(juce::Colour(0xffd1afff).withAlpha(0.92f));
+            g.fillRect(x + 1.0f, (float)area.getY() + 1.0f, laneW - 3.0f, 2.4f);
         }
-        if (i == detectedNote)
+        if (isInput)
         {
-            g.setColour(cyan.withAlpha(0.96f));
-            g.fillRect(x + 1.0f, (float)area.getBottom() - 4.0f, semitoneW - 3.0f, 3.0f);
+            g.setColour(cyan.withAlpha(0.95f));
+            g.fillRect(x + 1.0f, (float)area.getBottom() - 4.0f, laneW - 3.0f, 3.0f);
         }
-        g.setColour(text);
+        g.setColour(text.withAlpha(allowed ? 1.0f : 0.56f));
         g.setFont(uiFont(juce::jlimit(9.0f, 15.0f, (float)labelH * 0.29f), juce::Font::bold));
-        g.drawText(names[i], juce::Rectangle<float>(x, (float)area.getY() + 1.0f,
-                                                     semitoneW - 1.0f, (float)labelH - 2.0f),
+        g.drawText(names[note], juce::Rectangle<float>(x, (float)area.getY() + 1.0f, laneW - 1.0f, (float)labelH - 2.0f),
                    juce::Justification::centred);
-    }
 
-    // Seven natural keys beneath the chromatic header. Their widths follow piano-key geometry;
-    // black keys are separate overlays located by the 12-note header positions.
-    const float naturalW = (float)area.getWidth() / 7.0f;
-    const juce::Colour whiteTop(0xff8b6de3), whiteBottom(0xff9d80ed);
-    static const int naturalSemitones[] = { 0, 2, 4, 5, 7, 9, 11 };
-    for (int i = 0; i < 7; ++i)
-    {
-        const float x = (float)area.getX() + naturalW * (float)i;
-        juce::Rectangle<float> key(x, (float)keyTop, naturalW - 1.0f, (float)keyH);
-        g.setColour(juce::Colour(0xff060607));
-        g.fillRect(key.translated(0.0f, 2.0f));
-        juce::ColourGradient natural(whiteTop, key.getX(), key.getY(),
-                                     whiteBottom, key.getX(), key.getBottom(), false);
-        natural.addColour(0.42, juce::Colour(0xff9578ed));
-        g.setGradientFill(natural);
-        g.fillRect(key);
-        g.setColour(juce::Colour(0xff28262e));
-        g.drawRect(key, 1.0f);
+        const juce::Colour naturalTop = isRoot ? juce::Colour(0xffb08cff)
+            : (allowed ? juce::Colour(0xff9878eb) : juce::Colour(0xff493e62));
+        const juce::Colour naturalBottom = isRoot ? juce::Colour(0xffa78ae9)
+            : (allowed ? juce::Colour(0xffa18be0) : juce::Colour(0xff393149));
+        const juce::Colour blackTop = isRoot ? juce::Colour(0xff6b4b90)
+            : (allowed ? juce::Colour(0xff594970) : juce::Colour(0xff29252f));
+        const juce::Colour blackBottom = isRoot ? juce::Colour(0xff6b5791)
+            : (allowed ? juce::Colour(0xff57466f) : juce::Colour(0xff211f27));
+        const auto top = blackNote[note] ? blackTop : naturalTop;
+        const auto bottom = blackNote[note] ? blackBottom : naturalBottom;
+        juce::ColourGradient lane(top, x, (float)keyTop, bottom, x, (float)(keyTop + keyH), false);
+        lane.addColour(0.50, blackNote[note]
+            ? (allowed ? juce::Colour(0xff4d3f63) : juce::Colour(0xff28242e))
+            : (allowed ? juce::Colour(0xff9a80e7) : juce::Colour(0xff423651)));
+        g.setGradientFill(lane);
+        g.fillRect(x + 0.5f, (float)keyTop, laneW - 1.0f, (float)keyH);
+        g.setColour(juce::Colour(0xff25222c));
+        g.drawRect(x, (float)keyTop, laneW - 1.0f, (float)keyH, 1.0f);
+        g.setColour((isRoot ? juce::Colour(0xffe6d7ff) : juce::Colour(0xffcdb9ff))
+                        .withAlpha(isRoot ? 0.68f : (allowed ? 0.20f : 0.05f)));
+        g.drawLine(x + 1.4f, (float)keyTop + 1.2f, x + laneW - 2.0f, (float)keyTop + 1.2f,
+                   isRoot ? 1.8f : 1.0f);
 
-        const bool selected = chosenNote == naturalSemitones[i];
-        g.setColour(selected ? juce::Colour(0xffd6b6ff).withAlpha(0.88f)
-                             : juce::Colour(0xffe1d3ff).withAlpha(0.22f));
-        g.drawLine(key.getX() + 2.0f, key.getY() + 1.2f,
-                   key.getRight() - 2.0f, key.getY() + 1.2f, selected ? 2.1f : 1.1f);
-        g.setColour(juce::Colour(0xffb48aff).withAlpha(selected ? 0.28f : (i % 2 == 0 ? 0.15f : 0.075f)));
-        g.fillRect(key.reduced(2.0f, 0.0f));
-        if (hasLivePitch && detectedNote == naturalSemitones[i])
+        if (isTarget)
         {
-            g.setColour(cyan.withAlpha(0.18f));
-            g.fillRect(key.reduced(3.0f, 0.0f));
-            g.setColour(cyan.withAlpha(0.92f));
-            g.drawRect(key, 1.7f);
+            g.setColour(cyan.withAlpha(0.13f + 0.18f * confidence));
+            g.fillRect(x + 1.5f, (float)keyTop + 1.5f, laneW - 3.0f, (float)keyH - 3.0f);
+            g.setColour(cyan.withAlpha(0.9f));
+            g.drawRect(x + 1.0f, (float)keyTop + 1.0f, laneW - 2.0f, (float)keyH - 2.0f, 1.2f);
         }
     }
 
-    // Authentic-looking black-key overlays are positioned using the chromatic lane centers,
-    // not the white-key boundaries. This lines them up with C#, D#, F#, G# and A# labels.
-    static const int blackSemitones[] = { 1, 3, 6, 8, 10 };
-    const float blackW = semitoneW * 1.08f;
-    const float blackH = (float)keyH * 0.59f;
-    const float keyRadius = juce::jmin(10.0f, blackW * 0.12f);
-    for (int i = 0; i < 5; ++i)
+    // Black keys are distinct raised caps over the corresponding chromatic lanes.
+    // They are narrower than their note lanes and have the original rounded lower corners.
+    static const int blackNotes[] = { 1, 3, 6, 8, 10 };
+    const float blackW = laneW * 0.92f;
+    const float blackH = (float)keyH * 0.60f;
+    const float corner = juce::jmin(10.5f, blackW * 0.17f);
+    for (int note : blackNotes)
     {
-        const int semitone = blackSemitones[i];
-        const float center = (float)area.getX() + ((float)semitone + 0.5f) * semitoneW;
+        const float center = (float)area.getX() + ((float)note + 0.5f) * laneW;
         const float x = center - blackW * 0.5f;
         const float y = (float)keyTop;
-
         juce::Path shadow;
-        shadow.addRoundedRectangle(x - 2.0f, y + 3.0f, blackW + 4.0f, blackH + 4.0f, keyRadius + 2.0f);
-        g.setColour(juce::Colour(0xff020203).withAlpha(0.85f));
+        shadow.addRoundedRectangle(x - 1.7f, y + 2.2f, blackW + 3.4f, blackH + 3.2f, corner + 1.5f);
+        g.setColour(juce::Colour(0xff020203).withAlpha(0.82f));
         g.fillPath(shadow);
 
         juce::Path key;
         key.startNewSubPath(x, y);
         key.lineTo(x + blackW, y);
-        key.lineTo(x + blackW, y + blackH - keyRadius);
-        key.quadraticTo(x + blackW, y + blackH, x + blackW - keyRadius, y + blackH);
-        key.lineTo(x + keyRadius, y + blackH);
-        key.quadraticTo(x, y + blackH, x, y + blackH - keyRadius);
+        key.lineTo(x + blackW, y + blackH - corner);
+        key.quadraticTo(x + blackW, y + blackH, x + blackW - corner, y + blackH);
+        key.lineTo(x + corner, y + blackH);
+        key.quadraticTo(x, y + blackH, x, y + blackH - corner);
         key.closeSubPath();
 
-        juce::ColourGradient dark(juce::Colour(0xff303035), x, y,
-                                  juce::Colour(0xff080809), x + blackW, y + blackH, false);
-        dark.addColour(0.45, juce::Colour(0xff1c1c20));
-        g.setGradientFill(dark);
+        juce::ColourGradient black(juce::Colour(0xff302f35), x, y,
+                                   juce::Colour(0xff09090b), x + blackW, y + blackH, false);
+        black.addColour(0.50, juce::Colour(0xff1b1b20));
+        g.setGradientFill(black);
         g.fillPath(key);
-        const bool liveBlackKey = hasLivePitch && detectedNote == semitone;
-        g.setColour(liveBlackKey ? cyan : (chosenNote == semitone ? juce::Colour(0xffd9b6ff) : juce::Colour(0xff48464f)));
-        g.strokePath(key, juce::PathStrokeType((liveBlackKey || chosenNote == semitone) ? 1.8f : 1.0f));
-        g.setColour(juce::Colour(0xff8a8592).withAlpha(0.30f));
-        g.drawLine(x + 2.0f, y + 2.0f, x + blackW - 2.0f, y + 2.0f, 1.0f);
+        const bool isRoot = note == chosenRoot;
+        const bool isLiveInput = note == liveInputPc;
+        const bool isLiveTarget = note == liveTargetPc;
+        g.setColour(isLiveInput || isLiveTarget ? cyan.withAlpha(0.95f)
+                     : (isRoot ? juce::Colour(0xffd9b6ff) : juce::Colour(0xff48464f)));
+        g.strokePath(key, juce::PathStrokeType((isLiveInput || isLiveTarget || isRoot) ? 1.65f : 1.0f));
+
+        juce::Path bevel;
+        bevel.startNewSubPath(x + 2.0f, y + 2.0f);
+        bevel.lineTo(x + 2.0f, y + blackH - corner);
+        bevel.quadraticTo(x + 2.0f, y + blackH - 2.0f, x + corner, y + blackH - 2.0f);
+        g.setColour(juce::Colour(0xff898390).withAlpha(0.30f));
+        g.strokePath(bevel, juce::PathStrokeType(0.9f));
     }
 }
+
 void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
 {
     const float sx=getWidth()/1366.0f, sy=getHeight()/1080.0f;
@@ -1225,6 +1270,14 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
                                            518.0f, 348.0f,
                                            speedTint.withAlpha(0.0f), 463.0f, 367.0f, true));
     g.fillEllipse(370.0f, 270.0f, 201.0f, 190.0f);
+    const float plasmaPulse = 0.5f + 0.5f * std::sin(orbRotationRadians * 1.7f);
+    const juce::Colour pulseColour = cyan.interpolatedWith(pink, 0.5f + 0.5f * std::sin(orbRotationRadians * 0.63f));
+    g.setGradientFill(juce::ColourGradient(pulseColour.withAlpha(0.025f + 0.075f * plasmaPulse
+                                                                    + 0.055f * inputActivity),
+                                           468.0f + 9.0f * std::sin(orbRotationRadians),
+                                           357.0f + 7.0f * std::cos(orbRotationRadians * 0.81f),
+                                           pulseColour.withAlpha(0.0f), 470.0f, 365.0f, true));
+    g.fillEllipse(370.0f, 270.0f, 201.0f, 190.0f);
     g.restoreState();
 
     // Live pitch-reactive plasma. The cached artwork remains static and cheap to
@@ -1260,6 +1313,21 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
         g.strokePath(clippedLiveFilament, juce::PathStrokeType(1.0f + 1.3f * correctionStrength,
                                                                juce::PathStrokeType::curved,
                                                                juce::PathStrokeType::rounded));
+
+        juce::Path secondaryFilament;
+        secondaryFilament.startNewSubPath(405.0f, 325.0f + 5.0f * std::sin(filamentPhase + 0.7f));
+        secondaryFilament.cubicTo(428.0f + 6.0f * std::sin(filamentPhase + 1.8f),
+                                  306.0f + 8.0f * std::cos(filamentPhase),
+                                  470.0f + 8.0f * std::sin(filamentPhase + 2.3f),
+                                  415.0f + 6.0f * std::cos(filamentPhase + 1.0f),
+                                  523.0f, 395.0f + 8.0f * std::sin(filamentPhase + 0.4f));
+        g.setColour(pink.interpolatedWith(cyan, 0.5f + 0.5f * std::sin(filamentPhase))
+                        .withAlpha(0.06f + 0.15f * lockGlow));
+        g.strokePath(secondaryFilament, juce::PathStrokeType(5.5f, juce::PathStrokeType::curved,
+                                                              juce::PathStrokeType::rounded));
+        g.setColour(juce::Colour(0xffffe7fa).withAlpha(0.08f + 0.18f * lockGlow));
+        g.strokePath(secondaryFilament, juce::PathStrokeType(1.0f, juce::PathStrokeType::curved,
+                                                              juce::PathStrokeType::rounded));
 
         for (int i = 0; i < 42; ++i)
         {
@@ -1827,18 +1895,12 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
         const float keyboardX = x - 165.0f;
         const float keyboardW = 1212.0f - 165.0f;
         const float semitoneW = keyboardW / 12.0f;
-        int note = 0;
-        if (y < 840.0f)
-        {
-            note = (int)(keyboardX / semitoneW);
-        }
-        else
+        int note = juce::jlimit(0, 11, (int)(keyboardX / semitoneW));
+        if (y >= 840.0f)
         {
             const int blackNotes[] = { 1, 3, 6, 8, 10 };
-            const float blackW = semitoneW * 1.08f;
-            const float keyTop = 840.0f;
-            const float blackBottom = keyTop + (1075.0f - keyTop) * 0.59f;
-            bool hitBlack = false;
+            const float blackW = semitoneW * 0.92f;
+            const float blackBottom = 840.0f + (1075.0f - 840.0f) * 0.60f;
             if (y < blackBottom)
             {
                 for (const int blackNote : blackNotes)
@@ -1847,17 +1909,9 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
                     if (keyboardX >= centre - blackW * 0.5f && keyboardX <= centre + blackW * 0.5f)
                     {
                         note = blackNote;
-                        hitBlack = true;
                         break;
                     }
                 }
-            }
-            if (! hitBlack)
-            {
-                const float naturalWidth = keyboardW / 7.0f;
-                const int naturalKey = juce::jlimit(0, 6, (int)(keyboardX / naturalWidth));
-                const int naturalNotes[] = { 0, 2, 4, 5, 7, 9, 11 };
-                note = naturalNotes[naturalKey];
             }
         }
         setRootNote(juce::jlimit(0, 11, note));
