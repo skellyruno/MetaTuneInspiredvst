@@ -800,6 +800,7 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
 
     speedAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor.parameters,"speed",speed);
     amountAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor.parameters,"amount",amount);
+    sustainAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor.parameters,"sustain",sustain);
     auto beginUndoableEdit = [this]() { undoState = processor.parameters.copyState(); hasUndoState = true; hasRedoState = false; };
     auto finishUndoableEdit = [this]() { redoState = processor.parameters.copyState(); hasRedoState = hasUndoState; };
     speed.onDragStart = beginUndoableEdit; speed.onDragEnd = finishUndoableEdit;
@@ -817,6 +818,12 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     lowLatency.onClick = [this]() { repaint(); };
     stabilizer.onClick = [this]() { repaint(); };
     selectedNoteIndex = juce::jlimit(0, 11, root.getSelectedItemIndex() < 0 ? 4 : root.getSelectedItemIndex());
+    if (auto* rawWidth = processor.parameters.getRawParameterValue("doublerWidth"))
+        doublerWidth = juce::jlimit(0.0f, 1.0f, rawWidth->load(std::memory_order_relaxed) / 100.0f);
+    if (auto* rawMix = processor.parameters.getRawParameterValue("doublerMix"))
+        doublerMix = juce::jlimit(0.0f, 1.0f, rawMix->load(std::memory_order_relaxed) / 100.0f);
+    if (auto* rawBypass = processor.parameters.getRawParameterValue("globalBypass"))
+        globalBypass = rawBypass->load(std::memory_order_relaxed) > 0.5f;
     if (auto* stabilizerTime = processor.parameters.getRawParameterValue("stabilizerTime"))
         selectedCorrectionTime = juce::jlimit(0, 3, (int) std::lround(stabilizerTime->load()));
     lastNonChromaticScaleMode = scale.getSelectedItemIndex() == 2 ? 2 : 1;
@@ -1220,6 +1227,56 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.fillEllipse(370.0f, 270.0f, 201.0f, 190.0f);
     g.restoreState();
 
+    // Live pitch-reactive plasma. The cached artwork remains static and cheap to
+    // draw; only these few filaments/particles respond to detected pitch confidence
+    // and the direction/strength of the current correction.
+    const float correctionCentsLive = processor.getCorrectionCents();
+    const float correctionStrength = juce::jlimit(0.0f, 1.0f, std::abs(correctionCentsLive) / 55.0f);
+    const float lockGlow = pitchLock * (0.10f + 0.28f * correctionStrength)
+                         * (0.25f + 0.75f * inputActivity);
+    const juce::Colour correctionTint = correctionCentsLive >= 0.0f
+        ? juce::Colour(0xffff78dc) : juce::Colour(0xff62ddfa);
+
+    if (pitchLock > 0.05f && inputActivity > 0.015f)
+    {
+        juce::Path liveFilament;
+        const float filamentPhase = orbRotationRadians * 0.42f
+                                  + correctionCentsLive * 0.0018f;
+        liveFilament.startNewSubPath(397.0f, 388.0f);
+        liveFilament.cubicTo(414.0f + 10.0f * std::sin(filamentPhase),
+                             369.0f + 7.0f * std::cos(filamentPhase),
+                             447.0f + 8.0f * std::sin(filamentPhase + 1.4f),
+                             331.0f + 7.0f * std::cos(filamentPhase + 1.4f),
+                             532.0f, 318.0f + 9.0f * std::sin(filamentPhase + 2.1f));
+        juce::Path clippedLiveFilament;
+        clippedLiveFilament.addPath(liveFilament);
+        g.saveState();
+        g.reduceClipRegion(coreClip);
+        g.setColour(correctionTint.withAlpha(0.07f + 0.20f * lockGlow));
+        g.strokePath(clippedLiveFilament, juce::PathStrokeType(9.0f + 5.0f * correctionStrength,
+                                                               juce::PathStrokeType::curved,
+                                                               juce::PathStrokeType::rounded));
+        g.setColour(correctionTint.withAlpha(0.12f + 0.50f * lockGlow));
+        g.strokePath(clippedLiveFilament, juce::PathStrokeType(1.0f + 1.3f * correctionStrength,
+                                                               juce::PathStrokeType::curved,
+                                                               juce::PathStrokeType::rounded));
+
+        for (int i = 0; i < 42; ++i)
+        {
+            const float a = orbRotationRadians * 0.58f + (float)i * 2.39996323f;
+            const float jitter = (float)((i * 29 + 7) % 17) / 16.0f;
+            const float r = 48.0f + jitter * 34.0f;
+            const float px = 470.0f + std::cos(a) * r;
+            const float py = 365.0f + std::sin(a) * r * 0.91f;
+            const float size = (i % 7 == 0) ? 2.0f : 1.0f;
+            const auto particleColour = juce::Colour(0xff5ee7fa).interpolatedWith(
+                juce::Colour(0xffff82df), (std::sin(a) + 1.0f) * 0.5f);
+            g.setColour(particleColour.withAlpha(0.05f + 0.20f * pitchLock * (0.45f + 0.55f * jitter)));
+            g.fillEllipse(px, py, size, size);
+        }
+        g.restoreState();
+    }
+
     // Keep the lightning logo fixed while the plasma texture moves beneath it.
     juce::Path bolt;
     bolt.startNewSubPath(477.0f, 326.0f);
@@ -1486,8 +1543,23 @@ void MetaTuneInspiredAudioProcessorEditor::openHeaderMenu()
             safeThis->setRootNote(4);
             safeThis->majorHold = false;
             safeThis->minorHold = false;
+            safeThis->toneVolume = 0.65f;
+            safeThis->stabilizer.setToggleState(true, juce::sendNotificationSync);
+            safeThis->lowLatency.setToggleState(true, juce::sendNotificationSync);
             safeThis->selectedCorrectionTime = 1;
+            if (auto* parameter = safeThis->processor.parameters.getParameter("stabilizerTime"))
+                parameter->setValueNotifyingHost(parameter->convertTo0to1(1.0f));
             safeThis->globalBypass = false;
+            if (auto* parameter = safeThis->processor.parameters.getParameter("pitchReference"))
+                parameter->setValueNotifyingHost(parameter->convertTo0to1(440.0f));
+            if (auto* parameter = safeThis->processor.parameters.getParameter("globalBypass"))
+                parameter->setValueNotifyingHost(parameter->convertTo0to1(0.0f));
+            safeThis->doublerWidth = 0.46f;
+            safeThis->doublerMix = 0.49f;
+            if (auto* parameter = safeThis->processor.parameters.getParameter("doublerWidth"))
+                parameter->setValueNotifyingHost(parameter->convertTo0to1(46.0f));
+            if (auto* parameter = safeThis->processor.parameters.getParameter("doublerMix"))
+                parameter->setValueNotifyingHost(parameter->convertTo0to1(49.0f));
             safeThis->showHeatMaps = true;
             safeThis->showDetectedNotes = true;
             safeThis->pitchReferenceHz = 440.0f;
@@ -1585,6 +1657,10 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDrag(const juce::MouseEvent& eve
             doublerDragStartWidth + (designX - orbDragStartX) / 100.0f);
         doublerMix = juce::jlimit(0.0f, 1.0f,
             doublerDragStartMix + (orbDragStartY - designY) / 90.0f);
+        if (auto* parameter = processor.parameters.getParameter("doublerWidth"))
+            parameter->setValueNotifyingHost(parameter->convertTo0to1(doublerWidth * 100.0f));
+        if (auto* parameter = processor.parameters.getParameter("doublerMix"))
+            parameter->setValueNotifyingHost(parameter->convertTo0to1(doublerMix * 100.0f));
         repaint();
         return;
     }
@@ -1699,6 +1775,9 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
     const float dotY = 620.0f - doublerMix * 90.0f;
     if (std::abs(x - dotX) <= 23.0f && std::abs(y - dotY) <= 23.0f)
     {
+        undoState = processor.parameters.copyState();
+        hasUndoState = true;
+        hasRedoState = false;
         orbDragMode = 3;
         orbDragStartX = x;
         orbDragStartY = y;
@@ -1788,7 +1867,14 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
     // Heatmaps, detected-note display, bypass, and the pitch-reference slider are real hit targets.
     if (x >= 1212.0f && y >= 734.0f && y < 790.0f) { showHeatMaps = !showHeatMaps; repaint(); return; }
     if (x >= 1212.0f && y >= 790.0f && y < 865.0f) { showDetectedNotes = !showDetectedNotes; repaint(); return; }
-    if (x >= 1212.0f && y >= 865.0f && y < 940.0f) { globalBypass = !globalBypass; repaint(); return; }
+    if (x >= 1212.0f && y >= 865.0f && y < 940.0f)
+    {
+        globalBypass = !globalBypass;
+        if (auto* parameter = processor.parameters.getParameter("globalBypass"))
+            parameter->setValueNotifyingHost(parameter->convertTo0to1(globalBypass ? 1.0f : 0.0f));
+        repaint();
+        return;
+    }
     if (x >= 1212.0f && y >= 940.0f && y < 1045.0f)
     {
         const float t = juce::jlimit(0.0f, 1.0f, (x - 1218.0f) / 140.0f);
@@ -1898,6 +1984,12 @@ void MetaTuneInspiredAudioProcessorEditor::timerCallback()
     }
 
     pitchReferenceHz = processor.getPitchReferenceHz();
+    if (auto* rawWidth = processor.parameters.getRawParameterValue("doublerWidth"))
+        doublerWidth = juce::jlimit(0.0f, 1.0f, rawWidth->load(std::memory_order_relaxed) / 100.0f);
+    if (auto* rawMix = processor.parameters.getRawParameterValue("doublerMix"))
+        doublerMix = juce::jlimit(0.0f, 1.0f, rawMix->load(std::memory_order_relaxed) / 100.0f);
+    if (auto* rawBypass = processor.parameters.getRawParameterValue("globalBypass"))
+        globalBypass = rawBypass->load(std::memory_order_relaxed) > 0.5f;
     if (auto* stabilizerTime = processor.parameters.getRawParameterValue("stabilizerTime"))
         selectedCorrectionTime = juce::jlimit(0, 3, (int) std::lround(stabilizerTime->load()));
     const float hz = processor.getDetectedHz();

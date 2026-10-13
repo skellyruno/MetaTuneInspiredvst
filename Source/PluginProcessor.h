@@ -45,17 +45,20 @@ public:
         return 440.0f;
     }
 
-    // Shared mapping for the UI readout and future correction-time engine.
+    // Shared mapping for the UI readout and the active correction-time engine.
     static float speedControlToMilliseconds(float controlValue) noexcept;
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameters();
     void updatePitchEstimate(const juce::AudioBuffer<float>& buffer);
     void estimatePitchFromHistory() noexcept;
+    void processPitchShifter(juce::AudioBuffer<float>& buffer, float semitoneShift) noexcept;
+    void processDoubler(juce::AudioBuffer<float>& buffer) noexcept;
 
     static constexpr int pitchHistorySize = 8192;
+    static constexpr int pitchShiftBufferSize = 8192;
     int shortAnalysisDecimation = 1;
-    int shortAnalysisWindowSamples = 1024;
+    int shortAnalysisWindowSamples = 512;
     int longAnalysisDecimation = 2;
     int longAnalysisWindowSamples = 2048;
     int pitchAnalysisHopSamples = 256;
@@ -69,8 +72,24 @@ private:
     std::atomic<float>* stabilizerParameter = nullptr;
     std::atomic<float>* stabilizerTimeParameter = nullptr;
     std::atomic<float>* pitchReferenceParameter = nullptr;
+    std::atomic<float>* doublerWidthParameter = nullptr;
+    std::atomic<float>* doublerMixParameter = nullptr;
+    std::atomic<float>* globalBypassParameter = nullptr;
 
     std::array<float, pitchHistorySize> pitchHistory {};
+    // Fixed-capacity delay lines are prepared ahead of audio processing; processBlock
+    // performs no heap allocation. Two heads permit overlapping time-domain shifts.
+    std::array<std::array<float, pitchShiftBufferSize>, 2> pitchShiftDelayLine {};
+    std::array<std::array<float, pitchShiftBufferSize>, 2> doublerDelayLine {};
+    int pitchShiftWritePosition = 0;
+    int pitchShiftWindowSamples = 192;
+    int pitchShiftBaseDelaySamples = 24;
+    float pitchShiftPhase = 0.25f;
+    float currentPitchRatio = 1.0f;
+    int doublerWritePosition = 0;
+    float doublerLfoPhase = 0.0f;
+    float smoothedDoublerWidth = 0.46f;
+    float smoothedDoublerMix = 0.49f;
     int pitchHistoryWritePosition = 0;
     int pitchHistorySamples = 0;
     int samplesSincePitchAnalysis = 0;
@@ -82,6 +101,7 @@ private:
     float heldPitchAnchorMidi = 69.0f;
     std::int64_t heldPitchSamples = 0;
     float audioSmoothedTargetMidi = 69.0f;
+    float audioSmoothedCorrectionSemitones = 0.0f;
     bool hasHeldPitchAnchor = false;
     bool hasSmoothedTarget = false;
     int committedScaleNote = 69;
