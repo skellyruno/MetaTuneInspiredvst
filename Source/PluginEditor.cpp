@@ -852,9 +852,26 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
 
     // Startup spin-and-illuminate routine plays once for every newly opened editor.
     orbStartupStartedAtMs = juce::Time::getMillisecondCounter();
+    orbLastTickMs = orbStartupStartedAtMs;
     orbStartupProgress = 0.0f;
     orbStartupGlow = 0.0f;
     orbStartupComplete = false;
+
+    // Seed particles at staggered ages so the sphere feels alive immediately,
+    // without a sudden burst when the first timer callback arrives.
+    for (int i = 0; i < (int)orbParticles.size(); ++i)
+    {
+        auto& particle = orbParticles[(size_t)i];
+        particle.lifetime = 1.20f + (float)(i % 7) * 0.115f;
+        particle.age = ((float)((i * 29) % (int)orbParticles.size())
+                        / (float)orbParticles.size()) * particle.lifetime;
+        particle.angle = (float)i * 2.39996323f;
+        particle.radialSpeed = 43.0f + (float)((i * 17) % 13) * 4.0f;
+        particle.size = 0.7f + (float)((i * 7) % 5) * 0.34f;
+        particle.twist = ((float)((i * 11) % 17) / 16.0f - 0.5f) * 0.50f;
+        particle.seed = (float)i * 1.6180339f;
+        particle.tint = i % 4;
+    }
     startTimerHz(30);
 }
 MetaTuneInspiredAudioProcessorEditor::~MetaTuneInspiredAudioProcessorEditor()
@@ -1052,6 +1069,52 @@ void MetaTuneInspiredAudioProcessorEditor::drawPiano(juce::Graphics& g, juce::Re
     }
 }
 
+float MetaTuneInspiredAudioProcessorEditor::nextOrbRandomUnit() noexcept
+{
+    orbParticleRandomState = orbParticleRandomState * 1664525u + 1013904223u;
+    return (float)((orbParticleRandomState >> 8u) & 0x00ffffffu) / 16777215.0f;
+}
+
+void MetaTuneInspiredAudioProcessorEditor::updateOrbMotion(float deltaSeconds)
+{
+    const float dt = juce::jlimit(0.0f, 0.08f, deltaSeconds);
+    if (dt <= 0.0f)
+        return;
+
+    orbElapsedSeconds += dt;
+    orbBreathPhase += dt * juce::MathConstants<float>::twoPi * 0.34f;
+    orbBreathAmount = 0.5f + 0.5f * std::sin(orbBreathPhase);
+
+    // Three rings use deliberately different, counter-rotating rates.
+    const float twoPi = juce::MathConstants<float>::twoPi;
+    orbRingPhaseA = std::fmod(orbRingPhaseA + dt * 0.62f, twoPi);
+    orbRingPhaseB = std::fmod(orbRingPhaseB - dt * 0.43f + twoPi, twoPi);
+    orbRingPhaseC = std::fmod(orbRingPhaseC + dt * 0.27f, twoPi);
+
+    for (auto& particle : orbParticles)
+        if (particle.age < particle.lifetime)
+            particle.age += dt;
+
+    // Eject a small spark from the globe's equator about 18 times per second.
+    // The fixed-size pool is bounded; recycling never allocates on the UI thread.
+    orbParticleSpawnAccumulator += dt;
+    constexpr float spawnInterval = 0.055f;
+    while (orbParticleSpawnAccumulator >= spawnInterval)
+    {
+        orbParticleSpawnAccumulator -= spawnInterval;
+        auto& particle = orbParticles[(size_t)orbParticleWriteIndex];
+        particle.age = 0.0f;
+        particle.lifetime = 1.05f + nextOrbRandomUnit() * 0.95f;
+        particle.angle = nextOrbRandomUnit() * twoPi;
+        particle.radialSpeed = 43.0f + nextOrbRandomUnit() * 62.0f;
+        particle.size = 0.65f + nextOrbRandomUnit() * 1.85f;
+        particle.twist = (nextOrbRandomUnit() - 0.5f) * 0.66f;
+        particle.seed = nextOrbRandomUnit() * twoPi;
+        particle.tint = (int)(nextOrbRandomUnit() * 4.0f);
+        orbParticleWriteIndex = (orbParticleWriteIndex + 1) % (int)orbParticles.size();
+    }
+}
+
 void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
 {
     const float sx=getWidth()/1366.0f, sy=getHeight()/1080.0f;
@@ -1153,6 +1216,8 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     const float orbScale = (0.86f + 0.14f * amountNorm) * (1.0f + 0.006f * visualizerActivity);
     const float inputActivity = juce::jlimit(0.0f, 1.0f, visualizerActivity);
     const float pitchLock = juce::jlimit(0.0f, 1.0f, processor.getPitchConfidence());
+    const float coreBreathScale = 0.978f + 0.044f * orbBreathAmount;
+    const float flowTime = orbElapsedSeconds;
     constexpr float orbCentreX = 470.0f, orbCentreY = 365.0f;
 
     g.saveState();
@@ -1259,6 +1324,8 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     coreClip.addEllipse(370.0f, 270.0f, 201.0f, 190.0f);
     g.saveState();
     g.reduceClipRegion(coreClip);
+    g.addTransform(juce::AffineTransform::scale(coreBreathScale, coreBreathScale,
+                                                 orbCentreX, orbCentreY));
     g.addTransform(juce::AffineTransform::rotation(orbRotationRadians, orbCentreX, orbCentreY));
     g.drawImageAt(innerOrbArtwork, 350, 255);
     g.restoreState();
@@ -1278,6 +1345,55 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
                                            357.0f + 7.0f * std::cos(orbRotationRadians * 0.81f),
                                            pulseColour.withAlpha(0.0f), 470.0f, 365.0f, true));
     g.fillEllipse(370.0f, 270.0f, 201.0f, 190.0f);
+    g.restoreState();
+
+    // Organic plasma drift: broad colour clouds migrate upward through the globe,
+    // while multiple sine-warped filaments bend at different rates. This is separate
+    // from the inner texture rotation, so the material feels fluid rather than rigid.
+    g.saveState();
+    g.reduceClipRegion(coreClip);
+    g.addTransform(juce::AffineTransform::scale(coreBreathScale, coreBreathScale,
+                                                 orbCentreX, orbCentreY));
+    const float cloudCycleA = std::fmod(flowTime * 16.0f, 56.0f);
+    const float cloudCycleB = std::fmod(flowTime * 11.0f + 19.0f, 62.0f);
+    const float cloudX = 8.0f * std::sin(flowTime * 0.73f);
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff32eaff).withAlpha(0.18f + 0.10f * orbBreathAmount),
+                                           410.0f + cloudX, 371.0f - cloudCycleA,
+                                           juce::Colour(0xff32eaff).withAlpha(0.0f),
+                                           461.0f + cloudX, 351.0f - cloudCycleA, true));
+    g.fillEllipse(376.0f + cloudX, 305.0f - cloudCycleA, 104.0f, 112.0f);
+    g.setGradientFill(juce::ColourGradient(juce::Colour(0xffff73de).withAlpha(0.15f + 0.09f * (1.0f - orbBreathAmount)),
+                                           524.0f - 7.0f * std::sin(flowTime * 0.61f), 338.0f - cloudCycleB,
+                                           juce::Colour(0xffff73de).withAlpha(0.0f),
+                                           485.0f, 361.0f - cloudCycleB, true));
+    g.fillEllipse(471.0f - 7.0f * std::sin(flowTime * 0.61f), 286.0f - cloudCycleB,
+                  94.0f, 124.0f);
+
+    for (int stream = 0; stream < 4; ++stream)
+    {
+        const float phase = flowTime * (0.72f + 0.13f * (float)stream)
+                          + (float)stream * 1.73f + orbRotationRadians * 0.17f;
+        const float startX = 390.0f + (float)stream * 12.0f + 8.0f * std::sin(phase);
+        const float startY = 401.0f - std::fmod(flowTime * (8.0f + 1.9f * (float)stream)
+                                                + (float)stream * 23.0f, 54.0f);
+        juce::Path streamPath;
+        streamPath.startNewSubPath(startX, startY);
+        streamPath.cubicTo(405.0f + 20.0f * std::sin(phase + 0.8f),
+                           382.0f - 13.0f * std::cos(phase * 1.2f),
+                           454.0f + 15.0f * std::sin(phase + 2.0f),
+                           317.0f + 11.0f * std::cos(phase + 1.1f),
+                           528.0f + 8.0f * std::sin(phase + 2.8f),
+                           304.0f + 16.0f * std::sin(phase * 0.81f));
+        const juce::Colour streamColour = (stream % 2 == 0)
+            ? juce::Colour(0xff74e9ff) : juce::Colour(0xffff8ee6);
+        g.setColour(streamColour.withAlpha(0.035f + 0.035f * orbBreathAmount));
+        g.strokePath(streamPath, juce::PathStrokeType(7.5f, juce::PathStrokeType::curved,
+                                                       juce::PathStrokeType::rounded));
+        g.setColour(streamColour.withAlpha(0.12f + 0.09f * orbBreathAmount));
+        g.strokePath(streamPath, juce::PathStrokeType(1.0f + 0.35f * (float)(stream % 2),
+                                                       juce::PathStrokeType::curved,
+                                                       juce::PathStrokeType::rounded));
+    }
     g.restoreState();
 
     // Live pitch-reactive plasma. The cached artwork remains static and cheap to
@@ -1345,6 +1461,83 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
         g.restoreState();
     }
 
+    // Three ultra-thin gyroscope rings with separate tilted planes and opposing
+    // angular velocities. Segment brightness follows the ring's pseudo-depth, giving
+    // a holographic front/back turn without using expensive per-frame image filters.
+    struct RingSpec { float rx, ry, tilt, phase; juce::Colour cool, warm; float width; };
+    const RingSpec ringSpecs[] = {
+        { 102.0f, 26.0f, 0.47f, orbRingPhaseA, juce::Colour(0xffa9e9ff), juce::Colour(0xffd3a4ff), 0.95f },
+        { 114.0f, 37.0f, 0.62f, orbRingPhaseB, juce::Colour(0xff8de4f7), juce::Colour(0xfff3caff), 0.80f },
+        { 94.0f, 51.0f, 0.34f, orbRingPhaseC, juce::Colour(0xffc6afff), juce::Colour(0xff72e2f8), 1.05f }
+    };
+    const auto ringPoint = [coreBreathScale](float t, const RingSpec& ring)
+    {
+        const float localX = ring.rx * coreBreathScale * std::cos(t);
+        const float localY = ring.ry * coreBreathScale * std::sin(t);
+        const float cs = std::cos(ring.phase);
+        const float sn = std::sin(ring.phase);
+        return juce::Point<float>(470.0f + localX * cs - localY * sn,
+                                  365.0f + (localX * sn + localY * cs) * ring.tilt);
+    };
+    constexpr int ringSegments = 88;
+    for (int ringIndex = 0; ringIndex < 3; ++ringIndex)
+    {
+        const auto& ring = ringSpecs[ringIndex];
+        for (int segment = 0; segment < ringSegments; ++segment)
+        {
+            const float t0 = juce::MathConstants<float>::twoPi * (float)segment / (float)ringSegments;
+            const float t1 = juce::MathConstants<float>::twoPi * (float)(segment + 1) / (float)ringSegments;
+            const auto p0 = ringPoint(t0, ring);
+            const auto p1 = ringPoint(t1, ring);
+            const float depth = 0.5f + 0.5f * std::sin(t0 + (float)ringIndex * 1.3f);
+            const float alpha = 0.09f + 0.36f * depth;
+            const float hue = 0.5f + 0.5f * std::sin(t0 * 1.2f + (float)ringIndex * 1.9f);
+            const auto ringColour = ring.cool.interpolatedWith(ring.warm, hue);
+            if (depth > 0.72f && segment % 3 == 0)
+            {
+                g.setColour(ringColour.withAlpha(0.045f + 0.07f * depth));
+                g.drawLine(p0.x, p0.y, p1.x, p1.y, 3.0f);
+            }
+            g.setColour(ringColour.withAlpha(alpha));
+            g.drawLine(p0.x, p0.y, p1.x, p1.y, ring.width);
+        }
+    }
+
+    // Equatorial micro-sparks launch from the glass core and drift outward into
+    // the dark annulus. Each has its own lifetime, radial velocity, curved drift,
+    // tint and size; opacity ramps in and decays to zero before the particle recycles.
+    for (const auto& particle : orbParticles)
+    {
+        if (particle.age < 0.0f || particle.age >= particle.lifetime)
+            continue;
+        const float life = juce::jlimit(0.0f, 1.0f, particle.age / particle.lifetime);
+        const float angle = particle.angle + particle.twist * particle.age
+                          + 0.075f * std::sin(particle.age * 4.1f + particle.seed);
+        const float radius = 88.0f + particle.radialSpeed * particle.age;
+        const float x = orbCentreX + std::cos(angle) * radius;
+        const float y = orbCentreY + std::sin(angle) * radius * 0.91f;
+        const float fadeIn = juce::jlimit(0.0f, 1.0f, life * 8.0f);
+        const float fadeOut = 1.0f - life;
+        const float twinkle = 0.82f + 0.18f * std::sin(orbElapsedSeconds * 8.0f + particle.seed);
+        const float alpha = std::pow(fadeIn * fadeOut, 0.72f) * twinkle;
+        juce::Colour spark = particle.tint == 0 ? cyan
+                           : (particle.tint == 1 ? pink
+                           : (particle.tint == 2 ? juce::Colour(0xffc4a0ff)
+                                                 : juce::Colour(0xfff6efff)));
+        const float size = particle.size * (0.82f + 0.50f * life);
+        g.setColour(spark.withAlpha(0.075f * alpha));
+        g.fillEllipse(x - size * 2.8f, y - size * 2.8f, size * 5.6f, size * 5.6f);
+        g.setColour(spark.withAlpha(juce::jlimit(0.0f, 0.90f, 0.90f * alpha)));
+        g.fillEllipse(x - size * 0.5f, y - size * 0.5f, size, size);
+        if (life < 0.75f)
+        {
+            const float tailX = x - std::cos(angle) * (2.0f + 5.0f * life);
+            const float tailY = y - std::sin(angle) * (2.0f + 4.0f * life);
+            g.setColour(spark.withAlpha(0.06f + 0.22f * alpha));
+            g.drawLine(tailX, tailY, x, y, 0.7f + 0.4f * alpha);
+        }
+    }
+
     // Keep the lightning logo fixed while the plasma texture moves beneath it.
     juce::Path bolt;
     bolt.startNewSubPath(477.0f, 326.0f);
@@ -1354,9 +1547,9 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     bolt.lineTo(486.0f, 345.0f);
     bolt.lineTo(472.0f, 345.0f);
     bolt.closeSubPath();
-    g.setColour(juce::Colour(0xffc66dff).withAlpha(0.15f));
+    g.setColour(juce::Colour(0xffc66dff).withAlpha(0.18f + 0.10f * orbBreathAmount));
     g.fillPath(bolt, juce::AffineTransform::translation(1.0f, 1.0f));
-    g.setColour(juce::Colour(0xfff0adff).withAlpha(0.98f));
+    g.setColour(juce::Colour(0xffffc6ff).withAlpha(0.92f + 0.08f * orbBreathAmount));
     g.fillPath(bolt);
 
     // One clean luminous inner rim keeps the rotating texture inside the glass lens.
@@ -2019,13 +2212,20 @@ void MetaTuneInspiredAudioProcessorEditor::timerCallback()
         orbStartupGlow = attack * juce::jlimit(0.0f, 1.0f, 0.16f + 1.10f * envelope);
     }
 
+    // Advance all motion by measured timer delta (instead of assuming exactly
+    // 30 Hz), preventing speed jumps when the message thread is briefly busy.
+    const juce::uint32 nowMs = juce::Time::getMillisecondCounter();
+    const float deltaSeconds = (float)(nowMs - orbLastTickMs) * 0.001f;
+    orbLastTickMs = nowMs;
+    updateOrbMotion(deltaSeconds);
+
     // The inner plasma spins quickly on launch, then settles to a rate tied to Speed.
     const float speedNorm = juce::jlimit(0.0f, 1.0f, (float)speed.getValue() / 100.0f);
     const float normalTurnsPerSecond = 0.08f + 2.40f * std::pow(speedNorm, 1.35f);
     const float startupBlend = orbStartupComplete ? 0.0f
         : std::pow(1.0f - orbStartupProgress, 1.25f);
     const float turnsPerSecond = normalTurnsPerSecond + 4.6f * startupBlend;
-    orbRotationRadians += juce::MathConstants<float>::twoPi * turnsPerSecond / 30.0f;
+    orbRotationRadians += juce::MathConstants<float>::twoPi * turnsPerSecond * juce::jlimit(0.0f, 0.08f, deltaSeconds);
     if (orbRotationRadians >= juce::MathConstants<float>::twoPi)
         orbRotationRadians = std::fmod(orbRotationRadians, juce::MathConstants<float>::twoPi);
 

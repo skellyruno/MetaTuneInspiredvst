@@ -58,6 +58,34 @@ private:
     float pitchReferenceHz = 440.0f;
     float orbRotationRadians = 0.0f;
 
+    // Orb motion model: organic core breathing, three gyro rings and a bounded
+    // equatorial particle emitter. All state is advanced on the editor timer.
+    struct OrbParticle
+    {
+        float age = 0.0f;
+        float lifetime = 1.4f;
+        float angle = 0.0f;
+        float radialSpeed = 54.0f;
+        float size = 1.0f;
+        float twist = 0.0f;
+        float seed = 0.0f;
+        int tint = 0;
+    };
+    std::array<OrbParticle, 72> orbParticles {};
+    int orbParticleWriteIndex = 0;
+    juce::uint32 orbLastTickMs = 0;
+    juce::uint32 orbParticleRandomState = 0x9e3779b9u;
+    float orbElapsedSeconds = 0.0f;
+    float orbBreathPhase = 0.0f;
+    float orbBreathAmount = 0.5f;
+    float orbRingPhaseA = 0.0f;
+    float orbRingPhaseB = 2.1f;
+    float orbRingPhaseC = 4.2f;
+    float orbParticleSpawnAccumulator = 0.0f;
+
+    void updateOrbMotion(float deltaSeconds);
+    float nextOrbRandomUnit() noexcept;
+
     // UI-thread history for the rolling input/output note HeatMaps.
     static constexpr int heatmapColumnCount = 100;
     std::array<int, heatmapColumnCount> heatmapInputNotes {};

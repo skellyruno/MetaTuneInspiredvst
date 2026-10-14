@@ -67,7 +67,10 @@ void MetaTuneInspiredAudioProcessor::prepareToPlay(double sr, int maxBlock)
     shortAnalysisWindowSamples = 512 * shortAnalysisDecimation;
     mediumAnalysisWindowSamples = 768 * mediumAnalysisDecimation;
     longAnalysisWindowSamples = 1024 * longAnalysisDecimation;
-    pitchAnalysisHopSamples = juce::jmax(128, juce::roundToInt((float)currentSampleRate * 0.004f));
+    lastAnalysisLowLatencyMode = lowLatencyParameter != nullptr
+        && lowLatencyParameter->load(std::memory_order_relaxed) > 0.5f;
+    pitchAnalysisHopSamples = juce::jmax(64, juce::roundToInt((float)currentSampleRate
+                                      * (lastAnalysisLowLatencyMode ? 0.004f : 0.008f)));
 
     // Fixed low-latency dual-head delay shifter. The delay lines are fixed-size
     // members, cleared here on the non-audio prepare path; no allocations occur
@@ -217,10 +220,19 @@ void MetaTuneInspiredAudioProcessor::estimatePitchFromHistory() noexcept
         mean /= (double) n;
 
         double energy = 0.0;
+        const int taperSamples = juce::jmax(8, n / 10);
         for (int i = 0; i < n; ++i)
         {
             float& sample = frame[(size_t)i];
             sample = (float)((double)sample - mean);
+            float window = 1.0f;
+            if (i < taperSamples)
+                window = 0.5f - 0.5f * std::cos(juce::MathConstants<float>::pi
+                                                * (float)i / (float)taperSamples);
+            else if (i >= n - taperSamples)
+                window = 0.5f - 0.5f * std::cos(juce::MathConstants<float>::pi
+                                                * (float)(n - 1 - i) / (float)taperSamples);
+            sample *= window;
             energy += (double)sample * (double)sample;
         }
         const float frameRms = (float) std::sqrt(energy / (double) n);
@@ -343,6 +355,20 @@ void MetaTuneInspiredAudioProcessor::estimatePitchFromHistory() noexcept
 void MetaTuneInspiredAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
+
+    // The Low Latency switch controls both the preferred detector window and its
+    // update cadence: 4 ms when enabled, 8 ms in the longer-window quality mode.
+    // This reduces repeated YIN work in quality mode while keeping fast response
+    // in the mode explicitly designed for low latency.
+    const bool lowLatencyMode = lowLatencyParameter != nullptr
+        && lowLatencyParameter->load(std::memory_order_relaxed) > 0.5f;
+    if (lowLatencyMode != lastAnalysisLowLatencyMode)
+    {
+        lastAnalysisLowLatencyMode = lowLatencyMode;
+        samplesSincePitchAnalysis = 0;
+    }
+    pitchAnalysisHopSamples = juce::jmax(64, juce::roundToInt((float)currentSampleRate
+                                      * (lowLatencyMode ? 0.004f : 0.008f)));
     updatePitchEstimate(buffer);
 
     const float hz = detectedHz.load(std::memory_order_relaxed);

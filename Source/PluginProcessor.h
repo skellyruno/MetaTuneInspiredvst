@@ -64,6 +64,7 @@ private:
     int longAnalysisDecimation = 2;
     int longAnalysisWindowSamples = 2048;
     int pitchAnalysisHopSamples = 256;
+    bool lastAnalysisLowLatencyMode = true;
     // Cache APVTS atomics once, avoiding repeated parameter lookup on the audio thread.
     std::atomic<float>* speedParameter = nullptr;
     std::atomic<float>* amountParameter = nullptr;
