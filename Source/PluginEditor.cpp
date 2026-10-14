@@ -766,7 +766,7 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     setSize(683, 540);
     setResizable(true, true);
     setResizeLimits(683, 540, 1708, 1350);
-    setTooltip("Orb controls: drag the inner sphere vertically for Speed, drag the outer shell vertically for Amount. Drag the small Doubler dot horizontally for stereo width and vertically for blend.");
+    // JUCE AudioProcessorEditor is not a SettableTooltipClient; individual controls provide tooltips.
     heatmapInputNotes.fill(-1);
     heatmapOutputNotes.fill(-1);
     heatmapConfidence.fill(0.0f);
