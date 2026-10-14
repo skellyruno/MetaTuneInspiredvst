@@ -47,6 +47,8 @@ public:
 
     // Shared mapping for the UI readout and the active correction-time engine.
     static float speedControlToMilliseconds(float controlValue) noexcept;
+    void startTonePreview(int midiNote) noexcept { tonePreviewMidiNote.store(juce::jlimit(0, 127, midiNote), std::memory_order_relaxed); }
+    void stopTonePreview() noexcept { tonePreviewMidiNote.store(-1, std::memory_order_relaxed); }
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameters();
@@ -54,6 +56,7 @@ private:
     void estimatePitchFromHistory() noexcept;
     void processPitchShifter(juce::AudioBuffer<float>& buffer, float semitoneShift) noexcept;
     void processDoubler(juce::AudioBuffer<float>& buffer) noexcept;
+    void processReferenceTone(juce::AudioBuffer<float>& buffer) noexcept;
 
     static constexpr int pitchHistorySize = 8192;
     static constexpr int pitchShiftBufferSize = 8192;
@@ -78,6 +81,8 @@ private:
     std::atomic<float>* doublerWidthParameter = nullptr;
     std::atomic<float>* doublerMixParameter = nullptr;
     std::atomic<float>* globalBypassParameter = nullptr;
+    std::atomic<float>* toneVolumeParameter = nullptr;
+    std::atomic<int> tonePreviewMidiNote { -1 };
 
     std::array<float, pitchHistorySize> pitchHistory {};
     // Fixed-capacity delay lines are prepared ahead of audio processing; processBlock
@@ -94,6 +99,9 @@ private:
     float doublerLfoPhase = 0.0f;
     float smoothedDoublerWidth = 0.46f;
     float smoothedDoublerMix = 0.49f;
+    float referenceTonePhase = 0.0f;
+    float referenceToneAmplitude = 0.0f;
+    float referenceToneFrequencyHz = 440.0f;
     int pitchHistoryWritePosition = 0;
     int pitchHistorySamples = 0;
     // Smooth channel-energy tracking prevents the detector history from switching
@@ -103,6 +111,10 @@ private:
     int samplesSincePitchAnalysis = 0;
     int consecutiveUnvoicedAnalyses = 0;
     int fallbackAnalysisCounter = 0;
+    // Confirm large octave-sized pitch jumps across two consecutive analysis hops.
+    // This rejects one-frame octave slips without delaying ordinary note transitions.
+    float pendingOctaveJumpMidi = 69.0f;
+    int pendingOctaveJumpConfirmations = 0;
 
     std::atomic<float> detectedMidiNote { 64.0f }, detectedHz { 0.0f }, correctionCents { 0.0f };
     std::atomic<float> pitchConfidence { 0.0f }, inputRms { 0.0f }, targetMidiNote { 69.0f };

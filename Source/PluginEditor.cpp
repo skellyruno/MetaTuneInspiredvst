@@ -2292,7 +2292,12 @@ void MetaTuneInspiredAudioProcessorEditor::timerCallback()
 
     // The inner plasma spins quickly on launch, then settles to a rate tied to Speed.
     const float speedNorm = juce::jlimit(0.0f, 1.0f, (float)speed.getValue() / 100.0f);
-    const float normalTurnsPerSecond = 0.08f + 2.40f * std::pow(speedNorm, 1.35f);
+    const float confidenceForMotion = juce::jlimit(0.0f, 1.0f, processor.getPitchConfidence());
+    const float effectiveMs = juce::jlimit(0.0f, 200.0f, processor.getEffectiveRetuneTimeMs());
+    const float effectiveSpeedNorm = 1.0f - effectiveMs / 200.0f;
+    const float motionSpeed = speedNorm * (1.0f - 0.28f * confidenceForMotion)
+                            + effectiveSpeedNorm * 0.28f * confidenceForMotion;
+    const float normalTurnsPerSecond = 0.08f + 2.40f * std::pow(motionSpeed, 1.35f);
     const float startupBlend = orbStartupComplete ? 0.0f
         : std::pow(1.0f - orbStartupProgress, 1.25f);
     const float turnsPerSecond = normalTurnsPerSecond + 4.6f * startupBlend;
