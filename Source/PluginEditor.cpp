@@ -1082,14 +1082,26 @@ void MetaTuneInspiredAudioProcessorEditor::updateOrbMotion(float deltaSeconds)
         return;
 
     orbElapsedSeconds += dt;
-    orbBreathPhase += dt * juce::MathConstants<float>::twoPi * 0.34f;
-    orbBreathAmount = 0.5f + 0.5f * std::sin(orbBreathPhase);
 
-    // Three rings use deliberately different, counter-rotating rates.
+    // Let the orb breathe with its own slow cadence, but respond subtly to real
+    // input energy and pitch lock. Smooth the control signal so consonants do not
+    // make the entire globe flicker; silence still retains the idle animation.
+    const float rmsDrive = juce::jlimit(0.0f, 1.0f, processor.getInputRms() * 10.0f);
+    const float lockDrive = juce::jlimit(0.0f, 1.0f, processor.getPitchConfidence());
+    const float driveTarget = 0.72f * rmsDrive + 0.28f * lockDrive;
+    orbAudioDrive += (driveTarget - orbAudioDrive) * (1.0f - std::exp(-dt * 4.5f));
+    orbBreathPhase += dt * juce::MathConstants<float>::twoPi
+                    * (0.30f + 0.10f * orbAudioDrive);
+    const float organicBreath = 0.5f + 0.5f * std::sin(orbBreathPhase);
+    orbBreathAmount = juce::jlimit(0.0f, 1.0f,
+        0.82f * organicBreath + 0.18f * orbAudioDrive);
+
+    // Three rings use deliberately different, counter-rotating rates. Input
+    // energy adds only a small velocity modulation, preserving the gyroscope feel.
     const float twoPi = juce::MathConstants<float>::twoPi;
-    orbRingPhaseA = std::fmod(orbRingPhaseA + dt * 0.62f, twoPi);
-    orbRingPhaseB = std::fmod(orbRingPhaseB - dt * 0.43f + twoPi, twoPi);
-    orbRingPhaseC = std::fmod(orbRingPhaseC + dt * 0.27f, twoPi);
+    orbRingPhaseA = std::fmod(orbRingPhaseA + dt * (0.58f + 0.16f * orbAudioDrive), twoPi);
+    orbRingPhaseB = std::fmod(orbRingPhaseB - dt * (0.40f + 0.09f * orbAudioDrive) + twoPi, twoPi);
+    orbRingPhaseC = std::fmod(orbRingPhaseC + dt * (0.25f + 0.07f * orbAudioDrive), twoPi);
 
     for (auto& particle : orbParticles)
         if (particle.age < particle.lifetime)
@@ -1098,7 +1110,7 @@ void MetaTuneInspiredAudioProcessorEditor::updateOrbMotion(float deltaSeconds)
     // Eject a small spark from the globe's equator about 18 times per second.
     // The fixed-size pool is bounded; recycling never allocates on the UI thread.
     orbParticleSpawnAccumulator += dt;
-    constexpr float spawnInterval = 0.055f;
+    const float spawnInterval = 0.064f - 0.020f * orbAudioDrive;
     while (orbParticleSpawnAccumulator >= spawnInterval)
     {
         orbParticleSpawnAccumulator -= spawnInterval;
@@ -1106,8 +1118,8 @@ void MetaTuneInspiredAudioProcessorEditor::updateOrbMotion(float deltaSeconds)
         particle.age = 0.0f;
         particle.lifetime = 1.05f + nextOrbRandomUnit() * 0.95f;
         particle.angle = nextOrbRandomUnit() * twoPi;
-        particle.radialSpeed = 43.0f + nextOrbRandomUnit() * 62.0f;
-        particle.size = 0.65f + nextOrbRandomUnit() * 1.85f;
+        particle.radialSpeed = 43.0f + nextOrbRandomUnit() * 62.0f + 18.0f * orbAudioDrive;
+        particle.size = 0.65f + nextOrbRandomUnit() * 1.85f + 0.25f * orbAudioDrive;
         particle.twist = (nextOrbRandomUnit() - 0.5f) * 0.66f;
         particle.seed = nextOrbRandomUnit() * twoPi;
         particle.tint = (int)(nextOrbRandomUnit() * 4.0f);

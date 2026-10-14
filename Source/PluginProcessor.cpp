@@ -94,7 +94,10 @@ void MetaTuneInspiredAudioProcessor::prepareToPlay(double sr, int maxBlock)
     pitchHistory.fill(0.0f);
     pitchHistoryWritePosition = 0;
     pitchHistorySamples = 0;
+    smoothedPitchChannelEnergy = { 0.0, 0.0 };
+    selectedPitchAnalysisChannel = 0;
     samplesSincePitchAnalysis = 0;
+    fallbackAnalysisCounter = 0;
     consecutiveUnvoicedAnalyses = 0;
     detectedHz.store(0.0f, std::memory_order_relaxed);
     detectedMidiNote.store(69.0f, std::memory_order_relaxed);
@@ -146,7 +149,29 @@ void MetaTuneInspiredAudioProcessor::updatePitchEstimate(const juce::AudioBuffer
         channelEnergy[(size_t)channel] = energy;
     }
 
-    const int analysisChannel = channels > 1 && channelEnergy[1] > channelEnergy[0] ? 1 : 0;
+    // Smooth energy across callbacks and add hysteresis before changing channels.
+    // Selecting the loudest channel independently on every small host block can
+    // splice left/right waveforms into one pitch-history buffer, especially with
+    // stereo effects or a moving vocal pan.
+    const double energyAlpha = 1.0 - std::exp(-(double)samples
+        / (juce::jmax(8000.0, currentSampleRate) * 0.045));
+    for (int channel = 0; channel < channels; ++channel)
+        smoothedPitchChannelEnergy[(size_t)channel] +=
+            (channelEnergy[(size_t)channel] - smoothedPitchChannelEnergy[(size_t)channel]) * energyAlpha;
+
+    if (channels > 1)
+    {
+        const int otherChannel = 1 - selectedPitchAnalysisChannel;
+        const double currentEnergy = smoothedPitchChannelEnergy[(size_t)selectedPitchAnalysisChannel];
+        const double otherEnergy = smoothedPitchChannelEnergy[(size_t)otherChannel];
+        // Require a clear 2.5 dB advantage to avoid rapid L/R toggling.
+        if (otherEnergy > currentEnergy * 1.778279410)
+            selectedPitchAnalysisChannel = otherChannel;
+    }
+    else
+        selectedPitchAnalysisChannel = 0;
+
+    const int analysisChannel = selectedPitchAnalysisChannel;
     const auto* analysis = buffer.getReadPointer(analysisChannel);
     for (int i = 0; i < samples; ++i)
     {
@@ -173,7 +198,10 @@ void MetaTuneInspiredAudioProcessor::estimatePitchFromHistory() noexcept
 {
     const bool lowLatency = lowLatencyParameter != nullptr
         && lowLatencyParameter->load(std::memory_order_relaxed) > 0.5f;
-    const int initialWindowNeeded = lowLatency ? shortAnalysisWindowSamples : longAnalysisWindowSamples;
+    // Quality mode may use the medium frame first; requiring the full bass frame here
+    // added an unnecessary ~40 ms of startup silence before any estimate was attempted.
+    const int initialWindowNeeded = lowLatency ? shortAnalysisWindowSamples : mediumAnalysisWindowSamples;
+    ++fallbackAnalysisCounter;
 
     if (pitchHistorySamples < initialWindowNeeded || currentSampleRate < 8000.0)
         return;
@@ -328,12 +356,17 @@ void MetaTuneInspiredAudioProcessor::estimatePitchFromHistory() noexcept
     // Mid frame catches lower-tenor/alto notes without immediately paying the
     // latency of the long bass frame. It is only evaluated if the short frame
     // cannot find a confident fundamental.
-    if (!voiced && pitchHistorySamples >= mediumAnalysisWindowSamples)
+    // Longer fallbacks are deliberately staggered: running all three YIN windows
+    // on every 4 ms hop during silence is expensive and cannot improve the result.
+    // Medium fallback runs every 2nd hop; the bass window runs every 4th hop.
+    if (!voiced && (fallbackAnalysisCounter & 1) == 0
+        && pitchHistorySamples >= mediumAnalysisWindowSamples)
         voiced = analyseWindow(mediumAnalysisWindowSamples, mediumAnalysisDecimation,
                                (float) currentSampleRate / (float) mediumAnalysisDecimation,
                                70.0f, true, estimateHz, confidence);
 
-    if (!voiced && pitchHistorySamples >= longAnalysisWindowSamples)
+    if (!voiced && (fallbackAnalysisCounter & 3) == 0
+        && pitchHistorySamples >= longAnalysisWindowSamples)
         voiced = analyseWindow(longAnalysisWindowSamples, longAnalysisDecimation,
                                (float) currentSampleRate / (float) longAnalysisDecimation,
                                55.0f, false, estimateHz, confidence);

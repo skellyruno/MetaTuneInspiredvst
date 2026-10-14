@@ -78,6 +78,7 @@ private:
     float orbElapsedSeconds = 0.0f;
     float orbBreathPhase = 0.0f;
     float orbBreathAmount = 0.5f;
+    float orbAudioDrive = 0.0f;
     float orbRingPhaseA = 0.0f;
     float orbRingPhaseB = 2.1f;
     float orbRingPhaseC = 4.2f;

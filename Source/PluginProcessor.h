@@ -96,8 +96,13 @@ private:
     float smoothedDoublerMix = 0.49f;
     int pitchHistoryWritePosition = 0;
     int pitchHistorySamples = 0;
+    // Smooth channel-energy tracking prevents the detector history from switching
+    // L/R sources on every callback when a stereo vocal changes level slightly.
+    std::array<double, 2> smoothedPitchChannelEnergy { 0.0, 0.0 };
+    int selectedPitchAnalysisChannel = 0;
     int samplesSincePitchAnalysis = 0;
     int consecutiveUnvoicedAnalyses = 0;
+    int fallbackAnalysisCounter = 0;
 
     std::atomic<float> detectedMidiNote { 64.0f }, detectedHz { 0.0f }, correctionCents { 0.0f };
     std::atomic<float> pitchConfidence { 0.0f }, inputRms { 0.0f }, targetMidiNote { 69.0f };
