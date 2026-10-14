@@ -766,10 +766,13 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     setSize(683, 540);
     setResizable(true, true);
     setResizeLimits(683, 540, 1708, 1350);
+    setTooltip("Orb controls: drag the inner sphere vertically for Speed, drag the outer shell vertically for Amount. Drag the small Doubler dot horizontally for stereo width and vertically for blend.");
     heatmapInputNotes.fill(-1);
     heatmapOutputNotes.fill(-1);
     heatmapConfidence.fill(0.0f);
     pitchReferenceHz = processor.getPitchReferenceHz();
+    if (auto* toneVolumeRaw = processor.parameters.getRawParameterValue("toneVolume"))
+        toneVolume = juce::jlimit(0.0f, 1.0f, toneVolumeRaw->load(std::memory_order_relaxed) / 100.0f);
     speed.setName("Speed"); amount.setName("Amount"); sustain.setName("Sustain");
     speed.setTooltip("Retune Speed: 200 ms (natural) down to -3 ms (hard tune)");
     amount.setTooltip("Correction Amount: 0% to 100%");
@@ -872,11 +875,24 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
         particle.seed = (float)i * 1.6180339f;
         particle.tint = i % 4;
     }
-    startTimerHz(30);
+    // 60 Hz materially improves the startup light sweep, plasma flow and gyro motion.
+    // The dense shell is cached; only the lightweight animated overlays are redrawn.
+    startTimerHz(60);
 }
 MetaTuneInspiredAudioProcessorEditor::~MetaTuneInspiredAudioProcessorEditor()
 {
     stopTimer();
+    // A window can close mid-drag; always close any custom host automation gesture.
+    if (activeGestureParamA != nullptr)
+    {
+        activeGestureParamA->endChangeGesture();
+        activeGestureParamA = nullptr;
+    }
+    if (activeGestureParamB != nullptr)
+    {
+        activeGestureParamB->endChangeGesture();
+        activeGestureParamB = nullptr;
+    }
     speed.setLookAndFeel(nullptr);
     amount.setLookAndFeel(nullptr);
     sustain.setLookAndFeel(nullptr);
@@ -1238,16 +1254,23 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
 
     // Doubler visualizer: two translucent rings shift apart as width increases.
     // Mix controls the cyan-blue blur that the design uses to indicate blend amount.
-    const float doublerOffset = 5.0f + 25.0f * juce::jlimit(0.0f, 1.0f, doublerWidth);
     const float blurStrength = juce::jlimit(0.0f, 1.0f, doublerMix);
+    const float doublerEngagement = juce::jlimit(0.0f, 1.0f, (blurStrength - 0.015f) / 0.20f);
+    const float doublerOffset = (2.0f + 28.0f * juce::jlimit(0.0f, 1.0f, doublerWidth))
+                              * doublerEngagement;
     const juce::Colour doublerBlue(0xff47cfff);
-    for (const float side : { -1.0f, 1.0f })
+    if (doublerEngagement > 0.001f)
     {
-        const float dx = side * doublerOffset;
-        g.setColour(doublerBlue.withAlpha(0.025f + 0.105f * blurStrength));
-        g.drawEllipse(238.0f + dx, 138.0f, 465.0f, 460.0f, 15.0f + blurStrength * 5.0f);
-        g.setColour(doublerBlue.withAlpha(0.035f + 0.13f * blurStrength));
-        g.drawEllipse(241.0f + dx, 141.0f, 459.0f, 454.0f, 2.0f);
+        for (const float side : { -1.0f, 1.0f })
+        {
+            const float dx = side * doublerOffset;
+            // The blend controls blur/brightness; width controls physical separation.
+            g.setColour(doublerBlue.withAlpha((0.018f + 0.115f * blurStrength) * doublerEngagement));
+            g.drawEllipse(238.0f + dx, 138.0f, 465.0f, 460.0f,
+                          12.0f + blurStrength * 8.0f);
+            g.setColour(doublerBlue.withAlpha((0.025f + 0.145f * blurStrength) * doublerEngagement));
+            g.drawEllipse(241.0f + dx, 141.0f, 459.0f, 454.0f, 1.4f + blurStrength * 0.8f);
+        }
     }
 
     // Heavy particle artwork is rasterized once, then reused during repaints.
@@ -1940,6 +1963,8 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDrag(const juce::MouseEvent& eve
     if (orbDragMode == 4)
     {
         toneVolume = juce::jlimit(0.0f, 1.0f, (designX - 10.0f) / 145.0f);
+        if (auto* parameter = processor.parameters.getParameter("toneVolume"))
+            parameter->setValueNotifyingHost(parameter->convertTo0to1(toneVolume * 100.0f));
         repaint();
         return;
     }
@@ -1965,6 +1990,17 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDrag(const juce::MouseEvent& eve
 
 void MetaTuneInspiredAudioProcessorEditor::mouseUp(const juce::MouseEvent&)
 {
+    processor.stopTonePreview();
+    if (activeGestureParamA != nullptr)
+    {
+        activeGestureParamA->endChangeGesture();
+        activeGestureParamA = nullptr;
+    }
+    if (activeGestureParamB != nullptr)
+    {
+        activeGestureParamB->endChangeGesture();
+        activeGestureParamB = nullptr;
+    }
     orbDragMode = 0;
 }
 
@@ -2056,6 +2092,10 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
         orbDragStartY = y;
         doublerDragStartWidth = doublerWidth;
         doublerDragStartMix = doublerMix;
+        activeGestureParamA = processor.parameters.getParameter("doublerWidth");
+        activeGestureParamB = processor.parameters.getParameter("doublerMix");
+        if (activeGestureParamA != nullptr) activeGestureParamA->beginChangeGesture();
+        if (activeGestureParamB != nullptr) activeGestureParamB->beginChangeGesture();
         return;
     }
 
@@ -2063,12 +2103,17 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
     // Drag the small inner globe for Speed; drag the frosted outer shell for Amount.
     const float orbDx = x - 470.0f;
     const float orbDy = y - 365.0f;
-    const float orbRadius = std::sqrt(orbDx * orbDx + orbDy * orbDy);
+    const float drawnOrbRadius = std::sqrt(orbDx * orbDx + orbDy * orbDy);
+    const float amountNormForHitTest = juce::jlimit(0.0f, 1.0f, (float)amount.getValue() / 100.0f);
+    const float orbHitScale = 0.86f + 0.14f * amountNormForHitTest;
+    const float orbRadius = drawnOrbRadius / juce::jmax(0.01f, orbHitScale);
     if (orbRadius <= 101.0f)
     {
         orbDragMode = 1;
         orbDragStartY = y;
         orbDragStartValue = (float)speed.getValue();
+        activeGestureParamA = processor.parameters.getParameter("speed");
+        if (activeGestureParamA != nullptr) activeGestureParamA->beginChangeGesture();
         undoState = processor.parameters.copyState();
         hasUndoState = true;
         hasRedoState = false;
@@ -2079,6 +2124,8 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
         orbDragMode = 2;
         orbDragStartY = y;
         orbDragStartValue = (float)amount.getValue();
+        activeGestureParamA = processor.parameters.getParameter("amount");
+        if (activeGestureParamA != nullptr) activeGestureParamA->beginChangeGesture();
         undoState = processor.parameters.copyState();
         hasUndoState = true;
         hasRedoState = false;
@@ -2120,6 +2167,9 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
             }
         }
         setRootNote(juce::jlimit(0, 11, note));
+        // Audition the clicked semitone while the mouse is held, using the Tone
+        // Volume control and current Pitch Reference. Mouse-up releases smoothly.
+        processor.startTonePreview(60 + juce::jlimit(0, 11, note));
         return;
     }
 
@@ -2140,7 +2190,11 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
         pitchReferenceHz = pitchReferenceMinHz + t * (pitchReferenceMaxHz - pitchReferenceMinHz);
         pitchReferenceHz = (float)(juce::roundToInt(pitchReferenceHz * 10.0f) / 10.0f);
         if (auto* parameter = processor.parameters.getParameter("pitchReference"))
+        {
+            activeGestureParamA = parameter;
+            activeGestureParamA->beginChangeGesture();
             parameter->setValueNotifyingHost(parameter->convertTo0to1(pitchReferenceHz));
+        }
         orbDragMode = 5;
         repaint(); return;
     }
@@ -2164,11 +2218,16 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
         }
     }
 
-    // Tone-volume bar is clickable. This remains a UI control until a tone-volume
-    // parameter is added to the processor; it is not falsely mapped to another parameter.
+    // Tone-volume bar controls the real reference-tone audition level in the processor.
     if (x >= 0.0f && x < 165.0f && y >= 822.0f && y < 860.0f)
     {
         toneVolume = juce::jlimit(0.0f, 1.0f, (x - 10.0f) / 145.0f);
+        if (auto* parameter = processor.parameters.getParameter("toneVolume"))
+        {
+            activeGestureParamA = parameter;
+            activeGestureParamA->beginChangeGesture();
+            parameter->setValueNotifyingHost(parameter->convertTo0to1(toneVolume * 100.0f));
+        }
         orbDragMode = 4;
         repaint(); return;
     }

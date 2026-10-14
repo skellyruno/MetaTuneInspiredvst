@@ -58,6 +58,11 @@ private:
     float pitchReferenceHz = 440.0f;
     float orbRotationRadians = 0.0f;
 
+    // Bracket custom-painted macro drags as proper host automation gestures.
+    // Slider-child drags are handled by JUCE's SliderAttachment callbacks.
+    juce::AudioProcessorParameter* activeGestureParamA = nullptr;
+    juce::AudioProcessorParameter* activeGestureParamB = nullptr;
+
     // Orb motion model: organic core breathing, three gyro rings and a bounded
     // equatorial particle emitter. All state is advanced on the editor timer.
     struct OrbParticle
