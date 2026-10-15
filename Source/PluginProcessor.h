@@ -2,6 +2,7 @@
 #include <JuceHeader.h>
 #include <array>
 #include <cstdint>
+#include "RealtimeAutotune.h"
 
 class MetaTuneInspiredAudioProcessor final : public juce::AudioProcessor
 {
@@ -52,23 +53,13 @@ public:
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameters();
-    void updatePitchEstimate(const juce::AudioBuffer<float>& buffer);
-    void estimatePitchFromHistory() noexcept;
-    void processPitchShifter(juce::AudioBuffer<float>& buffer, float semitoneShift) noexcept;
     void processDoubler(juce::AudioBuffer<float>& buffer) noexcept;
     void processReferenceTone(juce::AudioBuffer<float>& buffer) noexcept;
 
-    static constexpr int pitchHistorySize = 8192;
-    static constexpr int pitchShiftBufferSize = 8192;
-    int shortAnalysisDecimation = 1;
-    int shortAnalysisWindowSamples = 512;
-    int mediumAnalysisDecimation = 1;
-    int mediumAnalysisWindowSamples = 768;
-    int longAnalysisDecimation = 2;
-    int longAnalysisWindowSamples = 2048;
-    int pitchAnalysisHopSamples = 256;
-    bool lastAnalysisLowLatencyMode = true;
+    static constexpr int doublerDelayLineSize = 8192; // fixed delay-line capacity used by the Doubler
     // Cache APVTS atomics once, avoiding repeated parameter lookup on the audio thread.
+    // Pulse-aligned TD-PSOLA engine supplied in RealtimeAutotune.h.
+    autotune::RealtimeAutotune realtimeAutotune;
     std::atomic<float>* speedParameter = nullptr;
     std::atomic<float>* amountParameter = nullptr;
     std::atomic<float>* sustainParameter = nullptr;
@@ -84,17 +75,9 @@ private:
     std::atomic<float>* toneVolumeParameter = nullptr;
     std::atomic<int> tonePreviewMidiNote { -1 };
 
-    std::array<float, pitchHistorySize> pitchHistory {};
     // Fixed-capacity delay lines are prepared ahead of audio processing; processBlock
-    // performs no heap allocation. Two heads permit overlapping time-domain shifts.
-    std::array<std::array<float, pitchShiftBufferSize>, 2> pitchShiftDelayLine {};
-    std::array<std::array<float, pitchShiftBufferSize>, 2> doublerDelayLine {};
-    int pitchShiftWritePosition = 0;
-    int pitchShiftWindowSamples = 192;
-    int pitchShiftBaseDelaySamples = 24;
-    float pitchShiftPhase = 0.25f;
-    float currentPitchRatio = 1.0f;
-    float pitchShiftWet = 0.0f;
+    // performs no heap allocation.
+    std::array<std::array<float, doublerDelayLineSize>, 2> doublerDelayLine {};
     int doublerWritePosition = 0;
     float doublerLfoPhase = 0.0f;
     float smoothedDoublerWidth = 0.46f;
@@ -102,34 +85,9 @@ private:
     float referenceTonePhase = 0.0f;
     float referenceToneAmplitude = 0.0f;
     float referenceToneFrequencyHz = 440.0f;
-    int pitchHistoryWritePosition = 0;
-    int pitchHistorySamples = 0;
-    // Smooth channel-energy tracking prevents the detector history from switching
-    // L/R sources on every callback when a stereo vocal changes level slightly.
-    std::array<double, 2> smoothedPitchChannelEnergy { 0.0, 0.0 };
-    int selectedPitchAnalysisChannel = 0;
-    int samplesSincePitchAnalysis = 0;
-    int consecutiveUnvoicedAnalyses = 0;
-    int fallbackAnalysisCounter = 0;
-    // Confirm large octave-sized pitch jumps across two consecutive analysis hops.
-    // This rejects one-frame octave slips without delaying ordinary note transitions.
-    float pendingOctaveJumpMidi = 69.0f;
-    int pendingOctaveJumpConfirmations = 0;
-
     std::atomic<float> detectedMidiNote { 64.0f }, detectedHz { 0.0f }, correctionCents { 0.0f };
     std::atomic<float> pitchConfidence { 0.0f }, inputRms { 0.0f }, targetMidiNote { 69.0f };
     std::atomic<float> smoothedTargetMidiNote { 69.0f }, effectiveRetuneTimeMs { 30.0f };
-    float heldPitchAnchorMidi = 69.0f;
-    std::int64_t heldPitchSamples = 0;
-    float audioSmoothedTargetMidi = 69.0f;
-    float audioSmoothedCorrectionSemitones = 0.0f;
-    bool hasHeldPitchAnchor = false;
-    bool hasSmoothedTarget = false;
-    int committedScaleNote = 69;
-    int pendingScaleNote = 69;
-    int pendingScaleSamples = 0;
-    bool hasCommittedScaleNote = false;
-    bool hasPendingScaleNote = false;
     double currentSampleRate = 44100.0;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MetaTuneInspiredAudioProcessor)
 };
