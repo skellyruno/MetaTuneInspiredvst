@@ -2,6 +2,7 @@
 #include <JuceHeader.h>
 #include <array>
 #include <cstdint>
+#include <vector>
 #include "RealtimeAutotune.h"
 
 class MetaTuneInspiredAudioProcessor final : public juce::AudioProcessor
@@ -53,8 +54,8 @@ public:
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameters();
-    void processDoubler(juce::AudioBuffer<float>& buffer) noexcept;
-    void processReferenceTone(juce::AudioBuffer<float>& buffer) noexcept;
+    void processDoubler(juce::AudioBuffer<float>& buffer, int startSample, int samples) noexcept;
+    void processReferenceTone(juce::AudioBuffer<float>& buffer, int startSample, int samples) noexcept;
 
     static constexpr int doublerDelayLineSize = 8192; // fixed delay-line capacity used by the Doubler
     // Cache APVTS atomics once, avoiding repeated parameter lookup on the audio thread.
@@ -75,8 +76,12 @@ private:
     std::atomic<float>* toneVolumeParameter = nullptr;
     std::atomic<int> tonePreviewMidiNote { -1 };
 
-    // Fixed-capacity delay lines are prepared ahead of audio processing; processBlock
-    // performs no heap allocation.
+    // All delay storage and per-sample latency telemetry are allocated before the
+    // audio callback; processBlock performs no heap allocation.
+    autotune::OutputLatencyCompensator outputLatencyCompensator;
+    autotune::FixedDirectDelay referenceToneDelay; // fixed host-PDC path for plugin-generated piano notes
+    std::vector<float> intrinsicLatencyScratch; // channel-major: two blocks of per-sample delay values
+    int fixedLatencySamples = 0;
     std::array<std::array<float, doublerDelayLineSize>, 2> doublerDelayLine {};
     int doublerWritePosition = 0;
     float doublerLfoPhase = 0.0f;
