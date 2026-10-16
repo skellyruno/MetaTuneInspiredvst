@@ -58,13 +58,22 @@ juce::AudioProcessorValueTreeState::ParameterLayout MetaTuneInspiredAudioProcess
 
 void MetaTuneInspiredAudioProcessor::prepareToPlay(double sr, int maxBlock)
 {
-    juce::ignoreUnused(maxBlock);
     currentSampleRate = juce::jmax(8000.0, sr);
 
-    // Pulse-aligned TD-PSOLA preallocates its working buffers here and tracks 70-1000 Hz.
-    // The host gets a conservative 70 Hz latency budget; actual PSOLA delay still varies by pitch.
+    // Pulse-aligned TD-PSOLA tracks 70-1000 Hz. The same fixed budget is both
+    // reported to the host and enforced by the output compensation stage below.
     realtimeAutotune.prepare(currentSampleRate, 70.0f, 1000.0f);
-    setLatencySamples(juce::jmax(1, juce::roundToInt((float)currentSampleRate * 1.5f / 70.0f)));
+    // Source-period repetition can push the measured normal-mode delay to about
+    // 2.35 periods at the 70 Hz lower tracking limit. Reserve 2.5 periods so the
+    // output compensation stage always has non-negative padding in that corner.
+    fixedLatencySamples = juce::jmax(1, juce::roundToInt((float)currentSampleRate * 2.5f / 70.0f));
+    setLatencySamples(fixedLatencySamples);
+    outputLatencyCompensator.prepare(fixedLatencySamples, currentSampleRate);
+    referenceToneDelay.prepare(fixedLatencySamples);
+    // Channel-major scratch storage is bounded, allocated only in prepareToPlay.
+    // processBlock divides arbitrary host blocks into slices that fit this buffer;
+    // it NEVER silently discards intrinsic-latency telemetry for oversize blocks.
+    intrinsicLatencyScratch.assign(2u * (size_t)juce::jmax(1, juce::jmin(maxBlock, 4096)), 0.0f);
 
     // The Doubler delay lines are fixed-capacity and reset outside the audio callback.
     doublerDelayLine = {};
@@ -168,10 +177,34 @@ void MetaTuneInspiredAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
     }
     inputRms.store((float)std::sqrt(energy / (double)(channels * samples)), std::memory_order_relaxed);
 
-    std::array<float*, 2> pointers { buffer.getWritePointer(0), nullptr };
-    if (channels > 1)
-        pointers[1] = buffer.getWritePointer(1);
-    realtimeAutotune.processChannels(pointers.data(), channels, samples);
+    // Channel-major latency telemetry uses the length of EACH slice as its stride.
+    // Process the ENTIRE chain (tuning, doubler, reference tone and output pad)
+    // in order for each slice, so even hosts sending unexpectedly huge blocks
+    // retain the same fixed-PDC path. No allocations or resize on the audio thread.
+    const int sliceCapacity = (int) (intrinsicLatencyScratch.size() / 2u);
+    if (sliceCapacity <= 0)
+    {
+        // Defensive guard for an invalid/unprepared instance. JUCE normally
+        // guarantees prepareToPlay first. Do not run tuning without a matching
+        // delay timeline if that contract is violated.
+        buffer.clear();
+        return;
+    }
+
+    for (int offset = 0; offset < samples; offset += sliceCapacity)
+    {
+        const int n = juce::jmin(sliceCapacity, samples - offset);
+        std::array<float*, 2> slice { buffer.getWritePointer(0, offset), nullptr };
+        if (channels > 1)
+            slice[1] = buffer.getWritePointer(1, offset);
+
+        realtimeAutotune.processChannels(slice.data(), channels, n, intrinsicLatencyScratch.data());
+        processDoubler(buffer, offset, n);
+        outputLatencyCompensator.processChannels(slice.data(), channels, n, intrinsicLatencyScratch.data());
+        // Reference piano is generated locally, so it needs exactly the host
+        // budget, NOT the voice's pitch-dependent delay-tap compensation.
+        processReferenceTone(buffer, offset, n);
+    }
 
     const float detected = realtimeAutotune.getDetectedMidi();
     const float target = (float)realtimeAutotune.getTargetMidi();
@@ -187,20 +220,17 @@ void MetaTuneInspiredAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
     correctionCents.store(correction * 100.0f, std::memory_order_relaxed);
     effectiveRetuneTimeMs.store(settings.retuneMs, std::memory_order_relaxed);
 
-    // Keep the Doubler and reference-tone controls available independently of tuning.
-    // Both routines handle global bypass and keep their delay/envelope state warm.
-    processDoubler(buffer);
-    processReferenceTone(buffer);
 }
 
-void MetaTuneInspiredAudioProcessor::processReferenceTone(juce::AudioBuffer<float>& buffer) noexcept
+void MetaTuneInspiredAudioProcessor::processReferenceTone(juce::AudioBuffer<float>& buffer, int startSample, int samples) noexcept
 {
     const int channels = juce::jmin(2, buffer.getNumChannels());
-    const int samples = buffer.getNumSamples();
     if (channels <= 0 || samples <= 0)
         return;
 
-    const int note = tonePreviewMidiNote.load(std::memory_order_relaxed);
+    const bool globallyBypassed = globalBypassParameter != nullptr
+        && globalBypassParameter->load(std::memory_order_relaxed) > 0.5f;
+    const int note = globallyBypassed ? -1 : tonePreviewMidiNote.load(std::memory_order_relaxed);
     const float referenceHz = pitchReferenceParameter != nullptr
         ? pitchReferenceParameter->load(std::memory_order_relaxed) : 440.0f;
     const float targetFrequency = note >= 0
@@ -215,9 +245,9 @@ void MetaTuneInspiredAudioProcessor::processReferenceTone(juce::AudioBuffer<floa
     const float attackAlpha = 1.0f - std::exp(-1.0f / (float)(currentSampleRate * 0.004));
     const float releaseAlpha = 1.0f - std::exp(-1.0f / (float)(currentSampleRate * 0.028));
     const float frequencyAlpha = 1.0f - std::exp(-1.0f / (float)(currentSampleRate * 0.008));
-    std::array<float*, 2> outputPointers { buffer.getWritePointer(0), nullptr };
+    std::array<float*, 2> outputPointers { buffer.getWritePointer(0, startSample), nullptr };
     if (channels > 1)
-        outputPointers[1] = buffer.getWritePointer(1);
+        outputPointers[1] = buffer.getWritePointer(1, startSample);
     for (int i = 0; i < samples; ++i)
     {
         if (note >= 0)
@@ -226,12 +256,11 @@ void MetaTuneInspiredAudioProcessor::processReferenceTone(juce::AudioBuffer<floa
         referenceToneAmplitude += (targetAmplitude - referenceToneAmplitude) * alpha;
         if (referenceToneAmplitude < 1.0e-6f && targetAmplitude == 0.0f)
             referenceToneAmplitude = 0.0f;
-        if (referenceToneAmplitude > 1.0e-6f)
-        {
-            const float tone = std::sin(referenceTonePhase) * referenceToneAmplitude;
-            for (int channel = 0; channel < channels; ++channel)
-                outputPointers[(size_t)channel][i] += tone;
-        }
+        const float tone = referenceToneAmplitude > 1.0e-6f
+            ? std::sin(referenceTonePhase) * referenceToneAmplitude : 0.0f;
+        const float delayedTone = referenceToneDelay.processSample(tone);
+        for (int channel = 0; channel < channels; ++channel)
+            outputPointers[(size_t)channel][i] += delayedTone;
         referenceTonePhase += juce::MathConstants<float>::twoPi * referenceToneFrequencyHz
                             / (float)currentSampleRate;
         if (referenceTonePhase >= juce::MathConstants<float>::twoPi)
@@ -239,10 +268,9 @@ void MetaTuneInspiredAudioProcessor::processReferenceTone(juce::AudioBuffer<floa
     }
 }
 
-void MetaTuneInspiredAudioProcessor::processDoubler(juce::AudioBuffer<float>& buffer) noexcept
+void MetaTuneInspiredAudioProcessor::processDoubler(juce::AudioBuffer<float>& buffer, int startSample, int samples) noexcept
 {
     const int channels = juce::jmin(2, buffer.getNumChannels());
-    const int samples = buffer.getNumSamples();
     if (channels <= 0 || samples <= 0)
         return;
 
@@ -257,8 +285,8 @@ void MetaTuneInspiredAudioProcessor::processDoubler(juce::AudioBuffer<float>& bu
     const float parameterSmoothing = 1.0f - std::exp(-1.0f / (float)(currentSampleRate * 0.008));
     const float centreDelay = (float)currentSampleRate * 0.014f;
     const float lfoIncrement = juce::MathConstants<float>::twoPi * 0.21f / (float)currentSampleRate;
-    auto* left = buffer.getWritePointer(0);
-    auto* right = channels > 1 ? buffer.getWritePointer(1) : nullptr;
+    auto* left = buffer.getWritePointer(0, startSample);
+    auto* right = channels > 1 ? buffer.getWritePointer(1, startSample) : nullptr;
     auto readDelay = [this](int channel, float delaySamples) noexcept -> float
     {
         float readPosition = (float)doublerWritePosition - delaySamples;
