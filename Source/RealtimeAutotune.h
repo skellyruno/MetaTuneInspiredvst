@@ -366,8 +366,9 @@ public:
         now = 0; nextMark = 0.0; hasLastSource = false; lastDelay = 0.5 * (double) unvoicedPeriod + 4.0; unvoicedDelay = std::round (lastDelay);
     }
 
-    // Current input-to-output delay in samples. Normal geometry is about 1.45 periods;
-    // Low Latency is shorter near unity ratio, but downward shifts require wider grains.
+    // Current input-to-output delay estimate in samples. Normal geometry is nominally
+    // about 1.45 periods, but source-period repetition can add nearly one period on an
+    // upward shift. The processor's output pad covers that bounded excursion.
     double getLatencySamples() const noexcept { return hasLastSource ? lastDelay : unvoicedDelay; }
 
     // Low-latency mode trades some pulse-context for shorter grains and a shorter
@@ -419,10 +420,13 @@ private:
         if (! lowLatencyMode)
             return std::min (maxHalfWidth, period);
 
-        // A grain must overlap the next output hop, including for downward shifts.
-        // 0.60 periods gives 1.20 periods of support at unity pitch ratio; for a
-        // downward shift the width grows only as much as needed to prevent a gap.
-        const float overlapSafeWidth = std::max (0.60f, 0.525f / std::max (0.25f, pitchRatio));
+        // Keep a little overlap without carrying the previous 1.20-period support
+        // into every ratio. At unity, 0.515 periods gives 1.03 periods of grain
+        // support. Downward shifts get 1.10 output periods via 0.55 / pitchRatio;
+        // this wider margin is important for preserving the tested downward tuning.
+        // More aggressive source-search/template reductions were tested separately
+        // and rejected because they regressed corrected-note accuracy.
+        const float overlapSafeWidth = std::max (0.515f, 0.55f / std::max (0.25f, pitchRatio));
         return std::min (maxHalfWidth, period * overlapSafeWidth);
     }
 
@@ -446,22 +450,21 @@ private:
             // little to wherever the waveform best matches the previous grain. That locks successive source
             // grains to the real glottal pulses, so the output pitch is set by the synthesis spacing alone
             // and does not inherit errors or staleness in the pitch estimate.
-            const double reach = (lowLatencyMode ? 0.08 : 0.15) * (double) period;
-            const double half = std::max (4.0, (lowLatencyMode ? 0.16 : 0.2) * (double) period);
-            const double stepTolerance = lowLatencyMode ? 0.1 : kStepTolerance;
-            const double safetyMargin = (lowLatencyMode ? 0.01 : 0.1) * (double) period;
+            const double reach = (lowLatencyMode ? 0.05 : 0.15) * (double) period;
+            const double half = std::max (4.0, (lowLatencyMode ? 0.1 : 0.2) * (double) period);
+            const double safetyMargin = (lowLatencyMode ? 0.005 : 0.1) * (double) period;
             const double desired = centre - ((double) hw + reach + half + 3.0 + safetyMargin);
 
             if (! hasLastSource)
                 sourceCentre = desired;
             else
             {
-                // Whole periods after the previous grain, never beyond `desired` plus a small tolerance (the
-                // delay below reserves that margin, so the search window always has real samples). The
-                // tolerance stops jitter around exactly one period from repeating a grain, which would
-                // add a period of delay for good.
+                // Keep source grains on whole pitch periods. This floor-based phase
+                // progression preserves the tested pitch-shifting behavior; it can
+                // repeat a pulse temporarily on upward shifts, so the host latency
+                // budget must cover the resulting bounded delay excursion.
                 const double predicted = lastSourceCentre
-                                       + std::floor ((desired - lastSourceCentre) / (double) period + stepTolerance) * (double) period;
+                                       + std::floor ((desired - lastSourceCentre) / (double) period + 0.1) * (double) period;
                 const double newest = (double) now - 2.0 - half;            // latest centre whose neighbourhood exists
                 const int lo = (int) std::floor (predicted - reach), hi = (int) std::floor (std::min (predicted + reach, newest));
                 sourceCentre = std::min (predicted, newest);
@@ -517,8 +520,6 @@ private:
             return;
         }
     }
-
-    static constexpr double kStepTolerance = 0.1;
 
     float windowAt (float position) const noexcept
     {
@@ -722,7 +723,12 @@ public:
     // averaging (which cancels polarity-inverted vocals) and keeps bypass stereo-safe.
     // Pitch is tracked from the stronger channel with smoothed energy/hysteresis, while
     // each channel gets its own pulse alignment and output grain stream.
-    void processChannels (float* const* channels, int numChannels, int numSamples) noexcept
+    // Optional per-sample estimate of intrinsic engine delay. When non-null, the caller
+    // must provide at least `numSamples * min(numChannels, 2)` floats in channel-major
+    // layout: channel 0 occupies [0, numSamples), channel 1 [numSamples, 2*numSamples).
+    // The processor can use this telemetry to pad paths to a fixed host-reported latency.
+    void processChannels (float* const* channels, int numChannels, int numSamples,
+                          float* intrinsicLatencySamples = nullptr) noexcept
     {
         if (channels == nullptr || numChannels <= 0 || numSamples <= 0)
             return;
@@ -735,12 +741,19 @@ public:
         if (wetGain == 0.0f && settings.bypass)
         {
             idle = true;
+            if (intrinsicLatencySamples != nullptr)
+                std::fill (intrinsicLatencySamples,
+                           intrinsicLatencySamples + (size_t) numSamples * (size_t) activeChannelCount, 0.0f);
             return;
         }
 
         const int trackedChannels = std::min (numChannels, (int) channelShifters.size());
         if (trackedChannels <= 0)
+        {
+            if (intrinsicLatencySamples != nullptr)
+                std::fill (intrinsicLatencySamples, intrinsicLatencySamples + numSamples, 0.0f);
             return;
+        }
 
         std::array<double, 2> blockEnergy { 0.0, 0.0 };
         for (int c = 0; c < trackedChannels; ++c)
@@ -768,7 +781,12 @@ public:
         {
             const float analysis = channels[analysisChannel] != nullptr ? channels[analysisChannel][i] : 0.0f;
             if (! advanceControl (analysis))
+            {
+                if (intrinsicLatencySamples != nullptr)
+                    for (int c = 0; c < trackedChannels; ++c)
+                        intrinsicLatencySamples[(size_t) c * (size_t) numSamples + (size_t) i] = 0.0f;
                 continue; // do not overwrite channels during full bypass
+            }
 
             std::array<float, 2> dry { 0.0f, 0.0f };
             std::array<float, 2> wet { 0.0f, 0.0f };
@@ -791,6 +809,17 @@ public:
                 else
                     channels[c][i] = wetGain >= 1.0f ? wet[(size_t)c]
                         : dry[(size_t)c] + wetGain * (wet[(size_t)c] - dry[(size_t)c]);
+            }
+
+            if (intrinsicLatencySamples != nullptr)
+            {
+                const double wetFactor = settings.strength > 1.0e-6f ? (double) wetGain : 0.0;
+                for (int c = 0; c < trackedChannels; ++c)
+                {
+                    const double intrinsic = channelShifters[(size_t) c].getLatencySamples() * wetFactor;
+                    intrinsicLatencySamples[(size_t) c * (size_t) numSamples + (size_t) i]
+                        = (float) std::max (0.0, intrinsic);
+                }
             }
         }
     }
@@ -880,16 +909,40 @@ private:
 
     int nearestNote (float note) const noexcept
     {
-        int best = -1; float bestDist = 100.0f;
+        int best = -1;
+        float bestDist = 100.0f;
         const int base = (int) std::floor (note);
+        // Resolve scale-note ties consistently even when the detector estimate
+        // differs by a few cents between analysis modes or at a note transition.
+        // A near-exact tie (within 5 cents) goes to the higher allowed note.
+        constexpr float tieToleranceSemitones = 0.05f;
         for (int n = base - 6; n <= base + 7; ++n)
         {
+            if (! inScale (n))
+                continue;
+
             const float d = std::abs (note - (float) n);
-            if (inScale (n) && d < bestDist) { best = n; bestDist = d; }
+            const bool clearlyCloser = d < bestDist - tieToleranceSemitones;
+            const bool tiedAndHigher = best >= 0
+                && std::abs (d - bestDist) <= tieToleranceSemitones
+                && n > best;
+            if (best < 0 || clearlyCloser || tiedAndHigher)
+            {
+                best = n;
+                bestDist = d;
+            }
         }
-        // Hysteresis: stay on the current note until another is clearly closer.
-        if (targetNote >= 0 && inScale (targetNote) && std::abs (note - (float) targetNote) < bestDist + 0.15f)
-            return targetNote;
+        // Hysteresis: stay on the current note until another is clearly closer,
+        // except when the current note is the lower member of an actual tie and
+        // the deterministic tie rule selects the higher member.
+        if (targetNote >= 0 && inScale (targetNote))
+        {
+            const float currentDistance = std::abs (note - (float) targetNote);
+            const bool lowerNoteLosesTie = best > targetNote
+                && std::abs (currentDistance - bestDist) <= tieToleranceSemitones;
+            if (! lowerNoteLosesTie && currentDistance < bestDist + 0.15f)
+                return targetNote;
+        }
         return best;
     }
 
@@ -992,4 +1045,141 @@ private:
     float detectedMidi = -1.0f, shiftSemitones = 0.0f;
     int targetMidi = -1;
 };
+
+//==============================================================================
+// Pads an audio stream to a fixed host-declared latency while accounting for the
+// pitch-dependent intrinsic delay of the PSOLA engine. Storage is allocated in
+// prepare(); processChannels() is lock-free and allocation-free. Large delay-tap
+// changes are crossfaded to avoid a hard discontinuity, while small changes track
+// smoothly. This keeps the long-term output alignment fixed; note transitions can
+// still contain a short crossfade while the compensation tap moves.
+class OutputLatencyCompensator
+{
+public:
+    void prepare (int fixedLatencySamples, double newSampleRate)
+    {
+        fixedLatency = std::max (0, fixedLatencySamples);
+        const double safeSampleRate = std::max (8000.0, newSampleRate);
+        ringSize = std::max (16, fixedLatency + 16);
+        for (auto& channel : delayLines)
+            channel.assign ((size_t) ringSize, 0.0f);
+        fadeLength = std::max (32, (int) std::lround (safeSampleRate * 0.004)); // 4 ms tap crossfade
+        reset();
+    }
+
+    void reset() noexcept
+    {
+        for (auto& channel : delayLines)
+            std::fill (channel.begin(), channel.end(), 0.0f);
+        writePosition = 0;
+        for (int c = 0; c < (int) currentDelay.size(); ++c)
+        {
+            currentDelay[(size_t)c] = (float) fixedLatency;
+            fadeFrom[(size_t)c] = currentDelay[(size_t)c];
+            fadeTo[(size_t)c] = currentDelay[(size_t)c];
+            fadePosition[(size_t)c] = fadeLength;
+        }
+    }
+
+    int getFixedLatencySamples() const noexcept { return fixedLatency; }
+    float getCurrentPaddingSamples (int channel = 0) const noexcept
+    {
+        return currentDelay[(size_t) std::clamp (channel, 0, (int) currentDelay.size() - 1)];
+    }
+
+    // `intrinsicLatencySamples` is optional. If supplied, it contains channel-major
+    // telemetry: [channel 0: numSamples values][channel 1: numSamples values]. Null
+    // means a direct (zero-intrinsic-latency) path that must receive the full pad.
+    void processChannels (float* const* channels, int numChannels, int numSamples,
+                          const float* intrinsicLatencySamples = nullptr) noexcept
+    {
+        if (channels == nullptr || numChannels <= 0 || numSamples <= 0 || ringSize <= 0)
+            return;
+
+        const int count = std::min (numChannels, (int) delayLines.size());
+        for (int i = 0; i < numSamples; ++i)
+        {
+            for (int c = 0; c < count; ++c)
+            {
+                const float intrinsic = intrinsicLatencySamples != nullptr
+                    ? std::clamp (intrinsicLatencySamples[(size_t) c * (size_t) numSamples + (size_t) i],
+                                  0.0f, (float) fixedLatency)
+                    : 0.0f;
+                const float targetDelay = (float) fixedLatency - intrinsic;
+                const size_t ch = (size_t) c;
+
+                if (fadePosition[ch] < fadeLength)
+                {
+                    // Let the destination follow larger note changes without restarting
+                    // the fade on every detector/grain update.
+                    if (std::abs (targetDelay - fadeTo[ch]) > 2.0f)
+                        fadeTo[ch] += 0.25f * (targetDelay - fadeTo[ch]);
+                }
+                else
+                {
+                    const float delta = targetDelay - currentDelay[ch];
+                    if (std::abs (delta) > 8.0f)
+                    {
+                        fadeFrom[ch] = currentDelay[ch];
+                        fadeTo[ch] = targetDelay;
+                        fadePosition[ch] = 0;
+                    }
+                    else
+                    {
+                        // Small telemetry fluctuations track smoothly instead of
+                        // creating repeated discontinuities at the read head.
+                        currentDelay[ch] += 0.10f * delta;
+                    }
+                }
+            }
+
+            for (int c = 0; c < count; ++c)
+                if (channels[c] != nullptr)
+                    delayLines[(size_t) c][(size_t) writePosition] = channels[c][i];
+
+            for (int c = 0; c < count; ++c)
+            {
+                if (channels[c] == nullptr) continue;
+                const size_t ch = (size_t) c;
+                const bool fading = fadePosition[ch] < fadeLength;
+                const float alpha = fading ? (float) fadePosition[ch] / (float) fadeLength : 1.0f;
+                const float oldTap = fading ? readDelay (c, fadeFrom[ch]) : 0.0f;
+                const float newTap = readDelay (c, fading ? fadeTo[ch] : currentDelay[ch]);
+                channels[c][i] = fading ? oldTap + alpha * (newTap - oldTap) : newTap;
+
+                if (fading)
+                {
+                    ++fadePosition[ch];
+                    if (fadePosition[ch] >= fadeLength)
+                    {
+                        currentDelay[ch] = fadeTo[ch];
+                        fadeFrom[ch] = fadeTo[ch];
+                    }
+                }
+            }
+            writePosition = (writePosition + 1) % ringSize;
+        }
+    }
+
+private:
+    float readDelay (int channel, float delaySamples) const noexcept
+    {
+        const float delay = std::clamp (delaySamples, 0.0f, (float) fixedLatency);
+        float readPosition = (float) writePosition - delay;
+        if (readPosition < 0.0f)
+            readPosition += (float) ringSize;
+        const int i0 = std::clamp ((int) std::floor (readPosition), 0, ringSize - 1);
+        const int i1 = (i0 + 1) % ringSize;
+        const float frac = readPosition - (float) i0;
+        const auto& line = delayLines[(size_t) channel];
+        return line[(size_t) i0] + frac * (line[(size_t) i1] - line[(size_t) i0]);
+    }
+
+    std::array<std::vector<float>, 2> delayLines;
+    int fixedLatency = 0, ringSize = 0, writePosition = 0;
+    int fadeLength = 192;
+    std::array<int, 2> fadePosition { 192, 192 };
+    std::array<float, 2> currentDelay { 0.0f, 0.0f }, fadeFrom { 0.0f, 0.0f }, fadeTo { 0.0f, 0.0f };
+};
+
 } // namespace autotune
