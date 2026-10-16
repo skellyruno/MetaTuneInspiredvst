@@ -755,30 +755,28 @@ public:
             return;
         }
 
-        std::array<double, 2> blockEnergy { 0.0, 0.0 };
-        for (int c = 0; c < trackedChannels; ++c)
-        {
-            if (channels[c] == nullptr) continue;
-            double e = 0.0;
-            for (int i = 0; i < numSamples; ++i)
-                e += (double) channels[c][i] * (double) channels[c][i];
-            blockEnergy[(size_t)c] = e / (double) numSamples;
-            const double a = 1.0 - std::exp (-(double) numSamples / (sampleRate * 0.040));
-            channelEnergy[(size_t)c] += (blockEnergy[(size_t)c] - channelEnergy[(size_t)c]) * a;
-        }
-
-        if (trackedChannels > 1)
-        {
-            const int other = 1 - analysisChannel;
-            // Require a material energy advantage to avoid hopping between L/R on every block.
-            if (channelEnergy[(size_t)other] > channelEnergy[(size_t)analysisChannel] * 1.45)
-                analysisChannel = other;
-        }
-        else
+        // Update smoothed channel energy sample-by-sample, not once per host
+        // block. This makes channel tracking independent of DAW block size and
+        // bounded processor slices. The 40 ms time constant and 1.45x hysteresis
+        // prevent unstable switching between similarly loud stereo channels.
+        const double energyAlpha = 1.0 - std::exp (-1.0 / (sampleRate * 0.040));
+        if (trackedChannels == 1)
             analysisChannel = 0;
 
         for (int i = 0; i < numSamples; ++i)
         {
+            for (int c = 0; c < trackedChannels; ++c)
+            {
+                const double x = channels[c] != nullptr ? (double) channels[c][i] : 0.0;
+                channelEnergy[(size_t) c] += energyAlpha * (x * x - channelEnergy[(size_t) c]);
+            }
+            if (trackedChannels == 2)
+            {
+                const int other = 1 - analysisChannel;
+                if (channelEnergy[(size_t) other] > channelEnergy[(size_t) analysisChannel] * 1.45)
+                    analysisChannel = other;
+            }
+
             const float analysis = channels[analysisChannel] != nullptr ? channels[analysisChannel][i] : 0.0f;
             if (! advanceControl (analysis))
             {
@@ -1044,6 +1042,45 @@ private:
 
     float detectedMidi = -1.0f, shiftSemitones = 0.0f;
     int targetMidi = -1;
+};
+
+//==============================================================================
+// Constant, integer-sample delay for sources generated INSIDE the plugin (e.g.
+// the reference piano tone). Such sources have no intrinsic pitch-shifter delay
+// and cannot use the pitch-dependent compensation tap from the vocal stream.
+// prepare() allocates; processSample() is allocation-free and noexcept.
+class FixedDirectDelay
+{
+public:
+    void prepare (int delaySamples)
+    {
+        delay = std::max (0, delaySamples);
+        ring.assign ((size_t) delay + 1u, 0.0f);
+        write = 0;
+    }
+
+    void reset() noexcept
+    {
+        std::fill (ring.begin(), ring.end(), 0.0f);
+        write = 0;
+    }
+
+    int getLatencySamples() const noexcept { return delay; }
+
+    float processSample (float input) noexcept
+    {
+        if (ring.empty()) return 0.0f;
+        ring[write] = input;
+        const size_t read = (write + 1u) % ring.size();
+        const float output = ring[read];
+        write = read;
+        return output;
+    }
+
+private:
+    std::vector<float> ring;
+    size_t write = 0;
+    int delay = 0;
 };
 
 //==============================================================================
