@@ -43,6 +43,8 @@ struct Settings
                                          false, true, false, true, false, true } }; // degrees from key
     float referenceHz = 440.0f;     // tuning of A4
     float retuneMs = 20.0f;         // 0 = instant ("hard tune"), larger = more natural
+    float glideMs = 0.0f;          // 0 disables dedicated note-switch glide; up to 500 ms
+    float maxCorrectionSemitones = 12.0f; // constrain the largest applied shift
     float strength = 1.0f;          // 0..1 how much of the correction is applied
     float humanize = 0.0f;          // 0..1 tolerance: errors inside humanize*40 cents are left alone
     float vibratoPreserve = 0.7f;   // 0..1 how much natural vibrato survives (1 = all of it)
@@ -50,6 +52,8 @@ struct Settings
                                     // 0 = judge by the slow centre (safe for sung vibrato); 1 = follow every
                                     // movement (best for rapped/spoken vocals; wide vibrato may flip notes)
     float voicingThreshold = 0.85f; // 0..1 detector confidence needed to treat input as pitched
+    float noteConfirmMs = 10.0f;     // persistence of a new target; 0 = immediate
+    float consonantReleaseMs = 8.0f; // turn off stale correction on lost voicing
     float noteStabilizerMs = 300.0f; // 0 disables slow pitch-centre stabilisation
     bool  lowLatency = true;        // shorter detector hop and smaller grains; latency still depends on pitch/shift
     bool  bypass = false;
@@ -87,7 +91,12 @@ class YinDetector
 public:
     void prepare (double sampleRate, float minHz = 70.0f, float maxHz = 1000.0f)
     {
-        decimation   = sampleRate > 60000.0 ? 4 : (sampleRate > 30000.0 ? 2 : 1);
+        // 4:1 FIR decimation cuts YIN's O(lag*window) inner loop roughly
+        // fourfold versus the former 2:1 path at 44.1/48 kHz.
+        decimation   = sampleRate > 30000.0 ? 4 : (sampleRate > 16000.0 ? 2 : 1);
+        // The original 96kHz path already uses 4:1 averaging and is kept
+        // unchanged; FIR is most beneficial when halving lag/window at 44/48k.
+        useFirDecimation = decimation > 1 && sampleRate <= 60000.0;
         analysisRate = sampleRate / decimation;
         maxLag       = (int) std::ceil (analysisRate / minHz);
         minLag       = std::max (2, (int) std::floor (analysisRate / maxHz));
@@ -96,6 +105,20 @@ public:
 
         fullSize = ((size_t) (windowSize + maxLag + 4) * (size_t) decimation) + 8;
         fullHistory.assign (decimation > 1 ? fullSize : 0, 0.0f);
+        // Windowed-sinc anti-alias low-pass for the inexpensive 4:1 analysis path.
+        // The full-rate waveform is retained for phase-accurate lag refinement.
+        constexpr double pi = 3.14159265358979323846;
+        const double cutoff = decimation > 1 ? 0.42 / (double) decimation : 0.5;
+        double norm = 0.0;
+        for (int i = 0; i < (int) decimatorTaps.size(); ++i)
+        {
+            const int k = i - ((int) decimatorTaps.size() - 1) / 2;
+            const double window = 0.5 + 0.5 * std::cos (2.0 * pi * (double) k / ((double) decimatorTaps.size() - 1.0));
+            const double sinc = k == 0 ? 2.0 * cutoff : std::sin (2.0 * pi * cutoff * (double) k) / (pi * (double) k);
+            decimatorTaps[(size_t) i] = (float) (window * sinc);
+            norm += window * sinc;
+        }
+        for (auto& tap : decimatorTaps) tap = (float) (tap / norm);
         history.assign ((size_t) (windowSize + maxLag), 0.0f);
         frame.assign (history.size(), 0.0f);
         difference.assign ((size_t) maxLag + 2, 0.0f);
@@ -109,6 +132,8 @@ public:
         fullWrite = 0;
         writeIndex = decimationCount = samplesSinceAnalysis = 0;
         decimationSum = 0.0f;
+        decimatorHistory.fill (0.0f);
+        decimatorIndex = 0;
         frequency = confidence = 0.0f;
         lastLag = framesSinceGood = 0;
     }
@@ -134,14 +159,27 @@ public:
             fullWrite = fullWrite + 1 == fullSize ? 0 : fullWrite + 1;
         }
 
+        // Anti-aliased detector-only downsampling. The FIR state and coefficient
+        // table are fixed-size and process() remains allocation-free.
         decimationSum += x;
+        if (useFirDecimation)
+        {
+            decimatorHistory[decimatorIndex] = x;
+            decimatorIndex = (decimatorIndex + 1) % (int) decimatorHistory.size();
+        }
         if (++decimationCount < decimation)
             return false;
-
-        history[(size_t) writeIndex] = decimationSum / (float) decimation;
-        writeIndex = (writeIndex + 1) % (int) history.size();
-        decimationSum = 0.0f;
         decimationCount = 0;
+        float decimated = decimationSum / (float) decimation;
+        decimationSum = 0.0f;
+        if (useFirDecimation)
+        {
+            decimated = 0.0f;
+            for (int k = 0; k < (int) decimatorTaps.size(); ++k)
+                decimated += decimatorTaps[(size_t) k] * decimatorHistory[(size_t) ((decimatorIndex + k) % (int) decimatorHistory.size())];
+        }
+        history[(size_t) writeIndex] = decimated;
+        writeIndex = (writeIndex + 1) % (int) history.size();
 
         if (++samplesSinceAnalysis < hopSize)
             return false;
@@ -157,7 +195,12 @@ public:
     {
         return frequency > 0.0f ? (float) (analysisRate * decimation) / frequency : 0.0f;
     }
-    float getHopSeconds() const noexcept { return (float) (hopSize * decimation / (analysisRate * decimation)); }
+    float getHopSeconds() const noexcept { return (float) hopSize / (float) analysisRate; }
+    int getMaxLag() const noexcept { return maxLag; }
+    int getAnalysisWindowSamples() const noexcept { return windowSize; }
+    // Approximate worst-case YIN pairwise differences, not wall-clock CPU time.
+    uint64_t getMaxDifferenceOperationsPerFrame() const noexcept
+    { return (uint64_t) maxLag * (uint64_t) windowSize; }
 
 private:
     void analyse() noexcept
@@ -291,7 +334,9 @@ private:
         constexpr int span = 3;
         const int centre = (int) std::lround (coarseLag);
         const int window = windowSize * decimation;
-        const int newest = (int) fullWrite - 1;
+        // Keep the full-rate refinement aligned with the decimated FIR's
+        // linear-phase group delay during changing-pitch transitions.
+        const int newest = (int) fullWrite - 1 - (useFirDecimation ? 15 : 0);
         const int size = (int) fullSize;
         const auto at = [&] (int back) { int i = (newest - back) % size; return fullHistory[(size_t) (i < 0 ? i + size : i)]; };
 
@@ -331,6 +376,9 @@ private:
     std::vector<float> history, frame, difference, fullHistory;
     size_t fullSize = 0, fullWrite = 0;
     int writeIndex = 0, decimationCount = 0, samplesSinceAnalysis = 0;
+    std::array<float, 31> decimatorTaps {}, decimatorHistory {};
+    int decimatorIndex = 0;
+    bool useFirDecimation = false;
     float decimationSum = 0.0f, frequency = 0.0f, confidence = 0.0f;
     static constexpr bool kDoubleLagRule = false;
     int lastLag = 0, framesSinceGood = 0;                 // continuity memory (analysis-rate lag)
@@ -350,6 +398,7 @@ public:
         buffer.assign (n, 0.0f);
         mask = (int64_t) n - 1;
         unvoicedPeriod = (float) (sampleRate * 0.008);
+        voiceTransitionAlpha = 1.0f - std::exp (-1.0f / (float) (sampleRate * 0.006));
         maxHalfWidth   = (float) (sampleRate * 0.03);
         scores.assign ((size_t) (0.3 * maxHalfWidth) + 8, 0.0f);          // search window: 2 x 0.15 periods
         reference.assign ((size_t) (0.4 * maxHalfWidth) + 16, 0.0f);      // template: 2 x 0.2 periods
@@ -364,6 +413,7 @@ public:
         std::fill (buffer.begin(), buffer.end(), 0.0f);
         for (auto& g : grains) g.active = false;
         now = 0; nextMark = 0.0; hasLastSource = false; lastDelay = 0.5 * (double) unvoicedPeriod + 4.0; unvoicedDelay = std::round (lastDelay);
+        voicedMix = 0.0f;
     }
 
     // Current input-to-output delay estimate in samples. Normal geometry is nominally
@@ -403,13 +453,22 @@ public:
             sum += w * read (g.sourceStart + age);
             weight += w;
         }
+        // Smoothly move between period-synchronous output and an unprocessed
+        // delayed sample, protecting broadband consonants and voiced onsets.
+        // Both taps read the same history, so no heap/host delay is introduced.
+        const float voiceGoal = isVoiced ? 1.0f : 0.0f;
+        voicedMix += (voiceGoal - voicedMix) * voiceTransitionAlpha;
+        if (std::abs (voicedMix - voiceGoal) < 0.00001f) voicedMix = voiceGoal;
+        const float dryUnvoiced = voicedMix < 1.0f ? read ((double) now - unvoicedDelay) : 0.0f;
         ++now;
 
         const float gap = pitchRatio < 1.0f ? std::sqrt (1.0f / pitchRatio) : 1.0f;
         // Normalise by the actual overlap weight. Clamping the denominator to 1.0
         // attenuates short grains because their overlapping Hann windows sum to <1.
         // The tiny floor handles only the no-coverage/numeric-edge case.
-        return (weight > 1.0e-5f ? sum / weight : 0.0f) * gap;
+        const float voicedOutput = (weight > 1.0e-5f ? sum / weight : 0.0f) * gap;
+        return voicedMix >= 1.0f ? voicedOutput
+                                 : voicedMix * voicedOutput + (1.0f - voicedMix) * dryUnvoiced;
     }
 
 private:
@@ -451,7 +510,7 @@ private:
             // grains to the real glottal pulses, so the output pitch is set by the synthesis spacing alone
             // and does not inherit errors or staleness in the pitch estimate.
             const double reach = (lowLatencyMode ? 0.05 : 0.15) * (double) period;
-            const double half = std::max (4.0, (lowLatencyMode ? 0.1 : 0.2) * (double) period);
+            const double half = std::max (4.0, (lowLatencyMode ? 0.09 : 0.2) * (double) period);
             const double safetyMargin = (lowLatencyMode ? 0.005 : 0.1) * (double) period;
             const double desired = centre - ((double) hw + reach + half + 3.0 + safetyMargin);
 
@@ -548,6 +607,7 @@ private:
     std::array<float, 1024> window {};
     double nextMark = 0.0, lastSourceCentre = 0.0, lastDelay = 196.0, unvoicedDelay = 196.0;
     bool hasLastSource = false, isVoiced = false;
+    float voicedMix = 0.0f, voiceTransitionAlpha = 0.005f;
     float period = 350.0f, unvoicedPeriod = 350.0f, maxHalfWidth = 1300.0f, pitchRatio = 1.0f;
 };
 
@@ -675,13 +735,35 @@ public:
     // Apply settings immediately. Only call from the audio thread (or while audio is stopped).
     void setSettings (const Settings& s)
     {
+        // Host automation and restored session state are external inputs. Reject
+        // non-finite floats before they reach log2(), exp(), or MIDI-to-note casts.
+        // Valid settings are left unchanged, preserving existing preset behavior.
         settings = s;
-        mask = scaleMask (s.scale, s.customScale);
-        detector.setThreshold (1.0f - std::clamp (s.voicingThreshold, 0.0f, 1.0f));
-        detector.setAnalysisHopSeconds (s.lowLatency ? 0.0025f : 0.0050f);
-        shifter.setLowLatency (s.lowLatency);
+        const auto sane = [] (float value, float fallback, float lo, float hi) noexcept
+        {
+            return std::clamp (std::isfinite (value) ? value : fallback, lo, hi);
+        };
+        settings.key = ((settings.key % 12) + 12) % 12;
+        if ((int) settings.scale < (int) Scale::Chromatic || (int) settings.scale > (int) Scale::Custom)
+            settings.scale = Scale::Chromatic;
+        settings.referenceHz = sane (settings.referenceHz, 440.0f, 400.0f, 480.0f);
+        settings.retuneMs = sane (settings.retuneMs, 20.0f, 0.0f, 2000.0f);
+        settings.glideMs = sane (settings.glideMs, 0.0f, 0.0f, 500.0f);
+        settings.maxCorrectionSemitones = sane (settings.maxCorrectionSemitones, 12.0f, 0.0f, 12.0f);
+        settings.strength = sane (settings.strength, 1.0f, 0.0f, 1.0f);
+        settings.humanize = sane (settings.humanize, 0.0f, 0.0f, 1.0f);
+        settings.vibratoPreserve = sane (settings.vibratoPreserve, 0.7f, 0.0f, 1.0f);
+        settings.follow = sane (settings.follow, 0.0f, 0.0f, 1.0f);
+        settings.voicingThreshold = sane (settings.voicingThreshold, 0.85f, 0.0f, 1.0f);
+        settings.noteConfirmMs = sane (settings.noteConfirmMs, 10.0f, 0.0f, 100.0f);
+        settings.consonantReleaseMs = sane (settings.consonantReleaseMs, 8.0f, 0.0f, 30.0f);
+        settings.noteStabilizerMs = sane (settings.noteStabilizerMs, 300.0f, 0.0f, 5000.0f);
+        mask = scaleMask (settings.scale, settings.customScale);
+        detector.setThreshold (1.0f - settings.voicingThreshold);
+        detector.setAnalysisHopSeconds (settings.lowLatency ? 0.0025f : 0.0050f);
+        shifter.setLowLatency (settings.lowLatency);
         for (auto& channelShifter : channelShifters)
-            channelShifter.setLowLatency (s.lowLatency);
+            channelShifter.setLowLatency (settings.lowLatency);
         hopSeconds = detector.getHopSeconds();
     }
     const Settings& getSettings() const noexcept { return settings; }
@@ -830,6 +912,15 @@ public:
     bool  isVoiced() const noexcept          { return period > 0.0f; }   // currently pitch-tracking
     // Current input-to-output delay in samples. It varies with pitch, shift ratio and the active mode;
     // for accurate host alignment the processor needs a fixed-delay output stage or a suitable fixed budget.
+    // Host transport-delay budget is fixed until prepareToPlay; note-dependent
+    // intrinsic grain delay is absorbed by OutputLatencyCompensator. This is not
+    // the YIN history duration and should not change every analysis frame.
+    static int recommendedHostLatencySamples (double sr, float minHz = 70.0f) noexcept
+    {
+        return (int) std::ceil (std::max (8000.0, sr) * 2.5 / (double) std::max (30.0f, minHz));
+    }
+    uint64_t getMaxDifferenceOperationsPerFrame() const noexcept
+    { return detector.getMaxDifferenceOperationsPerFrame(); }
     double getLatencySamples() const noexcept
     {
         if (! channelsPathActive)
@@ -888,6 +979,8 @@ private:
     {
         medianCount = 0; hasCenter = false; center = 0.0f; correction = 0.0f;
         targetNote = -1; targetRatio = 1.0f; holdTime = 0.0f; shiftSemitones = 0.0f;
+        pendingNote = -1; pendingNoteSeconds = 0.0f;
+        glideRemainingSeconds = 0.0f; glideShift = 0.0f;
     }
 
     void publishMeters (float detected, int target, float shift) noexcept
@@ -953,9 +1046,19 @@ private:
     {
         const float f = detector.getFrequency();
 
-        if (f <= 0.0f)
+        // Unvoiced/noisy frames should not continue forcing the last note
+        // through a consonant. Release before clearing the note history, so a
+        // one-hop YIN dropout does not create flutter or spuriously reacquire.
+        if (f <= 0.0f || detector.getConfidence() < std::max (0.52f, settings.voicingThreshold - 0.03f))
         {
             holdTime += hopSeconds;
+            if (holdTime >= settings.consonantReleaseMs * 0.001f)
+            {
+                targetRatio = 1.0f;
+                period = 0.0f;
+                pendingNote = -1;
+                pendingNoteSeconds = 0.0f;
+            }
             if (holdTime > holdLimit)
             {
                 resetTracking();
@@ -996,18 +1099,85 @@ private:
         // tracks fast speech-like movement much better (against a reference hard-tune of a real rapped
         // vocal: 87% -> 93% note agreement).
         const float selectPitch = center + std::clamp (settings.follow, 0.0f, 1.0f) * (m - center);
-        targetNote = nearestNote (selectPitch);
+        const int previousTarget = targetNote;
+        const int proposed = nearestNote (selectPitch);
+        // New targets must persist over consecutive YIN hops with adequate
+        // periodicity. A transient pitch spike can therefore be observed but
+        // cannot immediately make the shifter jump to a new scale degree.
+        if (previousTarget >= 0 && proposed != previousTarget)
+        {
+            if (detector.getConfidence() < std::max (0.78f, settings.voicingThreshold)
+                || ! std::isfinite (selectPitch))
+            {
+                pendingNote = -1;
+                pendingNoteSeconds = 0.0f;
+            }
+            else
+            {
+                if (pendingNote != proposed)
+                {
+                    pendingNote = proposed;
+                    pendingNoteSeconds = 0.0f;
+                }
+                pendingNoteSeconds += hopSeconds;
+                const float required = settings.noteConfirmMs * 0.001f
+                    + (std::abs (proposed - previousTarget) >= 11 ? 0.012f : 0.0f);
+                if (pendingNoteSeconds >= required)
+                {
+                    targetNote = proposed;
+                    pendingNote = -1;
+                    pendingNoteSeconds = 0.0f;
+                }
+            }
+        }
+        else
+        {
+            pendingNote = -1;
+            pendingNoteSeconds = 0.0f;
+            if (previousTarget < 0)
+                targetNote = detector.getConfidence() >= std::max (0.75f, settings.voicingThreshold) ? proposed : -1;
+        }
+        if (targetNote < 0) { period = 0.0f; targetRatio = 1.0f; return; }
+        // Glide applies only on real note changes, never on the initial acquisition.
+        // Its separate smoothing prevents short retune times from producing an abrupt
+        // correction jump at a note boundary. An off setting preserves legacy DSP.
+        if (previousTarget >= 0 && targetNote != previousTarget && settings.glideMs > 0.0f)
+        {
+            glideRemainingSeconds = settings.glideMs * 0.001f;
+            glideShift = shiftSemitones;
+        }
         float error = (float) targetNote - center;
 
         const float deadband = std::clamp (settings.humanize, 0.0f, 1.0f) * 0.4f;
         error = std::copysign (std::max (0.0f, std::abs (error) - deadband), error);
 
-        const float desired = error * std::clamp (settings.strength, 0.0f, 1.0f);
+        // While evaluating a possible new note, do NOT pull its audio toward
+        // the previous target (which could be several semitones away). Coast
+        // gently toward unity until the candidate is confirmed or rejected.
+        const float desired = pendingNote >= 0 ? 0.0f
+            : error * std::clamp (settings.strength, 0.0f, 1.0f);
         const float coeff = settings.retuneMs < 0.5f ? 1.0f : 1.0f - std::exp (-hopSeconds * 1000.0f / settings.retuneMs);
         correction += (desired - correction) * coeff;
 
         const float flatten = settings.strength * (1.0f - std::clamp (settings.vibratoPreserve, 0.0f, 1.0f));
-        const float shift = std::clamp (correction - flatten * vibrato, -12.0f, 12.0f);
+        float shift = std::clamp (correction - flatten * vibrato,
+                                  -settings.maxCorrectionSemitones, settings.maxCorrectionSemitones);
+        if (glideRemainingSeconds > 0.0f && settings.glideMs > 0.0f)
+        {
+            // First-order slew over the selected transition duration. Outside a
+            // transition it introduces no extra lag or permanent pitch error.
+            const float alpha = 1.0f - std::exp (-hopSeconds / (settings.glideMs * 0.001f));
+            glideShift += (shift - glideShift) * alpha;
+            glideRemainingSeconds = std::max (0.0f, glideRemainingSeconds - hopSeconds);
+            // Avoid a discontinuity at the nominal end of Glide: exponential
+            // interpolation usually has residual error after one time constant.
+            // Continue the tail until it is effectively at the new correction.
+            if (glideRemainingSeconds <= 0.0f && std::abs (glideShift - shift) > 0.01f)
+                glideRemainingSeconds = hopSeconds;
+            shift = glideShift;
+        }
+        else
+            glideShift = shift;
 
         targetRatio = std::exp2 (shift / 12.0f);
         period = detector.getPeriodInSamples();
@@ -1022,6 +1192,7 @@ private:
     std::array<Settings, 3> slots {};
     std::atomic<int> mailbox { 1 };   // the slot in transit, plus the dirty flag
     int writeSlot = 0, readSlot = 2;  // owned by the writer / audio thread respectively
+    float glideRemainingSeconds = 0.0f, glideShift = 0.0f;
     float wetGain = 1.0f, fadeStep = 0.01f;
     bool idle = false;
 
@@ -1035,7 +1206,8 @@ private:
 
     float hopSeconds = 0.005f, ratioCoeff = 0.01f, holdLimit = 0.02f, holdTime = 0.0f;
     std::array<float, 3> history { { 0, 0, 0 } };
-    int medianCount = 0, targetNote = -1;
+    int medianCount = 0, targetNote = -1, pendingNote = -1;
+    float pendingNoteSeconds = 0.0f;
     bool hasCenter = false;
     float center = 0.0f, correction = 0.0f;
     float ratio = 1.0f, targetRatio = 1.0f, period = 0.0f;
@@ -1109,6 +1281,8 @@ public:
         for (auto& channel : delayLines)
             std::fill (channel.begin(), channel.end(), 0.0f);
         writePosition = 0;
+        overBudgetSamples = 0;
+        maxObservedIntrinsic = 0.0f;
         for (int c = 0; c < (int) currentDelay.size(); ++c)
         {
             currentDelay[(size_t)c] = (float) fixedLatency;
@@ -1119,6 +1293,8 @@ public:
     }
 
     int getFixedLatencySamples() const noexcept { return fixedLatency; }
+    uint64_t getOverBudgetSamples() const noexcept { return overBudgetSamples; }
+    float getMaxObservedIntrinsicSamples() const noexcept { return maxObservedIntrinsic; }
     float getCurrentPaddingSamples (int channel = 0) const noexcept
     {
         return currentDelay[(size_t) std::clamp (channel, 0, (int) currentDelay.size() - 1)];
@@ -1138,10 +1314,16 @@ public:
         {
             for (int c = 0; c < count; ++c)
             {
-                const float intrinsic = intrinsicLatencySamples != nullptr
-                    ? std::clamp (intrinsicLatencySamples[(size_t) c * (size_t) numSamples + (size_t) i],
-                                  0.0f, (float) fixedLatency)
-                    : 0.0f;
+                const float rawIntrinsic = intrinsicLatencySamples != nullptr
+                    ? intrinsicLatencySamples[(size_t) c * (size_t) numSamples + (size_t) i] : 0.0f;
+                // A clamped negative padding means host PDC cannot be accurate.
+                // Expose this instead of silently hiding a budget underflow.
+                if (std::isfinite (rawIntrinsic) && rawIntrinsic > maxObservedIntrinsic)
+                    maxObservedIntrinsic = rawIntrinsic;
+                if (! std::isfinite (rawIntrinsic) || rawIntrinsic > (float) fixedLatency + 0.5f)
+                    ++overBudgetSamples;
+                const float intrinsic = std::clamp (std::isfinite (rawIntrinsic) ? rawIntrinsic : 0.0f,
+                                                   0.0f, (float) fixedLatency);
                 const float targetDelay = (float) fixedLatency - intrinsic;
                 const size_t ch = (size_t) c;
 
@@ -1214,6 +1396,8 @@ private:
 
     std::array<std::vector<float>, 2> delayLines;
     int fixedLatency = 0, ringSize = 0, writePosition = 0;
+    uint64_t overBudgetSamples = 0;
+    float maxObservedIntrinsic = 0.0f;
     int fadeLength = 192;
     std::array<int, 2> fadePosition { 192, 192 };
     std::array<float, 2> currentDelay { 0.0f, 0.0f }, fadeFrom { 0.0f, 0.0f }, fadeTo { 0.0f, 0.0f };

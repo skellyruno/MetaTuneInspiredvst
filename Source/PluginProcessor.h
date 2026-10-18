@@ -64,6 +64,10 @@ private:
     std::atomic<float>* speedParameter = nullptr;
     std::atomic<float>* amountParameter = nullptr;
     std::atomic<float>* sustainParameter = nullptr;
+    std::atomic<float>* glideParameter = nullptr;
+    std::atomic<float>* correctionLimitParameter = nullptr;
+    std::atomic<float>* noteConfirmParameter = nullptr;
+    std::atomic<float>* consonantReleaseParameter = nullptr;
     std::atomic<float>* scaleParameter = nullptr;
     std::atomic<float>* rootParameter = nullptr;
     std::atomic<float>* lowLatencyParameter = nullptr;

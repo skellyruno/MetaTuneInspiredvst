@@ -9,6 +9,10 @@ MetaTuneInspiredAudioProcessor::MetaTuneInspiredAudioProcessor()
     speedParameter = parameters.getRawParameterValue("speed");
     amountParameter = parameters.getRawParameterValue("amount");
     sustainParameter = parameters.getRawParameterValue("sustain");
+    glideParameter = parameters.getRawParameterValue("glide");
+    correctionLimitParameter = parameters.getRawParameterValue("correctionLimit");
+    noteConfirmParameter = parameters.getRawParameterValue("noteConfirm");
+    consonantReleaseParameter = parameters.getRawParameterValue("consonantRelease");
     scaleParameter = parameters.getRawParameterValue("scale");
     rootParameter = parameters.getRawParameterValue("root");
     lowLatencyParameter = parameters.getRawParameterValue("lowLatency");
@@ -40,6 +44,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout MetaTuneInspiredAudioProcess
         NormalisableRange<float>(415.3047f, 466.1638f, 0.1f), 440.0f));
     // Signed values: negative slows retuning on held notes, positive speeds it up.
     p.add(std::make_unique<AudioParameterFloat>("sustain", "Sustain", NormalisableRange<float>(-100.0f, 100.0f, 1.0f), 0.0f));
+    p.add(std::make_unique<AudioParameterFloat>("glide", "Glide (ms)", NormalisableRange<float>(0.0f, 500.0f, 1.0f), 0.0f));
+    p.add(std::make_unique<AudioParameterFloat>("correctionLimit", "Max Correction (semitones)", NormalisableRange<float>(0.0f, 12.0f, 0.1f), 12.0f));
+    p.add(std::make_unique<AudioParameterFloat>("noteConfirm", "Note Confirmation (ms)", NormalisableRange<float>(0.0f, 100.0f, 1.0f), 10.0f));
+    p.add(std::make_unique<AudioParameterFloat>("consonantRelease", "Consonant Release (ms)", NormalisableRange<float>(0.0f, 30.0f, 1.0f), 8.0f));
     p.add(std::make_unique<AudioParameterBool>("stabilizer", "Note Stabilizer", true));
     p.add(std::make_unique<AudioParameterChoice>("stabilizerTime", "Note Stabilizer Time",
                                                   StringArray { "None", "Short", "Mid", "Long" }, 1));
@@ -66,7 +74,7 @@ void MetaTuneInspiredAudioProcessor::prepareToPlay(double sr, int maxBlock)
     // Source-period repetition can push the measured normal-mode delay to about
     // 2.35 periods at the 70 Hz lower tracking limit. Reserve 2.5 periods so the
     // output compensation stage always has non-negative padding in that corner.
-    fixedLatencySamples = juce::jmax(1, juce::roundToInt((float)currentSampleRate * 2.5f / 70.0f));
+    fixedLatencySamples = autotune::RealtimeAutotune::recommendedHostLatencySamples(currentSampleRate, 70.0f);
     setLatencySamples(fixedLatencySamples);
     outputLatencyCompensator.prepare(fixedLatencySamples, currentSampleRate);
     referenceToneDelay.prepare(fixedLatencySamples);
@@ -149,6 +157,14 @@ void MetaTuneInspiredAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
             : (1.0f + 1.50f * juce::jlimit(0.0f, 100.0f, -sustain) / 100.0f);
         settings.retuneMs *= juce::jmax(0.10f, sustainFactor);
     }
+    settings.glideMs = glideParameter != nullptr
+        ? glideParameter->load(std::memory_order_relaxed) : 0.0f;
+    settings.maxCorrectionSemitones = correctionLimitParameter != nullptr
+        ? correctionLimitParameter->load(std::memory_order_relaxed) : 12.0f;
+    settings.noteConfirmMs = noteConfirmParameter != nullptr
+        ? noteConfirmParameter->load(std::memory_order_relaxed) : 10.0f;
+    settings.consonantReleaseMs = consonantReleaseParameter != nullptr
+        ? consonantReleaseParameter->load(std::memory_order_relaxed) : 8.0f;
     settings.strength = amount;
     settings.humanize = 0.0f;
     settings.vibratoPreserve = 0.70f;
