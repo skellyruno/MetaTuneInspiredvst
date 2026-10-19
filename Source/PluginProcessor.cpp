@@ -11,9 +11,12 @@ MetaTuneInspiredAudioProcessor::MetaTuneInspiredAudioProcessor()
     sustainParameter = parameters.getRawParameterValue("sustain");
     glideParameter = parameters.getRawParameterValue("glide");
     correctionLimitParameter = parameters.getRawParameterValue("correctionLimit");
+    precisionHardTuneParameter = parameters.getRawParameterValue("precisionHardTune");
     noteConfirmParameter = parameters.getRawParameterValue("noteConfirm");
     consonantReleaseParameter = parameters.getRawParameterValue("consonantRelease");
     scaleParameter = parameters.getRawParameterValue("scale");
+    for (int i = 0; i < 12; ++i)
+        customDegreeParameters[(size_t)i] = parameters.getRawParameterValue("customDegree" + juce::String(i));
     rootParameter = parameters.getRawParameterValue("root");
     lowLatencyParameter = parameters.getRawParameterValue("lowLatency");
     stabilizerParameter = parameters.getRawParameterValue("stabilizer");
@@ -46,18 +49,28 @@ juce::AudioProcessorValueTreeState::ParameterLayout MetaTuneInspiredAudioProcess
     p.add(std::make_unique<AudioParameterFloat>("sustain", "Sustain", NormalisableRange<float>(-100.0f, 100.0f, 1.0f), 0.0f));
     p.add(std::make_unique<AudioParameterFloat>("glide", "Glide (ms)", NormalisableRange<float>(0.0f, 500.0f, 1.0f), 0.0f));
     p.add(std::make_unique<AudioParameterFloat>("correctionLimit", "Max Correction (semitones)", NormalisableRange<float>(0.0f, 12.0f, 0.1f), 12.0f));
+    p.add(std::make_unique<AudioParameterBool>("precisionHardTune", "Precision Hard Tune", false));
     p.add(std::make_unique<AudioParameterFloat>("noteConfirm", "Note Confirmation (ms)", NormalisableRange<float>(0.0f, 100.0f, 1.0f), 10.0f));
     p.add(std::make_unique<AudioParameterFloat>("consonantRelease", "Consonant Release (ms)", NormalisableRange<float>(0.0f, 30.0f, 1.0f), 8.0f));
     p.add(std::make_unique<AudioParameterBool>("stabilizer", "Note Stabilizer", true));
     p.add(std::make_unique<AudioParameterChoice>("stabilizerTime", "Note Stabilizer Time",
                                                   StringArray { "None", "Short", "Mid", "Long" }, 1));
     p.add(std::make_unique<AudioParameterBool>("lowLatency", "Low Latency", true));
-    p.add(std::make_unique<AudioParameterChoice>("scale", "Scale", StringArray{"Chromatic","Major","Minor"}, 0));
+    p.add(std::make_unique<AudioParameterChoice>("scale", "Scale",
+        StringArray{"Chromatic", "Major", "Minor", "Harmonic Minor", "Major Pentatonic",
+                    "Minor Pentatonic", "Blues", "Dorian", "Custom"}, 0));
+    // Degrees relative to the selected root, not absolute piano keys. These IDs
+    // are additive, preserving the existing automation and session format.
+    constexpr bool defaultDegrees[12] = {true, false, true, false, true, true,
+                                          false, true, false, true, false, true};
+    for (int i = 0; i < 12; ++i)
+        p.add(std::make_unique<AudioParameterBool>("customDegree" + String(i),
+            "Custom degree " + String(i), defaultDegrees[i]));
     p.add(std::make_unique<AudioParameterInt>("root", "Root Note", 0, 11, 4));
     p.add(std::make_unique<AudioParameterFloat>("doublerWidth", "Doubler Width",
         NormalisableRange<float>(0.0f, 100.0f, 0.1f), 46.0f));
     p.add(std::make_unique<AudioParameterFloat>("doublerMix", "Doubler Mix",
-        NormalisableRange<float>(0.0f, 100.0f, 0.1f), 49.0f));
+        NormalisableRange<float>(0.0f, 100.0f, 0.1f), 0.0f));
     p.add(std::make_unique<AudioParameterBool>("globalBypass", "Global Bypass", false));
     p.add(std::make_unique<AudioParameterFloat>("toneVolume", "Tone Volume",
         NormalisableRange<float>(0.0f, 100.0f, 0.1f), 65.0f));
@@ -74,14 +87,23 @@ void MetaTuneInspiredAudioProcessor::prepareToPlay(double sr, int maxBlock)
     // Source-period repetition can push the measured normal-mode delay to about
     // 2.35 periods at the 70 Hz lower tracking limit. Reserve 2.5 periods so the
     // output compensation stage always has non-negative padding in that corner.
+#if defined(SKELLTUNE_LIVE_FIXED_LOW_LATENCY) && SKELLTUNE_LIVE_FIXED_LOW_LATENCY
+    // Standalone Live variant: fast grain scheduler cannot be disabled, so
+    // a smaller host-reported PDC budget is safe across automation changes.
+    fixedLatencySamples = autotune::RealtimeAutotune::recommendedHostLatencySamples(currentSampleRate, 70.0f, true);
+#else
     fixedLatencySamples = autotune::RealtimeAutotune::recommendedHostLatencySamples(currentSampleRate, 70.0f);
+#endif
     setLatencySamples(fixedLatencySamples);
     outputLatencyCompensator.prepare(fixedLatencySamples, currentSampleRate);
+    outputLatencyCompensator.setPitchPreserving(true);
     referenceToneDelay.prepare(fixedLatencySamples);
+    latencyAlignedBypass.prepare(fixedLatencySamples, currentSampleRate);
     // Channel-major scratch storage is bounded, allocated only in prepareToPlay.
     // processBlock divides arbitrary host blocks into slices that fit this buffer;
     // it NEVER silently discards intrinsic-latency telemetry for oversize blocks.
     intrinsicLatencyScratch.assign(2u * (size_t)juce::jmax(1, juce::jmin(maxBlock, 4096)), 0.0f);
+    dryLatencyScratch.assign(intrinsicLatencyScratch.size(), 0.0f);
 
     // The Doubler delay lines are fixed-capacity and reset outside the audio callback.
     doublerDelayLine = {};
@@ -95,7 +117,7 @@ void MetaTuneInspiredAudioProcessor::prepareToPlay(double sr, int maxBlock)
     smoothedDoublerWidth = doublerWidthParameter != nullptr
         ? juce::jlimit(0.0f, 1.0f, doublerWidthParameter->load(std::memory_order_relaxed) / 100.0f) : 0.46f;
     smoothedDoublerMix = doublerMixParameter != nullptr
-        ? juce::jlimit(0.0f, 1.0f, doublerMixParameter->load(std::memory_order_relaxed) / 100.0f) : 0.49f;
+        ? juce::jlimit(0.0f, 1.0f, doublerMixParameter->load(std::memory_order_relaxed) / 100.0f) : 0.0f;
     detectedHz.store(0.0f, std::memory_order_relaxed);
     detectedMidiNote.store(69.0f, std::memory_order_relaxed);
     correctionCents.store(0.0f, std::memory_order_relaxed);
@@ -143,9 +165,10 @@ void MetaTuneInspiredAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
 
     autotune::Settings settings;
     settings.key = juce::jlimit(0, 11, root);
-    settings.scale = scaleChoice == 1 ? autotune::Scale::Major
-                    : scaleChoice == 2 ? autotune::Scale::Minor
-                    : autotune::Scale::Chromatic;
+    settings.scale = static_cast<autotune::Scale>(juce::jlimit(0, (int)autotune::Scale::Custom, scaleChoice));
+    for (int i = 0; i < 12; ++i)
+        settings.customScale[(size_t)i] = customDegreeParameters[(size_t)i] != nullptr
+            && customDegreeParameters[(size_t)i]->load(std::memory_order_relaxed) > 0.5f;
     settings.referenceHz = juce::jlimit(415.3047f, 466.1638f, referenceHz);
     const float mappedMs = speedControlToMilliseconds(speed);
     settings.retuneMs = mappedMs <= 0.0f ? 0.0f : mappedMs;
@@ -165,13 +188,20 @@ void MetaTuneInspiredAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
         ? noteConfirmParameter->load(std::memory_order_relaxed) : 10.0f;
     settings.consonantReleaseMs = consonantReleaseParameter != nullptr
         ? consonantReleaseParameter->load(std::memory_order_relaxed) : 8.0f;
+    settings.precisionHardTune = precisionHardTuneParameter != nullptr
+        && precisionHardTuneParameter->load(std::memory_order_relaxed) > 0.5f;
     settings.strength = amount;
     settings.humanize = 0.0f;
     settings.vibratoPreserve = 0.70f;
     settings.follow = 0.85f; // responsive for rap/spoken vocals while retaining some centre stability
     settings.voicingThreshold = stabilizer ? 0.85f : 0.68f;
+#if defined(SKELLTUNE_LIVE_FIXED_LOW_LATENCY) && SKELLTUNE_LIVE_FIXED_LOW_LATENCY
+    // Do not let an automated normal-mode toggle exceed the smaller Live PDC.
+    settings.lowLatency = true;
+#else
     settings.lowLatency = lowLatencyParameter != nullptr
         && lowLatencyParameter->load(std::memory_order_relaxed) > 0.5f;
+#endif
     // None disables the slow pitch centre; progressively longer settings reject
     // vibrato-driven target changes. The default Short retains the prior 300 ms.
     const int stabilizerTimeChoice = stabilizerTimeParameter != nullptr
@@ -179,7 +209,9 @@ void MetaTuneInspiredAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
     constexpr std::array<float, 4> stabilizerTimesMs { 0.0f, 300.0f, 450.0f, 650.0f };
     settings.noteStabilizerMs = stabilizer
         ? stabilizerTimesMs[(size_t)juce::jlimit (0, 3, stabilizerTimeChoice)] : 0.0f;
-    settings.bypass = bypassed;
+    // Keep the DSP history warm during host bypass. The final bypass crossfade
+    // happens after host PDC, between time-aligned paths, not with raw input.
+    settings.bypass = false;
     realtimeAutotune.setSettings(settings); // already on the audio thread; no lock or cross-thread hand-off needed
 
     // Input metering is pre-tune. The engine follows the stronger channel for pitch
@@ -207,6 +239,10 @@ void MetaTuneInspiredAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
         return;
     }
 
+    latencyAlignedBypass.setBypassed(bypassed);
+    // While bypassed, retain the established host-aligned dry timeline.
+    // The voiced path uses stable padding to avoid undoing pitch correction.
+    outputLatencyCompensator.setPitchPreserving(!bypassed);
     for (int offset = 0; offset < samples; offset += sliceCapacity)
     {
         const int n = juce::jmin(sliceCapacity, samples - offset);
@@ -214,12 +250,37 @@ void MetaTuneInspiredAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
         if (channels > 1)
             slice[1] = buffer.getWritePointer(1, offset);
 
+        // Capture original dry audio before any pitch shifting, and align it
+        // with the advertised host latency. Delay state advances during both
+        // bypass and active processing, so automation never cold-starts it.
+        for (int i = 0; i < n; ++i)
+            for (int c = 0; c < channels; ++c)
+            {
+                // Sanitize before BOTH the delayed dry/bypass ring and the
+                // pitch tracker. Otherwise a single invalid DAW sample can
+                // persist in the PDC bypass line even after the DSP recovers.
+                if (! std::isfinite (slice[(size_t)c][i])) slice[(size_t)c][i] = 0.0f;
+                dryLatencyScratch[(size_t)c * (size_t)n + (size_t)i]
+                    = latencyAlignedBypass.delayDry(c, slice[(size_t)c][i]);
+            }
+
         realtimeAutotune.processChannels(slice.data(), channels, n, intrinsicLatencyScratch.data());
         processDoubler(buffer, offset, n);
         outputLatencyCompensator.processChannels(slice.data(), channels, n, intrinsicLatencyScratch.data());
         // Reference piano is generated locally, so it needs exactly the host
         // budget, NOT the voice's pitch-dependent delay-tap compensation.
         processReferenceTone(buffer, offset, n);
+
+        // Wet and dry now occupy the same host-aligned timeline. Do this after
+        // all effects so bypass also suppresses the doubler and preview tone.
+        for (int i = 0; i < n; ++i)
+        {
+            latencyAlignedBypass.advance();
+            for (int c = 0; c < channels; ++c)
+                slice[(size_t)c][i] = latencyAlignedBypass.mix(
+                    slice[(size_t)c][i],
+                    dryLatencyScratch[(size_t)c * (size_t)n + (size_t)i]);
+        }
     }
 
     const float detected = realtimeAutotune.getDetectedMidi();

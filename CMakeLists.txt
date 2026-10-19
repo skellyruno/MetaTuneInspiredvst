@@ -41,3 +41,22 @@ target_link_libraries(MetaTuneInspired PRIVATE
            juce::juce_recommended_lto_flags
            juce::juce_recommended_warning_flags
 )
+
+
+# Optional DSP regression suite; no effect on the existing Windows workflow.
+option(SKELLTUNE_BUILD_TESTS "Build portable DSP validation targets" OFF)
+if(SKELLTUNE_BUILD_TESTS)
+  enable_testing()
+  file(GLOB SKELLTUNE_TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/RealtimeAutotune_*.cpp")
+  foreach(test_source IN LISTS SKELLTUNE_TEST_SOURCES)
+    get_filename_component(test_name "${test_source}" NAME_WE)
+    add_executable("${test_name}" "${test_source}")
+    target_compile_features("${test_name}" PRIVATE cxx_std_17)
+    target_include_directories("${test_name}" PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Source")
+    if(test_name STREQUAL "RealtimeAutotune_real_vocal_octave")
+      add_test(NAME "${test_name}" COMMAND "${test_name}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/assets/real_voice_octave_200hz.wav")
+    else()
+      add_test(NAME "${test_name}" COMMAND "${test_name}")
+    endif()
+  endforeach()
+endif()
