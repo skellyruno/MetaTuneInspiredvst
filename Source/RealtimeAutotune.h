@@ -55,7 +55,6 @@ struct Settings
     float noteConfirmMs = 10.0f;     // persistence of a new target; 0 = immediate
     float consonantReleaseMs = 8.0f; // turn off stale correction on lost voicing
     float noteStabilizerMs = 300.0f; // 0 disables slow pitch-centre stabilisation
-    bool  precisionHardTune = false; // explicitly opt-in max-retune tracking preset
     bool  lowLatency = true;        // shorter detector hop and smaller grains; latency still depends on pitch/shift
     bool  bypass = false;
 };
@@ -92,44 +91,35 @@ class YinDetector
 public:
     void prepare (double sampleRate, float minHz = 70.0f, float maxHz = 1000.0f)
     {
-        // 8:1 anti-aliased analysis at 44.1/48/96 kHz reduces YIN's
-        // O(lag*window) cost; retain the undownsampled ring for fine-lag
-        // refinement. Silence/noise and out-of-band tones are regression-tested.
-        decimation   = sampleRate > 30000.0 ? 8 : (sampleRate > 16000.0 ? 2 : 1);
-        // The 63-tap path is selected at 8:1, with a 0.42/8 cycles-per-input-
-        // sample cutoff to attenuate out-of-band detector aliases.
-        useFirDecimation = decimation > 1;
-        tapCount = decimation >= 8 ? 63 : 31;
+        // 4:1 FIR decimation cuts YIN's O(lag*window) inner loop roughly
+        // fourfold versus the former 2:1 path at 44.1/48 kHz.
+        decimation   = sampleRate > 30000.0 ? 4 : (sampleRate > 16000.0 ? 2 : 1);
+        // The original 96kHz path already uses 4:1 averaging and is kept
+        // unchanged; FIR is most beneficial when halving lag/window at 44/48k.
+        useFirDecimation = decimation > 1 && sampleRate <= 60000.0;
         analysisRate = sampleRate / decimation;
         maxLag       = (int) std::ceil (analysisRate / minHz);
         minLag       = std::max (2, (int) std::floor (analysisRate / maxHz));
         windowSize   = maxLag;
         hopSize      = std::max (1, (int) (analysisRate * 0.005));
 
-        // The full-rate refinement reads the FIR group delay plus up to
-        // `maxLag * decimation` samples of history. Reserve that group delay
-        // explicitly; otherwise the lowest notes can wrap onto overwritten
-        // samples in the circular buffer.
-        fullSize = ((size_t) (windowSize + maxLag + 6) * (size_t) decimation)
-                   + (size_t) tapCount + 16;
+        fullSize = ((size_t) (windowSize + maxLag + 4) * (size_t) decimation) + 8;
         fullHistory.assign (decimation > 1 ? fullSize : 0, 0.0f);
-        // Windowed-sinc anti-alias low-pass for the decimated analysis path.
+        // Windowed-sinc anti-alias low-pass for the inexpensive 4:1 analysis path.
         // The full-rate waveform is retained for phase-accurate lag refinement.
         constexpr double pi = 3.14159265358979323846;
         const double cutoff = decimation > 1 ? 0.42 / (double) decimation : 0.5;
         double norm = 0.0;
-        decimatorTaps.fill (0.0f); // Fresh FIR after a host sample-rate change.
-        for (int i = 0; i < tapCount; ++i)
+        for (int i = 0; i < (int) decimatorTaps.size(); ++i)
         {
-            const int k = i - (tapCount - 1) / 2;
-            const double window = 0.5 + 0.5 * std::cos (2.0 * pi * (double) k / ((double) tapCount - 1.0));
+            const int k = i - ((int) decimatorTaps.size() - 1) / 2;
+            const double window = 0.5 + 0.5 * std::cos (2.0 * pi * (double) k / ((double) decimatorTaps.size() - 1.0));
             const double sinc = k == 0 ? 2.0 * cutoff : std::sin (2.0 * pi * cutoff * (double) k) / (pi * (double) k);
             decimatorTaps[(size_t) i] = (float) (window * sinc);
             norm += window * sinc;
         }
-        for (int i = 0; i < tapCount; ++i)
-            decimatorTaps[(size_t) i] = (float) (decimatorTaps[(size_t) i] / norm);
-        history.assign ((size_t) std::max (windowSize + maxLag, (int) std::ceil (analysisRate * 0.105)), 0.0f);
+        for (auto& tap : decimatorTaps) tap = (float) (tap / norm);
+        history.assign ((size_t) (windowSize + maxLag), 0.0f);
         frame.assign (history.size(), 0.0f);
         difference.assign ((size_t) maxLag + 2, 0.0f);
         reset();
@@ -145,9 +135,7 @@ public:
         decimatorHistory.fill (0.0f);
         decimatorIndex = 0;
         frequency = confidence = 0.0f;
-        rawFrequency = alternateFrequency = 0.0f;
         lastLag = framesSinceGood = 0;
-        octaveProposal = octaveProposalFrames = 0;
     }
 
     // d' (normalised difference) below which a dip counts as pitched; lower = stricter.
@@ -173,28 +161,22 @@ public:
 
         // Anti-aliased detector-only downsampling. The FIR state and coefficient
         // table are fixed-size and process() remains allocation-free.
-        if (! useFirDecimation) decimationSum += x;
+        decimationSum += x;
         if (useFirDecimation)
         {
             decimatorHistory[decimatorIndex] = x;
-            decimatorIndex = (decimatorIndex + 1) % tapCount;
+            decimatorIndex = (decimatorIndex + 1) % (int) decimatorHistory.size();
         }
         if (++decimationCount < decimation)
             return false;
         decimationCount = 0;
-        float decimated = 0.0f;
-        if (! useFirDecimation)
-        {
-            decimated = decimationSum / (float) decimation;
-            decimationSum = 0.0f;
-        }
+        float decimated = decimationSum / (float) decimation;
+        decimationSum = 0.0f;
         if (useFirDecimation)
         {
             decimated = 0.0f;
-            // Only valid FIR taps: the 31-tap path used to read all 63 slots,
-            // including stale 96-kHz coefficients after re-prepare.
-            for (int k = 0; k < tapCount; ++k)
-                decimated += decimatorTaps[(size_t) k] * decimatorHistory[(size_t) ((decimatorIndex + k) % tapCount)];
+            for (int k = 0; k < (int) decimatorTaps.size(); ++k)
+                decimated += decimatorTaps[(size_t) k] * decimatorHistory[(size_t) ((decimatorIndex + k) % (int) decimatorHistory.size())];
         }
         history[(size_t) writeIndex] = decimated;
         writeIndex = (writeIndex + 1) % (int) history.size();
@@ -209,8 +191,6 @@ public:
 
     float getFrequency() const noexcept  { return frequency; }   // Hz, 0 = unpitched
     float getConfidence() const noexcept { return confidence; }  // 0..1
-    float getRawFrequency() const noexcept { return rawFrequency; } // first qualifying CMNDF valley
-    float getAlternateFrequency() const noexcept { return alternateFrequency; } // diagnostic candidate
     float getPeriodInSamples() const noexcept
     {
         return frequency > 0.0f ? (float) (analysisRate * decimation) / frequency : 0.0f;
@@ -218,15 +198,6 @@ public:
     float getHopSeconds() const noexcept { return (float) hopSize / (float) analysisRate; }
     int getMaxLag() const noexcept { return maxLag; }
     int getAnalysisWindowSamples() const noexcept { return windowSize; }
-    // Debug the detector's actual FIR, including inactive coefficient slots.
-    // Important when a DAW changes 96 kHz -> 48 kHz on a live instance.
-    float getDecimatorCoefficientSum() const noexcept
-    {
-        if (! useFirDecimation) return 1.0f;
-        float total = 0.0f;
-        for (const float coefficient : decimatorTaps) total += coefficient;
-        return total;
-    }
     // Approximate worst-case YIN pairwise differences, not wall-clock CPU time.
     uint64_t getMaxDifferenceOperationsPerFrame() const noexcept
     { return (uint64_t) maxLag * (uint64_t) windowSize; }
@@ -238,7 +209,7 @@ private:
         for (int i = 0; i < size; ++i)
             frame[(size_t) i] = history[(size_t) ((writeIndex + i) % size)];
 
-        const float* newest = frame.data() + size - windowSize;
+        const float* newest = frame.data() + maxLag;
 
         float energy = 0.0f;
         for (int j = 0; j < windowSize; ++j)
@@ -246,7 +217,7 @@ private:
 
         if (std::sqrt (energy / (float) windowSize) < silenceThreshold)
         {
-            frequency = confidence = rawFrequency = alternateFrequency = 0.0f;
+            frequency = confidence = 0.0f;
             if (++framesSinceGood > maxContinuityFrames) lastLag = 0;
             return;
         }
@@ -285,27 +256,12 @@ private:
 
         if (tau < 0)
         {
-            frequency = confidence = rawFrequency = alternateFrequency = 0.0f;
+            frequency = confidence = 0.0f;
             if (++framesSinceGood > maxContinuityFrames) lastLag = 0;
             return;
         }
 
-        // Keep the first admissible valley and a second independent valley
-        // visible for offline diagnosis of harmonic/octave ambiguity.
-        rawFrequency = (float) (analysisRate / (double) tau);
-        const int initial = tau;
         tau = resolveOctave (tau);
-        int alternate = -1;
-        for (int k = minLag + 1; k < maxLag; ++k)
-        {
-            if (std::abs (k - tau) < std::max (3, tau / 8)) continue;
-            if (difference[(size_t) k] >= 0.42f
-                || difference[(size_t) k] > difference[(size_t) k-1]
-                || difference[(size_t) k] > difference[(size_t) k+1]) continue;
-            if (alternate < 0 || difference[(size_t) k] < difference[(size_t) alternate]) alternate = k;
-        }
-        if (alternate < 0 && initial != tau) alternate = initial;
-        alternateFrequency = alternate > 0 ? (float) (analysisRate / (double) alternate) : 0.0f;
         lastLag = tau;
         framesSinceGood = 0;
 
@@ -335,18 +291,13 @@ private:
     // Plain YIN takes the first dip under the threshold, which on real voices is sometimes the
     // half-lag of the true period (octave too high) or, on fast pitch movement, a double lag
     // (octave too low). Two guards, tuned on a real vocal recording:
-    //  1. continuity: a sudden octave candidate initially favors the last good
-    //     lag, but a candidate recurring for three hops can establish a real leap.
-    //  2. on low notes only, a substantially deeper 2x-lag valley supports an
-    //     absent/weak fundamental instead of the first strong second harmonic.
-    int resolveOctave (int tau) noexcept
+    //  1. continuity: an estimate an octave (or twelfth) away from the pitch tracked a few
+    //     frames ago is almost always an error, so prefer a dip near the old lag if one exists.
+    //     A genuine leap loses that dip and is accepted immediately.
+    //  2. a clearly deeper dip at 2x the lag means the first dip was the half-period.
+    int resolveOctave (int tau) const noexcept
     {
         const float chosen = difference[(size_t) tau];
-        // Stronger, integer-related candidates are proposed rather than
-        // permanently vetoed by the previous pitch. A confirmed real octave
-        // must be permitted through continuity hysteresis.
-        if (tau != octaveProposal) { octaveProposal = tau; octaveProposalFrames = 0; }
-        ++octaveProposalFrames;
 
         if (lastLag > 0)
         {
@@ -357,72 +308,19 @@ private:
             {
                 const int t = deepestNear ((float) lastLag, 0.06f);
                 if (t > 0 && difference[(size_t) t] < 0.35f && difference[(size_t) t] <= chosen + 0.2f)
-                {
-                    // Allow a well-supported new periodicity after three
-                    // consecutive analysis frames; a one-hop octave glitch
-                    // remains rejected. This is detector state, not an
-                    // additional delayed-audio buffer.
-                    if (chosen > 0.12f || octaveProposalFrames < 3)
-                        return t;
-                }
+                    return t;
             }
         }
 
-        if (kDoubleLagRule && chosen > 0.008f && analysisRate / (double) tau < 350.0)
+        if (kDoubleLagRule && chosen > 0.04f)
             for (const float multiple : { 2.0f })
             {
                 const int t = deepestNear ((float) tau * multiple, 0.05f);
-                if (t > 0 && difference[(size_t) t] < threshold && difference[(size_t) t] < 0.50f * chosen
-                    && hasOddSubharmonicEvidence (tau))
+                if (t > 0 && difference[(size_t) t] < threshold && difference[(size_t) t] < 0.6f * chosen)
                     return t;
             }
 
         return tau;
-    }
-
-    // A 2x YIN dip alone is NOT evidence for an octave-lower vocal.  It
-    // also occurs when two consecutive cycles happen to correlate better than
-    // adjacent cycles in a natural, moving voice.  A true missing fundamental
-    // has energy at odd harmonics of the proposed lower frequency (e.g. 3*f0),
-    // even if energy at f0 itself is weak.  Reject a subharmonic hypothesis
-    // when those odd harmonics are absent.  Run this only for the unusual
-    // double-period proposal, and use already buffered audio; no extra delay.
-    bool hasOddSubharmonicEvidence (int shortLag) const noexcept
-    {
-        const float highHz = (float) analysisRate / (float) shortLag;
-        const float lowHz = 0.5f * highHz;
-        // A 90-ms analysis span distinguishes 100/200 Hz much better than the
-        // ordinary YIN difference window, without adding transport delay.
-        const int count = std::min ((int) frame.size(), (int) (analysisRate * 0.090));
-        if (count < 32) return false;
-        double re[5] {}, im[5] {};
-        // Evaluate f0, 2*f0, 3*f0, 4*f0, 5*f0 using a Hann taper.
-        // Oscillator recurrence avoids sin/cos in the inner sample loop.
-        double cr[5], ci[5], zr[5], zi[5];
-        constexpr double pi = 3.14159265358979323846;
-        for (int h = 0; h < 5; ++h)
-        {
-            const double w = -2.0 * pi * (double) (h + 1) * lowHz / analysisRate;
-            cr[h] = std::cos (w); ci[h] = std::sin (w);
-            zr[h] = 1.0; zi[h] = 0.0;
-        }
-        const int first = (int) frame.size() - count;
-        for (int i = 0; i < count; ++i)
-        {
-            const double x = (double) frame[(size_t) (first + i)]
-                    * (0.5 - 0.5 * std::cos (2.0 * pi * i / (count - 1)));
-            for (int h = 0; h < 5; ++h)
-            {
-                re[h] += x * zr[h]; im[h] += x * zi[h];
-                const double r = zr[h] * cr[h] - zi[h] * ci[h];
-                zi[h] = zr[h] * ci[h] + zi[h] * cr[h];
-                zr[h] = r;
-            }
-        }
-        const auto power = [&] (int h) { return re[h] * re[h] + im[h] * im[h]; };
-        const double odd = power(0) + power(2) + power(4);
-        const double even = power(1) + power(3);
-        return odd > 0.0040 * (even + 1.0e-12);
     }
 
     // The search above runs on decimated audio, so its lag has only coarse resolution
@@ -432,63 +330,13 @@ private:
     {
         if (decimation <= 1)
             return coarseLag;
+
         constexpr int span = 3;
         const int centre = (int) std::lround (coarseLag);
         const int window = windowSize * decimation;
         // Keep the full-rate refinement aligned with the decimated FIR's
         // linear-phase group delay during changing-pitch transitions.
-        const int newest = (int) fullWrite - 1 - (useFirDecimation ? (tapCount - 1) / 2 : 0);
-        const int size = (int) fullSize;
-        const auto at = [&] (int back) { int i = (newest - back) % size; return fullHistory[(size_t) (i < 0 ? i + size : i)]; };
-
-        float d[2 * span + 1];
-        int bestK = -span;
-        for (int k = -span; k <= span; ++k)
-        {
-            const int lag = centre + k;
-            float sum = 0.0f;
-            for (int j = 0; j < window; ++j)
-            {
-                const float delta = at (j) - at (j + lag);
-                sum += delta * delta;
-            }
-            d[k + span] = sum;
-            // Initialise the winner on the first sample. Comparing against d[0] on
-            // that iteration compares the value with itself and leaves bestK at an
-            // edge forever, silently disabling the full-rate lag refinement.
-            if (k == -span || sum < d[bestK + span])
-                bestK = k;
-        }
-
-        if (bestK == -span || bestK == span)
-            // A boundary minimum can be a genuine pitch period that lies
-            // outside the seven-point search because of 8:1 decimation.
-            // Recheck only below 80 Hz; this leaves the normal fast path
-            // untouched and avoids turning every analysis hop into 15 lags.
-            return analysisRate / (double) coarseLag < 80.0
-                ? refineAtFullRateWide (coarseLag)
-                : coarseLag;
-
-        const float a = d[bestK + span - 1], b = d[bestK + span], c = d[bestK + span + 1];
-        const float den = a - 2.0f * b + c;
-        return (float) (centre + bestK) + (std::abs (den) > 1.0e-12f ? 0.5f * (a - c) / den : 0.0f);
-    }
-
-
-    // Separate cold path intentionally keeps the original seven-lag function
-    // optimizable by MSVC/GCC/Clang.  Replacing the compile-time span with a
-    // runtime loop caused a large whole-detector CPU regression in testing.
-    float refineAtFullRateWide (float coarseLag) const noexcept
-    {
-        if (decimation <= 1)
-            return coarseLag;
-
-        constexpr int span = 7;
-        const int centre = (int) std::lround (coarseLag);
-        const int window = windowSize * decimation;
-        // Keep the full-rate refinement aligned with the decimated FIR's
-        // linear-phase group delay during changing-pitch transitions.
-        const int newest = (int) fullWrite - 1 - (useFirDecimation ? (tapCount - 1) / 2 : 0);
+        const int newest = (int) fullWrite - 1 - (useFirDecimation ? 15 : 0);
         const int size = (int) fullSize;
         const auto at = [&] (int back) { int i = (newest - back) % size; return fullHistory[(size_t) (i < 0 ? i + size : i)]; };
 
@@ -521,7 +369,6 @@ private:
 
     static constexpr float silenceThreshold = 0.003f; // about -50 dBFS RMS
 
-    int tapCount = 31;
     int decimation = 1, maxLag = 0, minLag = 2, windowSize = 0, hopSize = 1;
     double analysisRate = 44100.0;
     float threshold = 0.15f;
@@ -529,13 +376,11 @@ private:
     std::vector<float> history, frame, difference, fullHistory;
     size_t fullSize = 0, fullWrite = 0;
     int writeIndex = 0, decimationCount = 0, samplesSinceAnalysis = 0;
-    std::array<float, 63> decimatorTaps {}, decimatorHistory {};
+    std::array<float, 31> decimatorTaps {}, decimatorHistory {};
     int decimatorIndex = 0;
     bool useFirDecimation = false;
     float decimationSum = 0.0f, frequency = 0.0f, confidence = 0.0f;
-    float rawFrequency = 0.0f, alternateFrequency = 0.0f;
-    static constexpr bool kDoubleLagRule = true;
-    int octaveProposal = 0, octaveProposalFrames = 0;
+    static constexpr bool kDoubleLagRule = false;
     int lastLag = 0, framesSinceGood = 0;                 // continuity memory (analysis-rate lag)
     static constexpr int maxContinuityFrames = 8;         // ~40 ms
 };
@@ -546,547 +391,224 @@ private:
 class PsolaShifter
 {
 public:
-    // The shifter is an independently clocked, pulse-synchronous overlap-add
-    // synthesizer.  Input and output grain schedules are separate: changing the
-    // synthesis-mark spacing changes F0 without uniformly shifting the vocal
-    // envelope.  All scratch space is allocated in prepare().
     void prepare (double sampleRate)
     {
-        sr = std::max (8000.0, sampleRate);
         size_t n = 1;
-        while (n < (size_t) (sr * 0.5)) n <<= 1;
-        history.assign (n, 0.0f);
+        while (n < (size_t) (sampleRate * 0.5)) n <<= 1;
+        buffer.assign (n, 0.0f);
         mask = (int64_t) n - 1;
-        unvoicedPeriod = (float) (sr * 0.008);
-        maxPeriod = (float) (sr * 0.030);
-        voicedAlpha = 1.0f - std::exp (-1.0f / (float) (sr * 0.0015));
-        unityAlpha = 1.0f - std::exp (-1.0f / (float) (sr * 0.006));
-        unityExitAlpha = 1.0f - std::exp (-1.0f / (float) (sr * 0.0018));
-        levelAlpha = 1.0f - std::exp (-1.0f / (float) (sr * 0.035));
-        // Bounded, reusable NCC template. No allocation on the audio thread.
-        matchTemplate.assign ((size_t) (0.5 * maxPeriod) + 32, 0.0f);
-        // Fixed-size past wet waveform for phase-matching near-unison handoffs.
-        // Allocated only at prepare(), never on the audio thread.
-        wetHistory.assign (2048, 0.0f);
+        unvoicedPeriod = (float) (sampleRate * 0.008);
+        voiceTransitionAlpha = 1.0f - std::exp (-1.0f / (float) (sampleRate * 0.006));
+        maxHalfWidth   = (float) (sampleRate * 0.03);
+        scores.assign ((size_t) (0.3 * maxHalfWidth) + 8, 0.0f);          // search window: 2 x 0.15 periods
+        reference.assign ((size_t) (0.4 * maxHalfWidth) + 16, 0.0f);      // template: 2 x 0.2 periods
+
         for (size_t i = 0; i < window.size(); ++i)
-            window[i] = 0.5f - 0.5f * std::cos (6.28318530718f * (float) i / (float) (window.size() - 1));
+            window[i] = 0.5f - 0.5f * std::cos (6.2831853f * (float) i / (float) (window.size() - 1));
         reset();
     }
 
-    void reset() noexcept
+    void reset()
     {
-        std::fill (history.begin(), history.end(), 0.0f);
+        std::fill (buffer.begin(), buffer.end(), 0.0f);
         for (auto& g : grains) g.active = false;
-        now = 0;
-        nextSynthesisMark = 0.0;
-        lastSourceMark = 0.0;
-        sourceValid = false;
-        lowCoherenceGrains = 0;
-        phaseReacquisitions = 0;
-        ratio = 1.0f;
-        inputPeriod = unvoicedPeriod;
-        pitched = false;
+        now = 0; nextMark = 0.0; hasLastSource = false; lastDelay = 0.5 * (double) unvoicedPeriod + 4.0; unvoicedDelay = std::round (lastDelay);
         voicedMix = 0.0f;
-        // Hold the dry tap steady in unvoiced segments; it only changes when
-        // the voiced timeline changes, crossfaded over several milliseconds.
-        dryDelay = std::round (unvoicedPeriod * 0.65f);
-        previousDryDelay = dryDelay;
-        dryFade = 1.0f;
-        latencyEstimate = dryDelay;
-        inputPower = outputPower = 1.0e-7f;
-        gain = desiredGainSmoothed = 1.0f;
-        unityMix = 0.0f;
-        unityDelay = dryDelay;
-        recentlyShifted = false;
-        unityRequested = false;
-        std::fill (wetHistory.begin(), wetHistory.end(), 0.0f);
-        levelCounter = 0;
-        dropoutCount = 0;
-        overlapWeightSum = lastPhaseCorrelation = lastSourceAgeSamples = 0.0f;
-        emittedGrains = 0;
-        saturatedGrains = 0;
     }
 
-    void setLowLatency (bool enabled) noexcept { fast = enabled; }
+    // Current input-to-output delay estimate in samples. Normal geometry is nominally
+    // about 1.45 periods, but source-period repetition can add nearly one period on an
+    // upward shift. The processor's output pad covers that bounded excursion.
+    double getLatencySamples() const noexcept { return hasLastSource ? lastDelay : unvoicedDelay; }
 
-    void setParameters (float newRatio, float period) noexcept
+    // Low-latency mode trades some pulse-context for shorter grains and a shorter
+    // source look-back. It is still pulse-aligned; only the grain/search geometry changes.
+    void setLowLatency (bool enabled) noexcept { lowLatencyMode = enabled; }
+
+    // pitchRatio = out/in frequency; period <= 0 means unvoiced (pitch left alone).
+    void setParameters (float newPitchRatio, float newPeriod) noexcept
     {
-        const bool wasPitched = pitched;
-        pitched = std::isfinite (period) && period > 0.0f;
-        // Consonants are broadband: fractional interpolated dry taps act as a
-        // low-pass and can quietly erase several dB of their energy. Move to
-        // an exact integer-sample passthrough tap once voicing is lost.
-        if (wasPitched && ! pitched)
-        {
-            sourceValid = false;
-            lastPhaseCorrelation = 0.0f;
-            previousDryDelay = dryDelay;
-            dryDelay = std::round (dryDelay);
-            dryFade = 0.0f;
-        }
-        const float incomingPeriod = pitched ? std::clamp (period, 8.0f, maxPeriod) : unvoicedPeriod;
-        // A genuine legato note jump invalidates the old glottal-template
-        // phase: don't ask NCC to find the new vowel using the previous
-        // note's pulse period. This is separate from the ratio glide.
-        if (wasPitched && pitched && sourceValid &&
-            std::abs (incomingPeriod - inputPeriod) > inputPeriod * 0.16f)
-        {
-            sourceValid = false;
-            lowCoherenceGrains = 0;
-            ++phaseReacquisitions;
-        }
-        inputPeriod = incomingPeriod;
-        ratio = pitched && std::isfinite (newRatio) ? std::clamp (newRatio, 0.25f, 4.0f) : 1.0f;
-        if (! pitched) recentlyShifted = false;
-        else if (std::abs (ratio - 1.0f) > 0.002f) recentlyShifted = true;
+        const bool voiced = newPeriod > 0.0f;
+        period     = voiced ? std::clamp (newPeriod, 8.0f, maxHalfWidth) : unvoicedPeriod;
+        pitchRatio = voiced ? std::clamp (newPitchRatio, 0.25f, 4.0f) : 1.0f;
+        isVoiced   = voiced;
     }
 
     float processSample (float input) noexcept
     {
-        if (! std::isfinite (input)) input = 0.0f;
-        history[(size_t) (now & mask)] = input;
+        buffer[(size_t) (now & mask)] = input;
 
-        // Once fully unvoiced, use the exact integer-delay dry path instead
-        // of reconstructing fictitious grains or scanning the grain bank.
-        // Keep the ring history warm so the next real note can begin immediately.
-        if (! pitched && voicedMix == 0.0f && dryFade >= 1.0f && unityMix == 0.0f)
-        {
-            nextSynthesisMark = (double) now;
-            sourceValid = false;
-            const float dry = read ((double) now - (double) dryDelay);
-            // Do not carry an old pitched gain estimate across long breaths.
-            gain = desiredGainSmoothed = 1.0f;
-            inputPower = outputPower = 1.0e-7f;
-            ++now;
-            return dry;
-        }
-
-        // A real-time-safe bound on grain scheduling, including corrupted
-        // automation / non-monotonic periods. Prevent callback stalls.
-        int scheduled = 0;
-        // Unvoiced audio must not drive a fake pitch-synchronous oscillator.
-        // Suspend grain spawning on breaths/silence and restart the timeline
-        // at the next voiced onset. Existing grains are allowed to decay.
-        if (! pitched) nextSynthesisMark = (double) now;
-        while (pitched && nextSynthesisMark - halfWidth() <= (double) now && scheduled < 8)
-        {
-            spawn();
-            ++scheduled;
-        }
-        if (pitched && scheduled == 8 && nextSynthesisMark <= (double) now)
-            nextSynthesisMark = (double) now + (double) inputPeriod / (double) ratio;
+        while (nextMark - halfWidth() <= (double) now)
+            spawnGrain();
 
         float sum = 0.0f, weight = 0.0f;
-        double delaySum = 0.0;
         for (auto& g : grains)
         {
             if (! g.active) continue;
             const double age = (double) now - g.start;
             if (age >= g.length) { g.active = false; continue; }
             if (age < 0.0) continue;
+
             const float w = windowAt ((float) (age / g.length));
             sum += w * read (g.sourceStart + age);
             weight += w;
-            delaySum += (double) w * g.delay;
         }
-        // The normalized overlap weights are the SAME windows that generate
-        // audio. Never assume the sum equals one and never apply ratio-dependent
-        // arbitrary gain. Smoothly substitute delayed raw audio when grains do
-        // not cover a sample instead of dividing by an almost-zero weight.
-        overlapWeightSum = weight;
-        const float coverage = std::clamp (weight * 100000.0f, 0.0f, 1.0f);
-        const float wet = weight > 1.0e-6f ? sum / weight : 0.0f;
-        if (pitched && coverage < 0.05f) ++dropoutCount;
-        if (weight > 0.15f)
-            latencyEstimate += 0.005 * (std::clamp (delaySum / (double) weight, 0.0, (double) maxPeriod * 2.5) - latencyEstimate);
-
-        const float goal = pitched ? 1.0f : 0.0f;
-        voicedMix += (goal - voicedMix) * voicedAlpha;
-        if (std::abs (voicedMix - goal) < 1.0e-5f) voicedMix = goal;
-
-        // The unpitched sample follows the last synchronized source delay. On
-        // transition from voice to breath, keep the delay fixed, avoiding the
-        // rapidly changing time-varying dry tap used in the original shifter.
-        const float dryB = read ((double) now - (double) dryDelay);
-        const float dry = dryFade >= 1.0f ? dryB
-            : read ((double) now - (double) previousDryDelay) * (1.0f - dryFade) + dryFade * dryB;
-        dryFade = std::min (1.0f, dryFade + 1.0f / (float) (sr * 0.002));
-
-        // Slow energy matching, derived from actual dry and reconstructed
-        // signals rather than a fixed sqrt(1/ratio) multiplier. It cannot
-        // compensate for holes: those are handled by coverage above.
-        // Compare the resynthesis against the *actual incoming* vocal. The
-        // moving dry-grain tap is not a reliable loudness reference: its
-        // time variation can substantially reduce measured energy and make
-        // the controller attenuate an already-quiet output.
-        const float dryPower = input * input;
-        inputPower += levelAlpha * (dryPower - inputPower);
-        outputPower += levelAlpha * (wet * wet - outputPower);
-        if ((++levelCounter & 63u) == 0)
-        {
-            // The fast narrow windows can be ~2.4 dB down during octave-up
-            // correction. Do not boost ALL vocals: allow the measured RMS
-            // servo extra headroom only for large upward shifts. The existing
-            // power ratio decides the actual correction, with a firm ceiling.
-            // Normalize measured energy over meaningful pitch shifts. Close
-            // to unison this stays near the original 1.20 ceiling; stronger
-            // shifts may need additional headroom when grain phases cancel.
-            const float signedShift = 12.0f * std::log2 (std::max (0.25f, ratio));
-            const float significantShift = std::clamp ((std::abs (signedShift) - 0.5f) / 3.0f, 0.0f, 1.0f);
-            const float gainCeiling = 1.20f + 0.65f * significantShift;
-            desiredGainSmoothed = pitched
-                ? std::clamp (std::sqrt ((inputPower + 1.0e-6f) /
-                                          (outputPower + 1.0e-6f)), 0.83f, gainCeiling) : 1.0f;
-        }
-        gain += levelAlpha * (desiredGainSmoothed - gain);
-
-        const float coherentWet = coverage * (wet * gain) + (1.0f - coverage) * dry;
-        // Zero-shift transparency: conventional PSOLA still phase-modulates
-        // vocal harmonics when the correction is *exactly* zero. Crossfade to
-        // a fixed-delay copy of the original signal for near-unison regions.
-        // Capture the grain delay on entry so both paths begin close in phase;
-        // hold it while in unity mode so the dry copy has no pitch wobble.
-        // abs(ratio-1) ~= ln(2) * cents / 1200 at the unison threshold.
-        // Avoid a logarithm on every audio sample.
-        // Hysteresis avoids flipping the transparent path at every tiny
-        // vibrato/automation fluctuation around its entry threshold.
-        const bool priorRequest = unityRequested;
-        const float unityError = std::abs (ratio - 1.0f);
-        if (! pitched || (unityRequested && unityError > 0.0018f)) unityRequested = false;
-        else if (! unityRequested && unityError < 0.000866f) unityRequested = true;
-        const float unityGoal = pitched && unityRequested ? 1.0f : 0.0f;
-        // Match the fixed-delay original to RECENT wet waveform before entering
-        // unity mode; measuring only the wet delay estimate is insufficient to
-        // establish harmonic phase. Once acquired, the delay stays stationary
-        // through the fade, avoiding a continuously pitch-modulated dry tap.
-        if (unityGoal > 0.5f && ! priorRequest)
-        {
-            // A note that began at exact unison should stay on the original
-            // short, transparent tap. Phase searching is needed only when a
-            // previously shifted note *returns* to unison.
-            unityDelay = recentlyShifted ? findPhaseAlignedUnityDelay()
-                : std::clamp ((float) latencyEstimate, 6.0f,
-                              fast ? (float) (sr * 0.0015) : 2.4f * maxPeriod);
-        }
-        // The wet waveform begins changing phase immediately when retuning
-        // resumes. Exit the transparent path faster than we enter it, so two
-        // increasingly different waveforms are not mixed for several cycles.
-        const float unityStep = unityGoal > unityMix ? unityAlpha : unityExitAlpha;
-        unityMix += unityStep * (unityGoal - unityMix);
-        if (std::abs (unityMix - unityGoal) < 1.0e-5f) unityMix = unityGoal;
-        float voiced = coherentWet;
-        if (unityMix > 1.0e-5f)
-        {
-            const float transparentDry = read ((double) now - (double) unityDelay);
-            voiced += unityMix * (transparentDry - coherentWet);
-        }
-        if (unityMix > 0.995f) latencyEstimate += 0.005 * ((double) unityDelay - latencyEstimate);
-        const float result = voicedMix * voiced + (1.0f - voicedMix) * dry;
-        if (! wetHistory.empty())
-            wetHistory[(size_t) (now & 2047)] = coherentWet;
+        // Smoothly move between period-synchronous output and an unprocessed
+        // delayed sample, protecting broadband consonants and voiced onsets.
+        // Both taps read the same history, so no heap/host delay is introduced.
+        const float voiceGoal = isVoiced ? 1.0f : 0.0f;
+        voicedMix += (voiceGoal - voicedMix) * voiceTransitionAlpha;
+        if (std::abs (voicedMix - voiceGoal) < 0.00001f) voicedMix = voiceGoal;
+        const float dryUnvoiced = voicedMix < 1.0f ? read ((double) now - unvoicedDelay) : 0.0f;
         ++now;
-        return std::isfinite (result) ? result : 0.0f;
-    }
 
-    double getLatencySamples() const noexcept { return latencyEstimate; }
-    float getOverlapWeightSum() const noexcept { return overlapWeightSum; }
-    float getLastPhaseCorrelation() const noexcept { return lastPhaseCorrelation; }
-    float getLastSourceAgeSamples() const noexcept { return lastSourceAgeSamples; }
-    float getAppliedGain() const noexcept { return gain; }
-    int getActiveGrainCount() const noexcept
-    {
-        int count = 0;
-        for (const auto& grain : grains) if (grain.active) ++count;
-        return count;
+        const float gap = pitchRatio < 1.0f ? std::sqrt (1.0f / pitchRatio) : 1.0f;
+        // Normalise by the actual overlap weight. Clamping the denominator to 1.0
+        // attenuates short grains because their overlapping Hann windows sum to <1.
+        // The tiny floor handles only the no-coverage/numeric-edge case.
+        const float voicedOutput = (weight > 1.0e-5f ? sum / weight : 0.0f) * gap;
+        return voicedMix >= 1.0f ? voicedOutput
+                                 : voicedMix * voicedOutput + (1.0f - voicedMix) * dryUnvoiced;
     }
-    uint64_t getDropoutSamples() const noexcept { return dropoutCount; }
-    uint64_t getSpawnedGrains() const noexcept { return emittedGrains; }
-    uint64_t getGrainSaturationCount() const noexcept { return saturatedGrains; }
-    uint64_t getPhaseReacquisitions() const noexcept { return phaseReacquisitions; }
 
 private:
-    float findPhaseAlignedUnityDelay() const noexcept
-    {
-        // The analysis window is short enough to follow current pulse phase,
-        // but covers several harmonics. Strictly bounded ~2k dot products per
-        // handoff, triggered only on entering the <1.5-cent unity region.
-        const float base = std::clamp ((float) latencyEstimate, 6.0f,
-                                         (float) (sr * (fast ? 1.95 : 2.45) / 70.0));
-        if (now < (int64_t) (sr * 0.045) || wetHistory.empty()) return base;
-        const float radius = std::min (inputPeriod * 0.70f, (float) (sr * 0.008));
-        const float low = std::max (6.0f, base - radius);
-        const float high = std::min ((float) (sr * (fast ? 1.95 : 2.45) / 70.0), base + radius);
-        const int taps = 48;
-        const int stride = 3;
-        float bestScore = -1.0f;
-        float bestDelay = base;
-        const int count = 33;
-        for (int c = 0; c < count; ++c)
-        {
-            const float candidate = low + (high - low) * (float) c / (float) (count - 1);
-            double cross = 0.0, wetEnergy = 1.0e-10, dryEnergy = 1.0e-10;
-            for (int k = 1; k <= taps; ++k)
-            {
-                const int sampleOffset = k * stride;
-                const float wet = wetHistory[(size_t) ((now - sampleOffset) & 2047)];
-                const float dry = read ((double) now - (double) sampleOffset - candidate);
-                cross += (double) wet * dry;
-                wetEnergy += (double) wet * wet;
-                dryEnergy += (double) dry * dry;
-            }
-            const float normalized = (float) (cross / std::sqrt (wetEnergy * dryEnergy));
-            // Prefer proximity to the physically measured source delay when
-            // multiple harmonically equivalent phase solutions are available.
-            const float score = normalized - 0.035f * std::abs (candidate - base) / std::max (20.0f, radius);
-            if (score > bestScore) { bestScore = score; bestDelay = candidate; }
-        }
-        // If noise/unvoiced audio has no meaningful coherence, prefer the
-        // stable reported delay rather than making a random phase jump.
-        return bestScore > 0.32f ? bestDelay : base;
-    }
-
-    struct Grain
-    {
-        bool active = false;
-        double start = 0.0, length = 0.0, sourceStart = 0.0, delay = 0.0;
-    };
+    struct Grain { bool active = false; double start = 0.0, length = 1.0, sourceStart = 0.0; };
 
     float halfWidth() const noexcept
     {
-        // Long overlapping windows can cancel nearly completely during large
-        // upward corrections (multiple simultaneous source periods). Narrow
-        // them only when needed, keeping normal-mode quality near unison.
-        if (! fast)
-        {
-            // Gradually shorten the wide normal-mode window as an upward
-            // correction grows. A hard switch at 1.3x would itself create
-            // timbral zippering under glide/retune automation.
-            const float narrowWidth = std::max (0.52f, 0.90f / std::max (0.25f, ratio));
-            const float transition = std::clamp ((ratio - 1.1f) * 2.0f, 0.0f, 1.0f);
-            const float normalWidth = 1.05f + transition * (std::min (narrowWidth, 1.05f) - 1.05f);
-            return std::min (maxPeriod, inputPeriod * normalWidth);
-        }
-        const float defaultWidth = std::max (0.515f, 0.55f / std::max (0.25f, ratio));
-        // Larger upward changes need a little more overlap to avoid an
-        // underpowered two-grain junction. Only alter ratios above 1.5x:
-        // normal correction and its latency budget stay unchanged.
-        const float largeUpward = std::clamp ((ratio - 1.5f) * 2.0f, 0.0f, 1.0f);
-        const float width = defaultWidth + largeUpward * (std::max (defaultWidth, 0.62f) - defaultWidth);
-        return std::min (maxPeriod, inputPeriod * width);
+        if (! lowLatencyMode)
+            return std::min (maxHalfWidth, period);
+
+        // Keep a little overlap without carrying the previous 1.20-period support
+        // into every ratio. At unity, 0.515 periods gives 1.03 periods of grain
+        // support. Downward shifts get 1.10 output periods via 0.55 / pitchRatio;
+        // this wider margin is important for preserving the tested downward tuning.
+        // More aggressive source-search/template reductions were tested separately
+        // and rejected because they regressed corrected-note accuracy.
+        const float overlapSafeWidth = std::max (0.515f, 0.55f / std::max (0.25f, pitchRatio));
+        return std::min (maxHalfWidth, period * overlapSafeWidth);
     }
 
-    void spawn() noexcept
+    void spawnGrain() noexcept
     {
         const float hw = halfWidth();
-        const double centre = nextSynthesisMark;
-        nextSynthesisMark += (double) inputPeriod / (double) ratio;
-        if (nextSynthesisMark <= centre) nextSynthesisMark = centre + 2.0;
+        const double centre = nextMark;
+        nextMark += period / pitchRatio;
 
-        // Always choose source grains from a region ALREADY available at the
-        // time of scheduling, including the interpolation neighbourhood.
-        const double templateRadius = std::max (4.0, (fast ? 0.06 : 0.17) * (double) inputPeriod);
-        // Expand the search after a weak phase match, without growing the
-        // number of NCC candidates or adding any audio lookahead.
-        const double reach = (fast ? (lowCoherenceGrains > 0 ? 0.09 : 0.04) : 0.13) * (double) inputPeriod;
-        const double desired = centre - ((double) hw + reach + templateRadius + 4.0
-                                        + (fast ? 0.005 : 0.12) * (double) inputPeriod);
-        const double latest = (double) now - templateRadius - 3.0;
-        double sourceMark = std::min (desired, latest);
+        double sourceCentre;
 
-        if (! pitched)
+        if (! isVoiced)
         {
-            sourceValid = false;
+            // Unvoiced: contiguous pass-through at a constant, whole-sample delay (bit-exact reconstruction).
+            sourceCentre = centre - unvoicedDelay;
+            hasLastSource = false;
         }
-        else if (sourceValid)
+        else
         {
-            // Synthesis marks advance at target F0; source marks advance on
-            // source-period boundaries. This preserves the spectral envelope.
-            const double count = std::floor ((desired - lastSourceMark) /
-                                              (double) inputPeriod + 0.20);
-            const double expected = lastSourceMark + count * (double) inputPeriod;
-            sourceMark = expected > latest ? expected - std::ceil ((expected - latest) / (double) inputPeriod) * (double) inputPeriod : expected;
-            const int radius = (int) std::ceil (reach);
-            const int h = std::min ((int) templateRadius, ((int) matchTemplate.size() - 1) / 2);
-            if (lastSourceMark >= (double) h + 2.0 && h >= 4 && radius > 0)
+            // Voiced: each source grain is placed one estimated period after the previous one, then slid a
+            // little to wherever the waveform best matches the previous grain. That locks successive source
+            // grains to the real glottal pulses, so the output pitch is set by the synthesis spacing alone
+            // and does not inherit errors or staleness in the pitch estimate.
+            const double reach = (lowLatencyMode ? 0.05 : 0.15) * (double) period;
+            const double half = std::max (4.0, (lowLatencyMode ? 0.09 : 0.2) * (double) period);
+            const double safetyMargin = (lowLatencyMode ? 0.005 : 0.1) * (double) period;
+            const double desired = centre - ((double) hw + reach + half + 3.0 + safetyMargin);
+
+            if (! hasLastSource)
+                sourceCentre = desired;
+            else
             {
-                // NCC must normalize using the SAME temporal samples in the
-                // reference and candidate. Earlier versions summed reference
-                // energy at full resolution but candidate energy on a decimated
-                // subset, artificially depressing match scores for low notes.
-                const int sampleStride = h > 100 ? 4 : (h > 40 ? 2 : 1);
-                float refEnergy = 1.0e-10f;
-                for (int j = -h; j <= h; j += sampleStride)
+                // Keep source grains on whole pitch periods. This floor-based phase
+                // progression preserves the tested pitch-shifting behavior; it can
+                // repeat a pulse temporarily on upward shifts, so the host latency
+                // budget must cover the resulting bounded delay excursion.
+                const double predicted = lastSourceCentre
+                                       + std::floor ((desired - lastSourceCentre) / (double) period + 0.1) * (double) period;
+                const double newest = (double) now - 2.0 - half;            // latest centre whose neighbourhood exists
+                const int lo = (int) std::floor (predicted - reach), hi = (int) std::floor (std::min (predicted + reach, newest));
+                sourceCentre = std::min (predicted, newest);
+
+                const int h = (int) half, count = std::min (hi - lo + 1, (int) scores.size());
+                if (count > 2 && 2 * h + 1 <= (int) reference.size())
                 {
-                    const float x = read (lastSourceMark + (double) j);
-                    matchTemplate[(size_t) (j + h)] = x;
-                    refEnergy += x * x;
-                }
-                const int lo = (int) std::ceil (sourceMark - (double) radius);
-                const int hi = (int) std::floor (std::min (sourceMark + (double) radius, latest));
-                float best = -1.0f;
-                double bestCentre = sourceMark;
-                // Coarse-to-fine normalized correlation. Hard upper work bound
-                // (at most 25 + 7 candidates) reduces worst-case callback CPU.
-                const int stride = std::max (1, (hi - lo) / 12);
-                for (int pass = 0; pass < 2; ++pass)
-                {
-                    const int from = pass == 0 ? lo : std::max (lo, (int) bestCentre - stride);
-                    const int to = pass == 0 ? hi : std::min (hi, (int) bestCentre + stride);
-                    const int step = pass == 0 ? stride : std::max (1, (stride + 3) / 4);
-                    for (int k = from; k <= to; k += step)
+                    // The previous grain's neighbourhood is the template (read once, fractional position).
+                    float refEnergy = 1.0e-9f;
+                    for (int j = -h; j <= h; ++j) { const float r = read (lastSourceCentre + (double) j); reference[(size_t) (j + h)] = r; refEnergy += r * r; }
+
+                    float best = -2.0f; int bestAt = 0;
+                    for (int i = 0; i < count; ++i)
                     {
-                        float dot = 0.0f, e = 1.0e-10f;
-                        for (int j = -h; j <= h; j += sampleStride)
+                        const int64_t centreIndex = (int64_t) lo + i;
+                        float num = 0.0f, energy = 1.0e-9f;
+                        for (int j = -h; j <= h; ++j)
                         {
-                            const float x = read ((double) k + (double) j);
-                            dot += x * matchTemplate[(size_t) (j + h)];
-                            e += x * x;
+                            const float a = buffer[(size_t) ((centreIndex + j) & mask)];
+                            num += a * reference[(size_t) (j + h)]; energy += a * a;
                         }
-                        const float score = dot / std::sqrt (e * refEnergy);
-                        if (score > best)
-                        {
-                            best = score;
-                            bestCentre = (double) k;
-                        }
+                        const float score = num / std::sqrt (energy * refEnergy);
+                        scores[(size_t) i] = score;
+                        if (score > best) { best = score; bestAt = i; }
                     }
-                }
-                // Normal mode has enough grain/latency headroom for fractional
-                // refinement. Live mode deliberately retains the existing
-                // integer match to protect its tighter phase/latency bounds.
-                // Coarse/fine NCC above works at integer input samples. A
-                // persistent fractional source period (e.g. 48k / 213 Hz)
-                // otherwise quantizes the pulse centre by up to half a sample
-                // at every grain. Estimate the local NCC maximum with one
-                // bounded, three-point fractional refinement. The synthesized
-                // clock remains continuous; only the source pulse's alignment
-                // is refined. Unlike per-buffer oscillator phase resets this
-                // introduces no extra lookahead and never allocates.
-                if (! fast && best > 0.55f && bestCentre >= (double) lo + 1.0 &&
-                    bestCentre <= (double) hi - 1.0)
-                {
-                    const auto fractionalScore = [&] (double position) noexcept
+
+                    if (best > 0.3f)
                     {
-                        float dot = 0.0f, energy = 1.0e-10f;
-                        for (int j = -h; j <= h; j += sampleStride)
+                        double offset = 0.0;
+                        if (bestAt > 0 && bestAt + 1 < count)
                         {
-                            const float x = read (position + (double) j);
-                            dot += x * matchTemplate[(size_t) (j + h)];
-                            energy += x * x;
+                            const float l = scores[(size_t) bestAt - 1], c = scores[(size_t) bestAt], r = scores[(size_t) bestAt + 1];
+                            const float den = l - 2.0f * c + r;
+                            if (std::abs (den) > 1.0e-9f) offset = std::clamp (0.5 * (double) (l - r) / (double) den, -0.5, 0.5);
                         }
-                        return dot / std::sqrt (energy * refEnergy);
-                    };
-                    const float left = fractionalScore (bestCentre - 0.5);
-                    const float mid = best; // Already evaluated at the integer winner.
-                    const float right = fractionalScore (bestCentre + 0.5);
-                    const float curvature = left - 2.0f * mid + right;
-                    if (curvature < -1.0e-5f)
-                    {
-                        const float delta = std::clamp (0.25f * (left - right) / curvature,
-                                                        -0.5f, 0.5f);
-                        const float refined = fractionalScore (bestCentre + (double) delta);
-                        if (refined > best)
-                        {
-                            best = refined;
-                            bestCentre += (double) delta;
-                        }
-                    }
-                }
-                lastPhaseCorrelation = best;
-                if (best > 0.44f)
-                {
-                    sourceMark = bestCentre;
-                    if (best > 0.70f) lowCoherenceGrains = 0;
-                }
-                else
-                {
-                    if (++lowCoherenceGrains >= 4)
-                    {
-                        // A stale source template can lock consecutive grains
-                        // to a former syllable and generate phase-cancellation
-                        // bursts. Reacquire once after repeated weak NCC.
-                        sourceValid = false;
-                        lowCoherenceGrains = 0;
-                        ++phaseReacquisitions;
+                        sourceCentre = (double) (lo + bestAt) + offset;
                     }
                 }
             }
+            hasLastSource = true;
+            lastSourceCentre = sourceCentre;
+            lastDelay = centre - sourceCentre;
+            unvoicedDelay = std::max (8.0, std::round (lastDelay));
         }
 
-        if (pitched)
-        {
-            lastSourceMark = sourceMark;
-            lastSourceAgeSamples = (float) std::clamp ((double) now - sourceMark, 0.0, (double) (sr * 0.5));
-            sourceValid = true;
-            const float nextDelay = (float) std::clamp (centre - sourceMark, 6.0, 2.4 * (double) maxPeriod);
-            // Update the passthrough tap with a crossfade only when entering
-            // a new source-delay region (not for every input sample).
-            if (std::abs (nextDelay - dryDelay) > 2.0f && dryFade >= 1.0f)
-            {
-                previousDryDelay = dryDelay;
-                dryDelay = nextDelay;
-                dryFade = 0.0f;
-            }
-        }
-
-        // During attack/startup the source window may refer to history before
-        // sample zero. The ring is initialized to silence, never stale memory.
-        bool placed = false;
         for (auto& g : grains)
         {
-            if (g.active && (double) now - g.start >= g.length) g.active = false;
             if (g.active) continue;
             g.active = true;
-            g.start = centre - (double) hw;
-            g.length = 2.0 * (double) hw;
-            g.sourceStart = sourceMark - (double) hw;
-            g.delay = centre - sourceMark;
-            ++emittedGrains;
-            placed = true;
-            break;
+            g.start = centre - hw;
+            g.length = 2.0 * hw;
+            g.sourceStart = sourceCentre - hw;
+            return;
         }
-        if (! placed) ++saturatedGrains; // separately report events lost at the grain-bank limit
     }
 
     float windowAt (float position) const noexcept
     {
-        const float index = std::clamp (position, 0.0f, 1.0f) * (float) (window.size() - 1);
+        const float index = position * (float) (window.size() - 1);
         const size_t i = (size_t) index;
-        const float a = index - (float) i;
-        return i + 1 < window.size() ? window[i] + a * (window[i + 1] - window[i]) : window.back();
+        const float frac = index - (float) i;
+        return i + 1 < window.size() ? window[i] + frac * (window[i + 1] - window[i]) : window.back();
     }
 
     float read (double position) const noexcept
     {
-        const int64_t ix = (int64_t) std::floor (position);
-        const float frac = (float) (position - (double) ix);
-        const float xm1 = history[(size_t) ((ix - 1) & mask)];
-        const float x0 = history[(size_t) (ix & mask)];
-        const float x1 = history[(size_t) ((ix + 1) & mask)];
-        const float x2 = history[(size_t) ((ix + 2) & mask)];
+        const int64_t i = (int64_t) std::floor (position);
+        const float f = (float) (position - (double) i);
+        const float xm1 = buffer[(size_t) ((i - 1) & mask)], x0 = buffer[(size_t) (i & mask)],
+                    x1  = buffer[(size_t) ((i + 1) & mask)], x2 = buffer[(size_t) ((i + 2) & mask)];
         const float c1 = 0.5f * (x1 - xm1);
         const float c2 = xm1 - 2.5f * x0 + 2.0f * x1 - 0.5f * x2;
         const float c3 = 0.5f * (x2 - xm1) + 1.5f * (x0 - x1);
-        return ((c3 * frac + c2) * frac + c1) * frac + x0;
+        return ((c3 * f + c2) * f + c1) * f + x0;
     }
 
-    double sr = 48000.0;
-    int64_t now = 0, mask = 0;
-    std::vector<float> history, matchTemplate;
-    std::array<Grain, 12> grains {};
+    std::vector<float> buffer, scores, reference;
+    int64_t mask = 0, now = 0;
+    bool lowLatencyMode = false;
+    std::array<Grain, 24> grains {};
     std::array<float, 1024> window {};
-    double nextSynthesisMark = 0.0, lastSourceMark = 0.0, latencyEstimate = 200.0;
-    float inputPeriod = 384.0f, ratio = 1.0f, unvoicedPeriod = 384.0f, maxPeriod = 1440.0f;
-    float voicedAlpha = 0.005f, levelAlpha = 0.0006f, voicedMix = 0.0f;
-    float dryDelay = 240.0f, previousDryDelay = 240.0f, dryFade = 1.0f;
-    float unityMix = 0.0f, unityDelay = 240.0f, unityAlpha = 0.003f, unityExitAlpha = 0.01f;
-    std::vector<float> wetHistory; // 2048-sample power-of-two ring
-    float inputPower = 1.0e-7f, outputPower = 1.0e-7f, gain = 1.0f, desiredGainSmoothed = 1.0f;
-    float overlapWeightSum = 0.0f, lastPhaseCorrelation = 0.0f, lastSourceAgeSamples = 0.0f;
-    unsigned levelCounter = 0;
-    bool sourceValid = false, fast = true, pitched = false, recentlyShifted = false, unityRequested = false;
-    uint64_t dropoutCount = 0, emittedGrains = 0, saturatedGrains = 0;
-    uint64_t phaseReacquisitions = 0;
-    int lowCoherenceGrains = 0;
+    double nextMark = 0.0, lastSourceCentre = 0.0, lastDelay = 196.0, unvoicedDelay = 196.0;
+    bool hasLastSource = false, isVoiced = false;
+    float voicedMix = 0.0f, voiceTransitionAlpha = 0.005f;
+    float period = 350.0f, unvoicedPeriod = 350.0f, maxHalfWidth = 1300.0f, pitchRatio = 1.0f;
 };
 
 //==============================================================================
@@ -1174,20 +696,6 @@ inline KeyEstimator::Result estimateKey (const float* audio, size_t numSamples, 
 class RealtimeAutotune
 {
 public:
-    struct Diagnostics
-    {
-        uint64_t analysisHop = 0;
-        float detectedMidi = -1.0f, confidence = 0.0f, correctionSemitones = 0.0f;
-        float targetRatio = 1.0f, smoothedRatio = 1.0f, estimatedPeriodSamples = 0.0f;
-        // Scheduled grain clock, NOT a measurement of the rendered waveform's F0.
-        float scheduledOutputPeriodSamples = 0.0f;
-        float synthesisGain = 1.0f;
-        float rawFrequencyHz = 0.0f, alternateFrequencyHz = 0.0f;
-        float phaseCorrelation = 0.0f, overlapWeightSum = 0.0f, sourceAgeSamples = 0.0f;
-        int targetMidi = -1, activeGrains = 0;
-        uint64_t grainDropouts = 0, grainSaturations = 0, phaseReacquisitions = 0;
-        bool voiced = false, pendingNote = false;
-    };
     // minHz/maxHz bound the pitch search (default suits speech and singing; lower minHz for basses).
     void prepare (double newSampleRate, float minHz = 70.0f, float maxHz = 1000.0f)
     {
@@ -1200,8 +708,6 @@ public:
         ratioCoeff = 1.0f - std::exp (-1.0f / (0.002f * (float) sampleRate));
         fadeStep   = 1.0f / (0.010f * (float) sampleRate);   // 10 ms bypass crossfade
         holdLimit  = 0.02f; // bridge detector dropouts up to this long; longer ones (consonants) fall back to pass-through
-        onsetFastCoeff = 1.0f - std::exp (-1.0f / (float) (sampleRate * 0.002));
-        onsetSlowCoeff = 1.0f - std::exp (-1.0f / (float) (sampleRate * 0.025));
         reset();
     }
 
@@ -1216,10 +722,7 @@ public:
         }
         resetTracking();
         ratio = 1.0f; period = 0.0f;
-        outputPeriodValid = false; outputPeriod = 0.0f;
-        analysisHops = 0;
         channelEnergy = { 0.0, 0.0 };
-        onsetFastPower = onsetSlowPower = 0.0f;
         channelsPathActive = false;
         activeChannelCount = 1;
         analysisChannel = 0;
@@ -1255,26 +758,12 @@ public:
         settings.noteConfirmMs = sane (settings.noteConfirmMs, 10.0f, 0.0f, 100.0f);
         settings.consonantReleaseMs = sane (settings.consonantReleaseMs, 8.0f, 0.0f, 30.0f);
         settings.noteStabilizerMs = sane (settings.noteStabilizerMs, 300.0f, 0.0f, 5000.0f);
-        if (settings.precisionHardTune)
-        {
-            // Compared against a supplied A-major hard-tune vocal reference.
-            // Deliberately an OPT-IN mode: it overrides natural-vibrato and
-            // note-confirmation settings, which is not suitable for all vocals.
-            settings.retuneMs = 0.0f;
-            settings.follow = 1.0f;
-            settings.noteStabilizerMs = 0.0f;
-            settings.vibratoPreserve = 0.0f;
-            settings.noteConfirmMs = 0.0f;
-            settings.voicingThreshold = 0.83f;
-        }
         mask = scaleMask (settings.scale, settings.customScale);
         detector.setThreshold (1.0f - settings.voicingThreshold);
         detector.setAnalysisHopSeconds (settings.lowLatency ? 0.0025f : 0.0050f);
         shifter.setLowLatency (settings.lowLatency);
         for (auto& channelShifter : channelShifters)
-        {
             channelShifter.setLowLatency (settings.lowLatency);
-        }
         hopSeconds = detector.getHopSeconds();
     }
     const Settings& getSettings() const noexcept { return settings; }
@@ -1289,10 +778,6 @@ public:
 
     float process (float input) noexcept
     {
-        // Host/driver samples are untrusted. A single NaN can otherwise
-        // contaminate onset filters and the YIN ring for many analysis hops;
-        // at zero Strength it was also passed straight to the DAW output.
-        if (! std::isfinite (input)) input = 0.0f;
         channelsPathActive = false;
         activeChannelCount = 1;
         if (! advanceControl (input))
@@ -1337,11 +822,6 @@ public:
         applyPendingSettings();
         if (wetGain == 0.0f && settings.bypass)
         {
-            // Full bypass still must not leak NaNs/Infs back to the host.
-            for (int c = 0; c < activeChannelCount; ++c)
-                if (channels[c] != nullptr)
-                    for (int i = 0; i < numSamples; ++i)
-                        if (! std::isfinite (channels[c][i])) channels[c][i] = 0.0f;
             idle = true;
             if (intrinsicLatencySamples != nullptr)
                 std::fill (intrinsicLatencySamples,
@@ -1369,10 +849,6 @@ public:
         {
             for (int c = 0; c < trackedChannels; ++c)
             {
-                // Clean the input before channel selection, detector history,
-                // wet processing and the zero-strength passthrough.
-                if (channels[c] != nullptr && ! std::isfinite (channels[c][i]))
-                    channels[c][i] = 0.0f;
                 const double x = channels[c] != nullptr ? (double) channels[c][i] : 0.0;
                 channelEnergy[(size_t) c] += energyAlpha * (x * x - channelEnergy[(size_t) c]);
             }
@@ -1439,50 +915,12 @@ public:
     // Host transport-delay budget is fixed until prepareToPlay; note-dependent
     // intrinsic grain delay is absorbed by OutputLatencyCompensator. This is not
     // the YIN history duration and should not change every analysis frame.
-    // Select a smaller PDC budget ONLY when the DSP is permanently locked to
-    // fast grain scheduling. A switchable normal/fast plugin must use 2.5
-    // periods because normal-mode overlap can exceed the fast delay budget.
-    // 2.0 periods for the dedicated fast-only plugin includes margin above
-    // the steady 70-Hz intrinsic-delay measurements (~1.53 periods); dynamic
-    // low-pitch speech still warrants host testing before a public release.
-    static int recommendedHostLatencySamples (double sr, float minHz = 70.0f,
-                                               bool fastOnly = false) noexcept
+    static int recommendedHostLatencySamples (double sr, float minHz = 70.0f) noexcept
     {
-        return (int) std::ceil (std::max (8000.0, sr) * (fastOnly ? 2.0 : 2.5)
-                                / (double) std::max (30.0f, minHz));
+        return (int) std::ceil (std::max (8000.0, sr) * 2.5 / (double) std::max (30.0f, minHz));
     }
     uint64_t getMaxDifferenceOperationsPerFrame() const noexcept
     { return detector.getMaxDifferenceOperationsPerFrame(); }
-    // Read ONLY on the audio thread or in an offline renderer. GUI threads
-    // must copy to their own atomics; do not read mutable DSP fields directly.
-    Diagnostics getDiagnostics() const noexcept
-    {
-        const auto& synthesis = channelsPathActive ? channelShifters[0] : shifter;
-        Diagnostics d;
-        d.analysisHop = analysisHops;
-        d.detectedMidi = detectedMidi;
-        d.confidence = detector.getConfidence();
-        d.rawFrequencyHz = detector.getRawFrequency();
-        d.alternateFrequencyHz = detector.getAlternateFrequency();
-        d.phaseCorrelation = synthesis.getLastPhaseCorrelation();
-        d.overlapWeightSum = synthesis.getOverlapWeightSum();
-        d.sourceAgeSamples = synthesis.getLastSourceAgeSamples();
-        d.correctionSemitones = shiftSemitones;
-        d.targetRatio = targetRatio;
-        d.smoothedRatio = ratio;
-        d.estimatedPeriodSamples = period;
-        d.scheduledOutputPeriodSamples = period > 0.0f && ratio > 0.0f
-            ? period / ratio : 0.0f;
-        d.synthesisGain = synthesis.getAppliedGain();
-        d.targetMidi = targetMidi;
-        d.activeGrains = synthesis.getActiveGrainCount();
-        d.grainDropouts = synthesis.getDropoutSamples();
-        d.grainSaturations = synthesis.getGrainSaturationCount();
-        d.phaseReacquisitions = synthesis.getPhaseReacquisitions();
-        d.voiced = period > 0.0f;
-        d.pendingNote = pendingNote >= 0;
-        return d;
-    }
     double getLatencySamples() const noexcept
     {
         if (! channelsPathActive)
@@ -1498,13 +936,7 @@ private:
     // Returns false only once fully bypassed, allowing the caller to leave samples untouched.
     bool advanceControl (float analysisSample) noexcept
     {
-        // Guard this internal boundary too: callers may feed an analysis
-        // channel even if the synthesizer sanitizes its own input.
-        if (! std::isfinite (analysisSample)) analysisSample = 0.0f;
-        // processChannels() applies pending settings once at the block start.
-        // Do not repeat an atomic mailbox load for every channel/sample;
-        // scalar mono processing retains its per-sample automation check.
-        if (! channelsPathActive) applyPendingSettings();
+        applyPendingSettings();
         const float goal = settings.bypass ? 0.0f : 1.0f;
         if (wetGain == 0.0f && goal == 0.0f)
         {
@@ -1526,44 +958,13 @@ private:
             idle = false;
         }
 
-        // Dual-timescale onset envelope: energy rise is evidence that a pitch
-        // change is a new syllable rather than a stationary harmonic error.
-        const float power = analysisSample * analysisSample;
-        onsetFastPower += onsetFastCoeff * (power - onsetFastPower);
-        onsetSlowPower += onsetSlowCoeff * (power - onsetSlowPower);
         if (detector.push (analysisSample))
-        {
-            ++analysisHops;
             updateControl();
-        }
 
-        if (settings.precisionHardTune && period > 0.0f && targetRatio > 0.0f)
-        {
-            // Precision mode: smooth the SYNTHESIS period, not the ratio.
-            // The ratio is relative to the pitch detector and therefore changes
-            // whenever source F0 changes. Smoothing that ratio independently of
-            // period can modulate output pitch even on a stable target note.
-            const float wantedPeriod = period / targetRatio;
-            if (! outputPeriodValid)
-            {
-                outputPeriod = wantedPeriod;
-                outputPeriodValid = true;
-            }
-            outputPeriod += (wantedPeriod - outputPeriod) * ratioCoeff;
-            ratio = std::clamp (period / std::max (8.0f, outputPeriod), 0.25f, 4.0f);
-        }
-        else
-        {
-            outputPeriodValid = false;
-            ratio += (targetRatio - ratio) * ratioCoeff;
-        }
-        // Avoid updating inactive resynthesis instances on every sample.
-        // This matters in DAWs with dozens of plugin instances.
-        if (! channelsPathActive)
-            shifter.setParameters (ratio, period);
-        else
-            for (int c = 0; c < activeChannelCount; ++c)
-                channelShifters[(size_t)c].setParameters (ratio, period);
+        ratio += (targetRatio - ratio) * ratioCoeff;
+        shifter.setParameters (ratio, period);
+        for (auto& channelShifter : channelShifters)
+            channelShifter.setParameters (ratio, period);
         return true;
     }
 
@@ -1580,8 +981,6 @@ private:
         targetNote = -1; targetRatio = 1.0f; holdTime = 0.0f; shiftSemitones = 0.0f;
         pendingNote = -1; pendingNoteSeconds = 0.0f;
         glideRemainingSeconds = 0.0f; glideShift = 0.0f;
-        outputPeriodValid = false;
-        outputPeriod = 0.0f;
     }
 
     void publishMeters (float detected, int target, float shift) noexcept
@@ -1721,13 +1120,7 @@ private:
                     pendingNoteSeconds = 0.0f;
                 }
                 pendingNoteSeconds += hopSeconds;
-                const bool realOnset = onsetSlowPower > 1.0e-6f
-                    && onsetFastPower > onsetSlowPower * 1.65f;
-                // Strong energy onsets can switch sooner; a bare frequency
-                // spike without an onset must persist longer. Octave-sized
-                // leaps demand additional confidence to avoid harmonic flips.
                 const float required = settings.noteConfirmMs * 0.001f
-                    * (realOnset && detector.getConfidence() > 0.91f ? 0.55f : 1.0f)
                     + (std::abs (proposed - previousTarget) >= 11 ? 0.012f : 0.0f);
                 if (pendingNoteSeconds >= required)
                 {
@@ -1761,10 +1154,7 @@ private:
         // While evaluating a possible new note, do NOT pull its audio toward
         // the previous target (which could be several semitones away). Coast
         // gently toward unity until the candidate is confirmed or rejected.
-        // Keep a short, unconfirmed target candidate from yanking the
-        // correction toward either note. Hold the last valid correction
-        // until the pitch change is accepted, rather than adding a scoop.
-        const float desired = pendingNote >= 0 ? correction
+        const float desired = pendingNote >= 0 ? 0.0f
             : error * std::clamp (settings.strength, 0.0f, 1.0f);
         const float coeff = settings.retuneMs < 0.5f ? 1.0f : 1.0f - std::exp (-hopSeconds * 1000.0f / settings.retuneMs);
         correction += (desired - correction) * coeff;
@@ -1790,16 +1180,11 @@ private:
             glideShift = shift;
 
         targetRatio = std::exp2 (shift / 12.0f);
-        // IMPORTANT: use the same robust MIDI estimate for grain period and
-        // note decisions. Otherwise a rejected one-hop octave glitch can
-        // still halve the grain period and generate an audible crunch.
-        period = (float) (sampleRate / (double) settings.referenceHz
-                          * std::exp2 ((69.0 - (double) m) / 12.0));
+        period = detector.getPeriodInSamples();
         publishMeters (m, targetNote, shift);
     }
 
     double sampleRate = 44100.0;
-    uint64_t analysisHops = 0;
     Settings settings;
     int mask = 0xfff;
 
@@ -1820,16 +1205,12 @@ private:
     int analysisChannel = 0;
 
     float hopSeconds = 0.005f, ratioCoeff = 0.01f, holdLimit = 0.02f, holdTime = 0.0f;
-    float onsetFastCoeff = 0.005f, onsetSlowCoeff = 0.001f;
-    float onsetFastPower = 0.0f, onsetSlowPower = 0.0f;
     std::array<float, 3> history { { 0, 0, 0 } };
     int medianCount = 0, targetNote = -1, pendingNote = -1;
     float pendingNoteSeconds = 0.0f;
     bool hasCenter = false;
     float center = 0.0f, correction = 0.0f;
     float ratio = 1.0f, targetRatio = 1.0f, period = 0.0f;
-    float outputPeriod = 0.0f;
-    bool outputPeriodValid = false;
 
     float detectedMidi = -1.0f, shiftSemitones = 0.0f;
     int targetMidi = -1;
@@ -1860,8 +1241,6 @@ public:
 
     float processSample (float input) noexcept
     {
-        // Keep invalid host samples out of persistent delay history.
-        if (! std::isfinite (input)) input = 0.0f;
         if (ring.empty()) return 0.0f;
         ring[write] = input;
         const size_t read = (write + 1u) % ring.size();
@@ -1874,52 +1253,6 @@ private:
     std::vector<float> ring;
     size_t write = 0;
     int delay = 0;
-};
-
-//==============================================================================
-// PDC-correct, allocation-free bypass for a DAW plugin that reports latency.
-// The input and synthesized output are both heard at the *same host delay*.
-// A conventional wet/dry crossfade using the undelayed input can null vocal
-// harmonics even if the pitch shifter itself is behaving correctly. Prepare
-// this helper alongside OutputLatencyCompensator and advance it ONCE per sample
-// for all channels to keep stereo imaging stable. The shifter can stay warm
-// while bypassed, avoiding a cold-start transient upon reactivation.
-class LatencyAlignedBypass
-{
-public:
-    void prepare (int hostLatencySamples, double sampleRate)
-    {
-        for (auto& delay : dryDelays)
-            delay.prepare (hostLatencySamples);
-        const double rate = std::max (8000.0, sampleRate);
-        // Short but click-free transition, independent of host block size.
-        alpha = (float) (1.0 - std::exp (-1.0 / (rate * 0.003)));
-        bypassMix = target = 0.0f;
-    }
-
-    void reset() noexcept
-    {
-        for (auto& delay : dryDelays) delay.reset();
-        bypassMix = target = 0.0f;
-    }
-
-    void setBypassed (bool bypassed) noexcept { target = bypassed ? 1.0f : 0.0f; }
-    float delayDry (int channel, float x) noexcept
-    {
-        return dryDelays[(size_t) std::clamp (channel, 0, 1)].processSample (x);
-    }
-    void advance() noexcept
-    {
-        bypassMix += (target - bypassMix) * alpha;
-        if (std::abs (target - bypassMix) < 1.0e-5f) bypassMix = target;
-    }
-    float mix (float processed, float delayedDry) const noexcept
-    { return processed + bypassMix * (delayedDry - processed); }
-    float getBypassMix() const noexcept { return bypassMix; }
-
-private:
-    std::array<FixedDirectDelay, 2> dryDelays;
-    float alpha = 0.0f, bypassMix = 0.0f, target = 0.0f;
 };
 
 //==============================================================================
@@ -1940,10 +1273,6 @@ public:
         for (auto& channel : delayLines)
             channel.assign ((size_t) ringSize, 0.0f);
         fadeLength = std::max (32, (int) std::lround (safeSampleRate * 0.004)); // 4 ms tap crossfade
-        // Chosen once per sample rate, not derived from changing voiced pitch.
-        // Approximate wet-vs-host alignment; never alter this while a sustained
-        // note is playing (the previous per-sample movement detuned the voice).
-        stableWetPadding = (int) std::lround ((double) fixedLatency * 0.60);
         reset();
     }
 
@@ -1962,17 +1291,6 @@ public:
             fadePosition[(size_t)c] = fadeLength;
         }
     }
-
-    // The legacy per-sample latency pad is a variable-rate resampler: when
-    // intrinsic telemetry moves it bends the pitch AFTER correction. On a real
-    // hard-tuned vocal that substantially undid the pitch lock. Use a fixed
-    // fractional transport pad for tuned audio instead. The shifter's intrinsic
-    // group delay is pitch-dependent, so the advertised latency remains an
-    // approximate transport budget, NOT guaranteed exact sample alignment.
-    // Null telemetry (generated tones/direct audio) remains an exact full pad.
-    void setPitchPreserving (bool enabled) noexcept { pitchPreserving = enabled; }
-    bool isPitchPreserving() const noexcept { return pitchPreserving; }
-    int getStableWetPaddingSamples() const noexcept { return stableWetPadding; }
 
     int getFixedLatencySamples() const noexcept { return fixedLatency; }
     uint64_t getOverBudgetSamples() const noexcept { return overBudgetSamples; }
@@ -2006,11 +1324,7 @@ public:
                     ++overBudgetSamples;
                 const float intrinsic = std::clamp (std::isfinite (rawIntrinsic) ? rawIntrinsic : 0.0f,
                                                    0.0f, (float) fixedLatency);
-                // Don't allow source-mark / estimator jitter to become another
-                // pitch shifter. Still support legacy behavior for comparative
-                // tests or for a caller explicitly opting out.
-                const float targetDelay = pitchPreserving && intrinsicLatencySamples != nullptr && rawIntrinsic > 0.0f
-                    ? (float) stableWetPadding : (float) fixedLatency - intrinsic;
+                const float targetDelay = (float) fixedLatency - intrinsic;
                 const size_t ch = (size_t) c;
 
                 if (fadePosition[ch] < fadeLength)
@@ -2040,8 +1354,7 @@ public:
 
             for (int c = 0; c < count; ++c)
                 if (channels[c] != nullptr)
-                    delayLines[(size_t) c][(size_t) writePosition] =
-                        std::isfinite (channels[c][i]) ? channels[c][i] : 0.0f;
+                    delayLines[(size_t) c][(size_t) writePosition] = channels[c][i];
 
             for (int c = 0; c < count; ++c)
             {
@@ -2083,8 +1396,6 @@ private:
 
     std::array<std::vector<float>, 2> delayLines;
     int fixedLatency = 0, ringSize = 0, writePosition = 0;
-    int stableWetPadding = 0;
-    bool pitchPreserving = false;
     uint64_t overBudgetSamples = 0;
     float maxObservedIntrinsic = 0.0f;
     int fadeLength = 192;

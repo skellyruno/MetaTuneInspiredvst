@@ -66,11 +66,9 @@ private:
     std::atomic<float>* sustainParameter = nullptr;
     std::atomic<float>* glideParameter = nullptr;
     std::atomic<float>* correctionLimitParameter = nullptr;
-    std::atomic<float>* precisionHardTuneParameter = nullptr;
     std::atomic<float>* noteConfirmParameter = nullptr;
     std::atomic<float>* consonantReleaseParameter = nullptr;
     std::atomic<float>* scaleParameter = nullptr;
-    std::array<std::atomic<float>*, 12> customDegreeParameters {};
     std::atomic<float>* rootParameter = nullptr;
     std::atomic<float>* lowLatencyParameter = nullptr;
     std::atomic<float>* stabilizerParameter = nullptr;
@@ -86,15 +84,13 @@ private:
     // audio callback; processBlock performs no heap allocation.
     autotune::OutputLatencyCompensator outputLatencyCompensator;
     autotune::FixedDirectDelay referenceToneDelay; // fixed host-PDC path for plugin-generated piano notes
-    autotune::LatencyAlignedBypass latencyAlignedBypass; // PDC-aligned dry/bypass branch
-    std::vector<float> dryLatencyScratch; // channel-major; allocated in prepareToPlay
     std::vector<float> intrinsicLatencyScratch; // channel-major: two blocks of per-sample delay values
     int fixedLatencySamples = 0;
     std::array<std::array<float, doublerDelayLineSize>, 2> doublerDelayLine {};
     int doublerWritePosition = 0;
     float doublerLfoPhase = 0.0f;
     float smoothedDoublerWidth = 0.46f;
-    float smoothedDoublerMix = 0.0f;
+    float smoothedDoublerMix = 0.49f;
     float referenceTonePhase = 0.0f;
     float referenceToneAmplitude = 0.0f;
     float referenceToneFrequencyHz = 440.0f;
