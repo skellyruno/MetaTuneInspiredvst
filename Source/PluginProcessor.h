@@ -5,7 +5,7 @@
 #include <vector>
 #include "RealtimeAutotune.h"
 
-class MetaTuneInspiredAudioProcessor final : public juce::AudioProcessor
+class MetaTuneInspiredAudioProcessor final : public juce::AudioProcessor, private juce::Timer
 {
 public:
     MetaTuneInspiredAudioProcessor();
@@ -54,6 +54,7 @@ public:
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameters();
+    void timerCallback() override; // message thread: safe host PDC updates
     void processDoubler(juce::AudioBuffer<float>& buffer, int startSample, int samples) noexcept;
     void processReferenceTone(juce::AudioBuffer<float>& buffer, int startSample, int samples) noexcept;
 
@@ -89,7 +90,11 @@ private:
     autotune::LatencyAlignedBypass latencyAlignedBypass; // PDC-aligned dry/bypass branch
     std::vector<float> dryLatencyScratch; // channel-major; allocated in prepareToPlay
     std::vector<float> intrinsicLatencyScratch; // channel-major: two blocks of per-sample delay values
-    int fixedLatencySamples = 0;
+    std::vector<float> normalPdcWarmScratch; // keep Normal delay ring advancing while in 3.5ms Live
+    int normalLatencySamples = 0, liveLatencySamples = 0;
+    int appliedLatencySamples = 0; // only read/written by audio thread after prepareToPlay
+    std::atomic<int> publishedLatencySamples { 0 }; // message-thread -> audio-thread handoff
+    std::atomic<bool> latencyPrepared { false };
     std::array<std::array<float, doublerDelayLineSize>, 2> doublerDelayLine {};
     int doublerWritePosition = 0;
     float doublerLfoPhase = 0.0f;

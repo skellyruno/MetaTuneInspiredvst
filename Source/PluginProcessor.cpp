@@ -79,31 +79,44 @@ juce::AudioProcessorValueTreeState::ParameterLayout MetaTuneInspiredAudioProcess
 
 void MetaTuneInspiredAudioProcessor::prepareToPlay(double sr, int maxBlock)
 {
+    // Stop the previous sample-rate timer before rebuilding the mode budgets.
+    latencyPrepared.store(false, std::memory_order_release);
+    stopTimer();
     currentSampleRate = juce::jmax(8000.0, sr);
 
     // Pulse-aligned TD-PSOLA tracks 70-1000 Hz. The same fixed budget is both
     // reported to the host and enforced by the output compensation stage below.
     realtimeAutotune.prepare(currentSampleRate, 70.0f, 1000.0f);
-    // Source-period repetition can push the measured normal-mode delay to about
-    // 2.35 periods at the 70 Hz lower tracking limit. Reserve 2.5 periods so the
-    // output compensation stage always has non-negative padding in that corner.
+    // Switchable mode: reserve the larger Normal-mode budget in all delay
+    // buffers, but publish the actual active budget to the host. The original
+    // implementation always reported Normal PDC, making Low Latency appear
+    // ineffective even though the detector and grain scheduler were faster.
+    normalLatencySamples = autotune::RealtimeAutotune::recommendedHostLatencySamples(currentSampleRate, 70.0f, false);
+    liveLatencySamples = autotune::RealtimeAutotune::ultraLowLatencyHostSamples(currentSampleRate);
 #if defined(SKELLTUNE_LIVE_FIXED_LOW_LATENCY) && SKELLTUNE_LIVE_FIXED_LOW_LATENCY
-    // Standalone Live variant: fast grain scheduler cannot be disabled, so
-    // a smaller host-reported PDC budget is safe across automation changes.
-    fixedLatencySamples = autotune::RealtimeAutotune::recommendedHostLatencySamples(currentSampleRate, 70.0f, true);
+    const bool initialLive = true;
 #else
-    fixedLatencySamples = autotune::RealtimeAutotune::recommendedHostLatencySamples(currentSampleRate, 70.0f);
+    const bool initialLive = lowLatencyParameter != nullptr
+        && lowLatencyParameter->load(std::memory_order_relaxed) > 0.5f;
 #endif
-    setLatencySamples(fixedLatencySamples);
-    outputLatencyCompensator.prepare(fixedLatencySamples, currentSampleRate);
+    const int initialBudget = initialLive ? liveLatencySamples : normalLatencySamples;
+    latencyPrepared.store(false, std::memory_order_release);
+    setLatencySamples(initialBudget);
+    publishedLatencySamples.store(initialBudget, std::memory_order_release);
+    appliedLatencySamples = initialBudget;
+    outputLatencyCompensator.prepare(normalLatencySamples, currentSampleRate);
+    outputLatencyCompensator.setHostLatencySamples(initialBudget);
     outputLatencyCompensator.setPitchPreserving(true);
-    referenceToneDelay.prepare(fixedLatencySamples);
-    latencyAlignedBypass.prepare(fixedLatencySamples, currentSampleRate);
+    referenceToneDelay.prepare(normalLatencySamples);
+    referenceToneDelay.setDelaySamples(initialBudget);
+    latencyAlignedBypass.prepare(normalLatencySamples, currentSampleRate);
+    latencyAlignedBypass.setHostLatencySamples(initialBudget);
     // Channel-major scratch storage is bounded, allocated only in prepareToPlay.
     // processBlock divides arbitrary host blocks into slices that fit this buffer;
     // it NEVER silently discards intrinsic-latency telemetry for oversize blocks.
     intrinsicLatencyScratch.assign(2u * (size_t)juce::jmax(1, juce::jmin(maxBlock, 4096)), 0.0f);
     dryLatencyScratch.assign(intrinsicLatencyScratch.size(), 0.0f);
+    normalPdcWarmScratch.assign(intrinsicLatencyScratch.size(), 0.0f);
 
     // The Doubler delay lines are fixed-capacity and reset outside the audio callback.
     doublerDelayLine = {};
@@ -126,9 +139,36 @@ void MetaTuneInspiredAudioProcessor::prepareToPlay(double sr, int maxBlock)
     targetMidiNote.store(69.0f, std::memory_order_relaxed);
     smoothedTargetMidiNote.store(69.0f, std::memory_order_relaxed);
     effectiveRetuneTimeMs.store(30.0f, std::memory_order_relaxed);
+    latencyPrepared.store(true, std::memory_order_release);
+    // Only this message-thread timer reports latency changes to the host.
+    // Neither setLatencySamples nor any buffer reallocation occurs in processBlock.
+    startTimerHz(40);
 }
 
-void MetaTuneInspiredAudioProcessor::releaseResources() {}
+void MetaTuneInspiredAudioProcessor::releaseResources()
+{
+    stopTimer();
+    latencyPrepared.store(false, std::memory_order_release);
+}
+
+void MetaTuneInspiredAudioProcessor::timerCallback()
+{
+    if (! latencyPrepared.load(std::memory_order_acquire)) return;
+#if defined(SKELLTUNE_LIVE_FIXED_LOW_LATENCY) && SKELLTUNE_LIVE_FIXED_LOW_LATENCY
+    const bool live = true;
+#else
+    const bool live = lowLatencyParameter != nullptr
+        && lowLatencyParameter->load(std::memory_order_relaxed) > 0.5f;
+#endif
+    const int requestedLatency = live ? liveLatencySamples : normalLatencySamples;
+    if (requestedLatency != publishedLatencySamples.load(std::memory_order_acquire))
+    {
+        // Not on the realtime callback. The DAW receives the new PDC before
+        // the audio thread switches its preallocated latency taps.
+        setLatencySamples(requestedLatency);
+        publishedLatencySamples.store(requestedLatency, std::memory_order_release);
+    }
+}
 
 bool MetaTuneInspiredAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
 {
@@ -199,9 +239,14 @@ void MetaTuneInspiredAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
     // Do not let an automated normal-mode toggle exceed the smaller Live PDC.
     settings.lowLatency = true;
 #else
-    settings.lowLatency = lowLatencyParameter != nullptr
-        && lowLatencyParameter->load(std::memory_order_relaxed) > 0.5f;
+    // The host-reported delay and the engine mode change together. The UI
+    // parameter is polled by the message-thread timer, never used to resize
+    // PDC history or call JUCE's host notifications from the audio thread.
+    settings.lowLatency = publishedLatencySamples.load(std::memory_order_acquire) == liveLatencySamples;
 #endif
+    // The 3.5 ms path has its own *causally bounded* shifter. Using PSOLA here
+    // would report false latency at 70 Hz (grain history exceeds 20 ms).
+    settings.ultraLowLatency = settings.lowLatency;
     // None disables the slow pitch centre; progressively longer settings reject
     // vibrato-driven target changes. The default Short retains the prior 300 ms.
     const int stabilizerTimeChoice = stabilizerTimeParameter != nullptr
@@ -239,6 +284,18 @@ void MetaTuneInspiredAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
         return;
     }
 
+    // Mode transition: bounded tap crossfades, all within buffers reserved in
+    // prepareToPlay. No interpolation or pitch movement during a steady mode.
+    const int publishedBudget = publishedLatencySamples.load(std::memory_order_acquire);
+    if (publishedBudget != appliedLatencySamples)
+    {
+        const int fadeSamples = juce::jmax(32, (int)std::lround(currentSampleRate * 0.004));
+        outputLatencyCompensator.setHostLatencySamples(publishedBudget);
+        referenceToneDelay.setDelaySamples(publishedBudget, fadeSamples);
+        latencyAlignedBypass.setHostLatencySamples(publishedBudget, fadeSamples);
+        appliedLatencySamples = publishedBudget;
+    }
+
     latencyAlignedBypass.setBypassed(bypassed);
     // While bypassed, retain the established host-aligned dry timeline.
     // The voiced path uses stable padding to avoid undoing pitch correction.
@@ -259,14 +316,34 @@ void MetaTuneInspiredAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
                 // Sanitize before BOTH the delayed dry/bypass ring and the
                 // pitch tracker. Otherwise a single invalid DAW sample can
                 // persist in the PDC bypass line even after the DSP recovers.
-                if (! std::isfinite (slice[(size_t)c][i])) slice[(size_t)c][i] = 0.0f;
+                slice[(size_t)c][i] = autotune::boundedAudioSample(slice[(size_t)c][i]);
                 dryLatencyScratch[(size_t)c * (size_t)n + (size_t)i]
                     = latencyAlignedBypass.delayDry(c, slice[(size_t)c][i]);
             }
 
         realtimeAutotune.processChannels(slice.data(), channels, n, intrinsicLatencyScratch.data());
         processDoubler(buffer, offset, n);
-        outputLatencyCompensator.processChannels(slice.data(), channels, n, intrinsicLatencyScratch.data());
+        // The micro shifter's two read heads already operate wholly within
+        // the 3.5 ms host budget. Adding Normal-mode PSOLA padding here would
+        // make Live mode late again. The Normal path remains unchanged.
+        if (publishedBudget != liveLatencySamples)
+        {
+            outputLatencyCompensator.processChannels(slice.data(), channels, n, intrinsicLatencyScratch.data());
+        }
+        else
+        {
+            // The Normal-mode compensator still must advance through the
+            // stream while Live is active. Otherwise switching back can replay
+            // *stale* audio from before Live was enabled for ~35 milliseconds.
+            // This scratch is preallocated in prepareToPlay; no callback resize.
+            std::array<float*, 2> warm { normalPdcWarmScratch.data(), nullptr };
+            for (int c = 0; c < channels; ++c)
+            {
+                warm[(size_t)c] = normalPdcWarmScratch.data() + (size_t)c * (size_t)n;
+                std::copy_n(slice[(size_t)c], n, warm[(size_t)c]);
+            }
+            outputLatencyCompensator.processChannels(warm.data(), channels, n, intrinsicLatencyScratch.data());
+        }
         // Reference piano is generated locally, so it needs exactly the host
         // budget, NOT the voice's pitch-dependent delay-tap compensation.
         processReferenceTone(buffer, offset, n);
