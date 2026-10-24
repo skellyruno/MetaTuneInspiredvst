@@ -19,6 +19,7 @@ MetaTuneInspiredAudioProcessor::MetaTuneInspiredAudioProcessor()
         customDegreeParameters[(size_t)i] = parameters.getRawParameterValue("customDegree" + juce::String(i));
     rootParameter = parameters.getRawParameterValue("root");
     lowLatencyParameter = parameters.getRawParameterValue("lowLatency");
+    fixedHorizonParameter = parameters.getRawParameterValue("fixedHorizonVoiced");
     stabilizerParameter = parameters.getRawParameterValue("stabilizer");
     stabilizerTimeParameter = parameters.getRawParameterValue("stabilizerTime");
     pitchReferenceParameter = parameters.getRawParameterValue("pitchReference");
@@ -56,6 +57,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout MetaTuneInspiredAudioProcess
     p.add(std::make_unique<AudioParameterChoice>("stabilizerTime", "Note Stabilizer Time",
                                                   StringArray { "None", "Short", "Mid", "Long" }, 1));
     p.add(std::make_unique<AudioParameterBool>("lowLatency", "Low Latency", true));
+    p.add(std::make_unique<AudioParameterBool>("fixedHorizonVoiced", "Legacy Fixed Mode (Disabled: >10ms)", false));
     p.add(std::make_unique<AudioParameterChoice>("scale", "Scale",
         StringArray{"Chromatic", "Major", "Minor", "Harmonic Minor", "Major Pentatonic",
                     "Minor Pentatonic", "Blues", "Dorian", "Custom"}, 0));
@@ -91,25 +93,31 @@ void MetaTuneInspiredAudioProcessor::prepareToPlay(double sr, int maxBlock)
     // buffers, but publish the actual active budget to the host. The original
     // implementation always reported Normal PDC, making Low Latency appear
     // ineffective even though the detector and grain scheduler were faster.
-    normalLatencySamples = autotune::RealtimeAutotune::recommendedHostLatencySamples(currentSampleRate, 70.0f, false);
+    // No production processing mode is permitted to exceed 10ms.
+    // "Quality" selects the bounded 8ms shifter, never the legacy 35ms PSOLA.
+    normalLatencySamples = autotune::RealtimeAutotune::realtimeQualityHostSamples(currentSampleRate);
     liveLatencySamples = autotune::RealtimeAutotune::ultraLowLatencyHostSamples(currentSampleRate);
+    fixedHorizonLatencySamples = normalLatencySamples; // only for existing ABI/state compatibility
+    const int maxPreparedLatency = normalLatencySamples;
 #if defined(SKELLTUNE_LIVE_FIXED_LOW_LATENCY) && SKELLTUNE_LIVE_FIXED_LOW_LATENCY
     const bool initialLive = true;
 #else
     const bool initialLive = lowLatencyParameter != nullptr
         && lowLatencyParameter->load(std::memory_order_relaxed) > 0.5f;
 #endif
+    // Deliberately ignore the old fixedHorizonVoiced parameter: preset loads
+    // may retain it, but it cannot activate the 80ms renderer.
     const int initialBudget = initialLive ? liveLatencySamples : normalLatencySamples;
     latencyPrepared.store(false, std::memory_order_release);
     setLatencySamples(initialBudget);
     publishedLatencySamples.store(initialBudget, std::memory_order_release);
     appliedLatencySamples = initialBudget;
-    outputLatencyCompensator.prepare(normalLatencySamples, currentSampleRate);
+    outputLatencyCompensator.prepare(maxPreparedLatency, currentSampleRate);
     outputLatencyCompensator.setHostLatencySamples(initialBudget);
     outputLatencyCompensator.setPitchPreserving(true);
-    referenceToneDelay.prepare(normalLatencySamples);
+    referenceToneDelay.prepare(maxPreparedLatency);
     referenceToneDelay.setDelaySamples(initialBudget);
-    latencyAlignedBypass.prepare(normalLatencySamples, currentSampleRate);
+    latencyAlignedBypass.prepare(maxPreparedLatency, currentSampleRate);
     latencyAlignedBypass.setHostLatencySamples(initialBudget);
     // Channel-major scratch storage is bounded, allocated only in prepareToPlay.
     // processBlock divides arbitrary host blocks into slices that fit this buffer;
@@ -244,9 +252,12 @@ void MetaTuneInspiredAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
     // PDC history or call JUCE's host notifications from the audio thread.
     settings.lowLatency = publishedLatencySamples.load(std::memory_order_acquire) == liveLatencySamples;
 #endif
-    // The 3.5 ms path has its own *causally bounded* shifter. Using PSOLA here
-    // would report false latency at 70 Hz (grain history exceeds 20 ms).
-    settings.ultraLowLatency = settings.lowLatency;
+    // Strict-time profile: 3.5ms Live, 8ms Quality. Both synth branches read
+    // only within their respective budgets; legacy historical and 80ms
+    // reconstruction paths remain in research source but are not reachable.
+    settings.strictRealtime = true;
+    settings.ultraLowLatency = true;
+    settings.fixedHorizonVoiced = false;
     // None disables the slow pitch centre; progressively longer settings reject
     // vibrato-driven target changes. The default Short retains the prior 300 ms.
     const int stabilizerTimeChoice = stabilizerTimeParameter != nullptr
@@ -323,27 +334,8 @@ void MetaTuneInspiredAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
 
         realtimeAutotune.processChannels(slice.data(), channels, n, intrinsicLatencyScratch.data());
         processDoubler(buffer, offset, n);
-        // The micro shifter's two read heads already operate wholly within
-        // the 3.5 ms host budget. Adding Normal-mode PSOLA padding here would
-        // make Live mode late again. The Normal path remains unchanged.
-        if (publishedBudget != liveLatencySamples)
-        {
-            outputLatencyCompensator.processChannels(slice.data(), channels, n, intrinsicLatencyScratch.data());
-        }
-        else
-        {
-            // The Normal-mode compensator still must advance through the
-            // stream while Live is active. Otherwise switching back can replay
-            // *stale* audio from before Live was enabled for ~35 milliseconds.
-            // This scratch is preallocated in prepareToPlay; no callback resize.
-            std::array<float*, 2> warm { normalPdcWarmScratch.data(), nullptr };
-            for (int c = 0; c < channels; ++c)
-            {
-                warm[(size_t)c] = normalPdcWarmScratch.data() + (size_t)c * (size_t)n;
-                std::copy_n(slice[(size_t)c], n, warm[(size_t)c]);
-            }
-            outputLatencyCompensator.processChannels(warm.data(), channels, n, intrinsicLatencyScratch.data());
-        }
+        // No extra PSOLA delay stage: both real-time shifters are already
+        // bounded at 3.5 / 8.0 ms, and the doubled voice adds at most 1.75 ms.
         // Reference piano is generated locally, so it needs exactly the host
         // budget, NOT the voice's pitch-dependent delay-tap compensation.
         processReferenceTone(buffer, offset, n);
@@ -437,7 +429,7 @@ void MetaTuneInspiredAudioProcessor::processDoubler(juce::AudioBuffer<float>& bu
         ? juce::jlimit(0.0f, 1.0f, doublerMixParameter->load(std::memory_order_relaxed) / 100.0f)
         : (globallyBypassed ? 0.0f : 0.49f);
     const float parameterSmoothing = 1.0f - std::exp(-1.0f / (float)(currentSampleRate * 0.008));
-    const float centreDelay = (float)currentSampleRate * 0.014f;
+    const float centreDelay = (float)(currentSampleRate * autotune::latency_limits::doublerCentreMs * 0.001);
     const float lfoIncrement = juce::MathConstants<float>::twoPi * 0.21f / (float)currentSampleRate;
     auto* left = buffer.getWritePointer(0, startSample);
     auto* right = channels > 1 ? buffer.getWritePointer(1, startSample) : nullptr;
@@ -468,7 +460,9 @@ void MetaTuneInspiredAudioProcessor::processDoubler(juce::AudioBuffer<float>& bu
         smoothedDoublerMix += (targetMix - smoothedDoublerMix) * parameterSmoothing;
         const float width = smoothedDoublerWidth;
         const float mix = smoothedDoublerMix;
-        const float depth = (float)currentSampleRate * (0.0005f + 0.0025f * width);
+        const float depth = (float)(currentSampleRate * 0.001 *
+            (autotune::latency_limits::doublerDepthBaseMs +
+             autotune::latency_limits::doublerDepthWidthMs * width));
         const float inL = left[i];
         const float inR = channels > 1 ? right[i] : inL;
         doublerDelayLine[0][(size_t)doublerWritePosition] = inL;

@@ -34,6 +34,10 @@ int main()
         if(block%20==0)
         {
             settings.lowLatency = (block%40)==0;
+            settings.ultraLowLatency = settings.lowLatency;
+            // V31: exercise the guarded historical carrier from an actual
+            // precision callback, including repeated mode transitions.
+            settings.precisionHardTune = (block % 80) < 40;
             settings.bypass = (block%60)==20;
             settings.retuneMs = (float)(block%100);
             settings.glideMs = (float)(block%70);
@@ -95,5 +99,5 @@ int main()
     }
     const unsigned count=allocations.load();
     if(count) {std::fprintf(stderr,"Heap allocations inside callback: %u\n",count);return 1;}
-    std::puts("PASS 300 stereo callbacks, six phase handoffs, 300 PDC-aligned bypass blocks: no audio-thread heap allocation");
+    std::puts("PASS 300 stereo/live callbacks, six phase handoffs, 300 PDC-aligned bypass blocks: no audio-thread heap allocation");
 }

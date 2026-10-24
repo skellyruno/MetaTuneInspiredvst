@@ -835,7 +835,7 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     latencyAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(processor.parameters,"lowLatency",lowLatency);
     // Note Stabilizer and Low Latency are independently selectable in MetaTune.
     // Live also changes the host-reported PDC; Normal uses a larger grain budget.
-    lowLatency.setTooltip("Live: 3.5 ms maximum voice-history delay (different pitch engine). Off: higher-fidelity PSOLA at ~35.7 ms. Switching modes can cause a short timing jump; allow host PDC refresh.");
+    lowLatency.setTooltip("Live: <=3.5 ms bounded vocal transport. Off: <=8 ms Quality transport. Both under 10 ms, including the short doubler tap. Host PDC refresh on mode change.");
     stabilizer.setEnabled(true);
     lowLatency.onClick = [this]() { repaint(); };
     stabilizer.onClick = [this]() { repaint(); };

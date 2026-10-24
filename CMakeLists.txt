@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(MetaTuneInspired VERSION 0.1.0)
+project(MetaTuneInspired VERSION 1.11.0)
 
 # Configure with -DJUCE_PATH=/path/to/JUCE (JUCE 7.0.8+ recommended).
 if(NOT DEFINED JUCE_PATH)
@@ -53,10 +53,21 @@ if(SKELLTUNE_BUILD_TESTS)
     add_executable("${test_name}" "${test_source}")
     target_compile_features("${test_name}" PRIVATE cxx_std_17)
     target_include_directories("${test_name}" PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Source")
-    if(test_name STREQUAL "RealtimeAutotune_real_vocal_octave")
-      add_test(NAME "${test_name}" COMMAND "${test_name}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/assets/real_voice_octave_200hz.wav")
-    else()
-      add_test(NAME "${test_name}" COMMAND "${test_name}")
-    endif()
+    add_test(NAME "${test_name}" COMMAND "${test_name}")
   endforeach()
+endif()
+
+# This target is compiled and executed only by the Windows GitHub Actions job.
+# It loads the produced VST3 through JUCE's VST3PluginFormat (not the source
+# processor class), so basic Windows binary, scanning and state bugs surface.
+option(SKELLTUNE_BUILD_WINDOWS_HOST_SMOKE "Build JUCE VST3 host smoke executable" OFF)
+if(WIN32 AND SKELLTUNE_BUILD_WINDOWS_HOST_SMOKE)
+  juce_add_console_app(SkellyVST3Smoke PRODUCT_NAME "Skelly VST3 Smoke")
+  target_sources(SkellyVST3Smoke PRIVATE tools/windows_vst3_smoke.cpp)
+  target_compile_features(SkellyVST3Smoke PRIVATE cxx_std_17)
+  target_compile_definitions(SkellyVST3Smoke PRIVATE
+      JUCE_PLUGINHOST_VST3=1 JUCE_MODAL_LOOPS_PERMITTED=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+  target_link_libraries(SkellyVST3Smoke PRIVATE
+      juce::juce_audio_processors juce::juce_audio_utils
+      juce::juce_recommended_config_flags)
 endif()
