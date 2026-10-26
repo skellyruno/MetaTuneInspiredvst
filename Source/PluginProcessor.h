@@ -74,6 +74,7 @@ private:
     std::array<std::atomic<float>*, 12> customDegreeParameters {};
     std::atomic<float>* rootParameter = nullptr;
     std::atomic<float>* lowLatencyParameter = nullptr;
+    std::atomic<float>* snapLiveParameter = nullptr; // V1.13: SnapTune-derived Live renderer (needs Low Latency)
     std::atomic<float>* fixedHorizonParameter = nullptr;
     std::atomic<float>* stabilizerParameter = nullptr;
     std::atomic<float>* stabilizerTimeParameter = nullptr;
@@ -92,7 +93,7 @@ private:
     std::vector<float> dryLatencyScratch; // channel-major; allocated in prepareToPlay
     std::vector<float> intrinsicLatencyScratch; // channel-major: two blocks of per-sample delay values
     std::vector<float> normalPdcWarmScratch; // keep Normal delay ring advancing while in 3.5ms Live
-    int normalLatencySamples = 0, liveLatencySamples = 0, fixedHorizonLatencySamples = 0;
+    int normalLatencySamples = 0, liveLatencySamples = 0, snapLiveLatencySamples = 0, fixedHorizonLatencySamples = 0;
     int appliedLatencySamples = 0; // only read/written by audio thread after prepareToPlay
     std::atomic<int> publishedLatencySamples { 0 }; // message-thread -> audio-thread handoff
     std::atomic<bool> latencyPrepared { false };

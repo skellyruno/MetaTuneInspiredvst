@@ -796,7 +796,7 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     presetLabel.setText("No preset selected", juce::dontSendNotification);
     presetLabel.setJustificationType(juce::Justification::centredLeft);
 
-    juce::Component* components[] = { &speed, &amount, &sustain, &scale, &root, &stabilizer, &lowLatency,
+    juce::Component* components[] = { &speed, &amount, &sustain, &scale, &root, &stabilizer, &lowLatency, &snapLive,
                                       &noteReadout, &status };
     for (auto* c : components) addAndMakeVisible(c);
 
@@ -809,7 +809,7 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
         combo->setColour(juce::ComboBox::outlineColourId, juce::Colour(0xff77777e));
         combo->setColour(juce::ComboBox::arrowColourId, text);
     }
-    for (auto* toggle : { &stabilizer, &lowLatency })
+    for (auto* toggle : { &stabilizer, &lowLatency, &snapLive })
     {
         toggle->setColour(juce::ToggleButton::textColourId, text);
         toggle->setColour(juce::ToggleButton::tickColourId, cyan);
@@ -833,11 +833,14 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     rootAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor.parameters,"root",root);
     stabAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(processor.parameters,"stabilizer",stabilizer);
     latencyAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(processor.parameters,"lowLatency",lowLatency);
+    snapLiveAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(processor.parameters,"snapLive",snapLive);
     // Note Stabilizer and Low Latency are independently selectable in MetaTune.
     // Live also changes the host-reported PDC; Normal uses a larger grain budget.
-    lowLatency.setTooltip("Live: <=3.5 ms bounded vocal transport. Off: <=8 ms Quality transport. Both under 10 ms, including the short doubler tap. Host PDC refresh on mode change.");
+    lowLatency.setTooltip("Live: <=3.5 ms bounded vocal transport (or Snap Live, ~4 ms nominal, when enabled). Off: <=8 ms Quality transport. Both under 10 ms, including the short doubler tap. Host PDC refresh on mode change.");
     stabilizer.setEnabled(true);
-    lowLatency.onClick = [this]() { repaint(); };
+    snapLive.setTooltip("Snap Live (needs Low Latency): SnapTune-style pitch-synchronous renderer. Reads the input through a delay line at the correction speed and jumps whole cycles, so low voices keep their full waveform. ~4 ms nominal host latency; corrected voiced audio moves about +-0.6 source period around it. Host PDC refresh on change.");
+    snapLive.setEnabled(lowLatency.getToggleState());
+    lowLatency.onClick = [this]() { snapLive.setEnabled(lowLatency.getToggleState()); repaint(); };
     stabilizer.onClick = [this]() { repaint(); };
     selectedNoteIndex = juce::jlimit(0, 11, root.getSelectedItemIndex() < 0 ? 4 : root.getSelectedItemIndex());
     if (auto* rawWidth = processor.parameters.getRawParameterValue("doublerWidth"))
@@ -899,6 +902,7 @@ MetaTuneInspiredAudioProcessorEditor::~MetaTuneInspiredAudioProcessorEditor()
     sustain.setLookAndFeel(nullptr);
     stabilizer.setLookAndFeel(nullptr);
     lowLatency.setLookAndFeel(nullptr);
+    snapLive.setLookAndFeel(nullptr);
     scale.setLookAndFeel(nullptr);
     root.setLookAndFeel(nullptr);
 }
@@ -1843,6 +1847,7 @@ void MetaTuneInspiredAudioProcessorEditor::openHeaderMenu()
             safeThis->toneVolume = 0.65f;
             safeThis->stabilizer.setToggleState(true, juce::sendNotificationSync);
             safeThis->lowLatency.setToggleState(true, juce::sendNotificationSync);
+            safeThis->snapLive.setToggleState(false, juce::sendNotificationSync);
             safeThis->selectedCorrectionTime = 1;
             if (auto* parameter = safeThis->processor.parameters.getParameter("stabilizerTime"))
                 parameter->setValueNotifyingHost(parameter->convertTo0to1(1.0f));
@@ -1924,6 +1929,7 @@ void MetaTuneInspiredAudioProcessorEditor::loadPresetFromFile()
                     if (safeThis->lowLatency.getToggleState() && safeThis->stabilizer.getToggleState())
                         safeThis->stabilizer.setToggleState(false, juce::sendNotificationSync);
                     safeThis->stabilizer.setEnabled(!safeThis->lowLatency.getToggleState());
+                    safeThis->snapLive.setEnabled(safeThis->lowLatency.getToggleState());
                     safeThis->repaint();
                 }
                 else
@@ -2256,6 +2262,7 @@ void MetaTuneInspiredAudioProcessorEditor::resized()
     root.setBounds(px(350), py(686), px(100), py(35));
     stabilizer.setBounds(px(990), py(686), px(185), py(35));
     lowLatency.setBounds(px(1177), py(686), px(175), py(35));
+    snapLive.setBounds(px(790), py(686), px(190), py(35));
     noteReadout.setBounds(px(360), py(365), px(230), py(70));
     status.setBounds(px(32), py(610), px(600), py(25));
     const float uiScale = juce::jmin(sx, sy);
@@ -2266,6 +2273,9 @@ void MetaTuneInspiredAudioProcessorEditor::resized()
 }
 void MetaTuneInspiredAudioProcessorEditor::timerCallback()
 {
+    // Snap Live only exists inside Live; keep its enabled state in step with host automation too.
+    if (snapLive.isEnabled() != lowLatency.getToggleState())
+        snapLive.setEnabled(lowLatency.getToggleState());
     // One-shot startup sequence: fast spinning plasma and an illumination sweep
     // over 1.8 seconds, then a clean hand-off to normal Speed-driven animation.
     constexpr float startupDurationMs = 1800.0f;

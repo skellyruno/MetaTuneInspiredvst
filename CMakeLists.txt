@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(MetaTuneInspired VERSION 1.11.0)
+project(MetaTuneInspired VERSION 1.13.0)
 
 # Configure with -DJUCE_PATH=/path/to/JUCE (JUCE 7.0.8+ recommended).
 if(NOT DEFINED JUCE_PATH)
@@ -27,6 +27,8 @@ target_sources(MetaTuneInspired PRIVATE
     Source/PluginProcessor.h
     Source/PluginEditor.cpp
     Source/PluginEditor.h
+    Source/RealtimeAutotune.h
+    Source/SnapLiveShifter.h
 )
 target_compile_features(MetaTuneInspired PRIVATE cxx_std_17)
 target_compile_definitions(MetaTuneInspired PUBLIC

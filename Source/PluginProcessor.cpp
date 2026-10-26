@@ -19,6 +19,7 @@ MetaTuneInspiredAudioProcessor::MetaTuneInspiredAudioProcessor()
         customDegreeParameters[(size_t)i] = parameters.getRawParameterValue("customDegree" + juce::String(i));
     rootParameter = parameters.getRawParameterValue("root");
     lowLatencyParameter = parameters.getRawParameterValue("lowLatency");
+    snapLiveParameter = parameters.getRawParameterValue("snapLive");
     fixedHorizonParameter = parameters.getRawParameterValue("fixedHorizonVoiced");
     stabilizerParameter = parameters.getRawParameterValue("stabilizer");
     stabilizerTimeParameter = parameters.getRawParameterValue("stabilizerTime");
@@ -57,6 +58,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout MetaTuneInspiredAudioProcess
     p.add(std::make_unique<AudioParameterChoice>("stabilizerTime", "Note Stabilizer Time",
                                                   StringArray { "None", "Short", "Mid", "Long" }, 1));
     p.add(std::make_unique<AudioParameterBool>("lowLatency", "Low Latency", true));
+    // Added in V1.13. Default off, so sessions saved by earlier versions load exactly as before.
+    p.add(std::make_unique<AudioParameterBool>("snapLive", "Snap Live (full-cycle Live, ~4 ms nominal)", false));
     p.add(std::make_unique<AudioParameterBool>("fixedHorizonVoiced", "Legacy Fixed Mode (Disabled: >10ms)", false));
     p.add(std::make_unique<AudioParameterChoice>("scale", "Scale",
         StringArray{"Chromatic", "Major", "Minor", "Harmonic Minor", "Major Pentatonic",
@@ -97,6 +100,7 @@ void MetaTuneInspiredAudioProcessor::prepareToPlay(double sr, int maxBlock)
     // "Quality" selects the bounded 8ms shifter, never the legacy 35ms PSOLA.
     normalLatencySamples = autotune::RealtimeAutotune::realtimeQualityHostSamples(currentSampleRate);
     liveLatencySamples = autotune::RealtimeAutotune::ultraLowLatencyHostSamples(currentSampleRate);
+    snapLiveLatencySamples = autotune::SnapLiveShifter::hostLatencySamples(currentSampleRate);
     fixedHorizonLatencySamples = normalLatencySamples; // only for existing ABI/state compatibility
     const int maxPreparedLatency = normalLatencySamples;
 #if defined(SKELLTUNE_LIVE_FIXED_LOW_LATENCY) && SKELLTUNE_LIVE_FIXED_LOW_LATENCY
@@ -107,7 +111,10 @@ void MetaTuneInspiredAudioProcessor::prepareToPlay(double sr, int maxBlock)
 #endif
     // Deliberately ignore the old fixedHorizonVoiced parameter: preset loads
     // may retain it, but it cannot activate the 80ms renderer.
-    const int initialBudget = initialLive ? liveLatencySamples : normalLatencySamples;
+    const bool initialSnap = initialLive && snapLiveParameter != nullptr
+        && snapLiveParameter->load(std::memory_order_relaxed) > 0.5f;
+    const int initialBudget = initialSnap ? snapLiveLatencySamples
+                                          : (initialLive ? liveLatencySamples : normalLatencySamples);
     latencyPrepared.store(false, std::memory_order_release);
     setLatencySamples(initialBudget);
     publishedLatencySamples.store(initialBudget, std::memory_order_release);
@@ -168,7 +175,10 @@ void MetaTuneInspiredAudioProcessor::timerCallback()
     const bool live = lowLatencyParameter != nullptr
         && lowLatencyParameter->load(std::memory_order_relaxed) > 0.5f;
 #endif
-    const int requestedLatency = live ? liveLatencySamples : normalLatencySamples;
+    const bool snap = live && snapLiveParameter != nullptr
+        && snapLiveParameter->load(std::memory_order_relaxed) > 0.5f;
+    const int requestedLatency = snap ? snapLiveLatencySamples
+                                      : (live ? liveLatencySamples : normalLatencySamples);
     if (requestedLatency != publishedLatencySamples.load(std::memory_order_acquire))
     {
         // Not on the realtime callback. The DAW receives the new PDC before
@@ -246,11 +256,16 @@ void MetaTuneInspiredAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
 #if defined(SKELLTUNE_LIVE_FIXED_LOW_LATENCY) && SKELLTUNE_LIVE_FIXED_LOW_LATENCY
     // Do not let an automated normal-mode toggle exceed the smaller Live PDC.
     settings.lowLatency = true;
+    settings.snapLive = publishedLatencySamples.load(std::memory_order_acquire) == snapLiveLatencySamples;
 #else
     // The host-reported delay and the engine mode change together. The UI
     // parameter is polled by the message-thread timer, never used to resize
     // PDC history or call JUCE's host notifications from the audio thread.
-    settings.lowLatency = publishedLatencySamples.load(std::memory_order_acquire) == liveLatencySamples;
+    {
+        const int published = publishedLatencySamples.load(std::memory_order_acquire);
+        settings.snapLive = published == snapLiveLatencySamples;
+        settings.lowLatency = published == liveLatencySamples || settings.snapLive;
+    }
 #endif
     // Strict-time profile: 3.5ms Live, 8ms Quality. Both synth branches read
     // only within their respective budgets; legacy historical and 80ms
