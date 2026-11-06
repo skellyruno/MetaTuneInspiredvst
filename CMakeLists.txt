@@ -28,6 +28,10 @@ target_sources(MetaTuneInspired PRIVATE
     Source/PluginEditor.cpp
     Source/PluginEditor.h
     Source/RealtimeAutotune.h
+    Source/SkellyFusionEngine.h
+    Source/FusionPeriodGuard.h
+    Source/PitchRiskModel.h
+    Source/RealtimeLatencyLimits.h
     Source/SnapLiveShifter.h
 )
 target_compile_features(MetaTuneInspired PRIVATE cxx_std_17)
