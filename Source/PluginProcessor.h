@@ -3,7 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <vector>
-#include "RealtimeAutotune.h"
+#include "SkellyFusionEngine.h"
 
 class MetaTuneInspiredAudioProcessor final : public juce::AudioProcessor, private juce::Timer
 {
@@ -60,8 +60,8 @@ private:
 
     static constexpr int doublerDelayLineSize = 8192; // fixed delay-line capacity used by the Doubler
     // Cache APVTS atomics once, avoiding repeated parameter lookup on the audio thread.
-    // Pulse-aligned TD-PSOLA engine supplied in RealtimeAutotune.h.
-    autotune::RealtimeAutotune realtimeAutotune;
+    // Fused pitch-confidence controller with the established MetaTune renderers.
+    autotune::SkellyFusionEngine realtimeAutotune;
     std::atomic<float>* speedParameter = nullptr;
     std::atomic<float>* amountParameter = nullptr;
     std::atomic<float>* sustainParameter = nullptr;
