@@ -1,0 +1,34 @@
+name: Skelly Fusion Engine validation
+
+on:
+  push:
+    branches:
+      - feature/skelly-fusion-tune-engine
+  workflow_dispatch:
+
+jobs:
+  dsp-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile deterministic fusion detector tests
+        run: |
+          c++ -std=c++17 -O2 -Wall -Wextra -Werror -ISource tests/RealtimeAutotune_fusion_guard.cpp -o fusion_guard_test
+          ./fusion_guard_test
+
+  windows-vst3:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch pinned JUCE
+        shell: pwsh
+        run: git clone --depth 1 --branch 8.0.9 https://github.com/juce-framework/JUCE.git JUCE
+      - name: Configure with tests
+        shell: pwsh
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DJUCE_PATH="$env:GITHUB_WORKSPACE/JUCE" -DSKELLTUNE_BUILD_TESTS=ON
+      - name: Build VST3 and regression tests
+        shell: pwsh
+        run: cmake --build build --config Release --target MetaTuneInspired_VST3 RealtimeAutotune_fusion_guard --parallel 4
+      - name: Run DSP regression tests
+        shell: pwsh
+        run: ctest --test-dir build -C Release --output-on-failure
