@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - feature/skelly-fusion-tune-engine
+      - feature/fusion-dsp-v2-runtime
+      - main
   pull_request:
     branches:
       - main
@@ -21,6 +23,8 @@ jobs:
         run: |
           c++ -std=c++17 -O2 -Wall -Wextra -Werror -ISource tests/RealtimeAutotune_fusion_guard.cpp -o fusion_guard_test
           ./fusion_guard_test
+          c++ -std=c++17 -O2 -Wall -Wextra -Werror -ISource tests/RealtimeAutotune_fusion_engine.cpp -o fusion_engine_test
+          ./fusion_engine_test
 
   windows-vst3:
     runs-on: windows-2022
@@ -34,7 +38,7 @@ jobs:
         run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DJUCE_PATH="$env:GITHUB_WORKSPACE/JUCE" -DSKELLTUNE_BUILD_TESTS=ON
       - name: Build VST3 and regression tests
         shell: pwsh
-        run: cmake --build build --config Release --target MetaTuneInspired_VST3 RealtimeAutotune_fusion_guard --parallel 4
+        run: cmake --build build --config Release --target MetaTuneInspired_VST3 RealtimeAutotune_fusion_guard RealtimeAutotune_fusion_engine --parallel 4
       - name: Run DSP regression tests
         shell: pwsh
         run: ctest --test-dir build -C Release --output-on-failure
