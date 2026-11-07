@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - feature/skelly-fusion-tune-engine
+      - feature/fusion-dsp-v2-runtime
+      - main
   pull_request:
     branches:
       - main
