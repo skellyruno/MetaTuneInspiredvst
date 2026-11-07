@@ -4,7 +4,13 @@ on:
   push:
     branches:
       - feature/skelly-fusion-tune-engine
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   dsp-guard:
