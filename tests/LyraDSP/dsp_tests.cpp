@@ -695,6 +695,49 @@ TEST (skell_live_acquires_note_transitions_faster_than_standard)
     CHECK(measure(true)==60); // immediately acquired, same 2ms YIN hop
 }
 
+TEST (skell_live_steady_lock_and_monotonic_rap_run)
+{
+    auto setup=[] (bool live)
+    {
+        CorrectionEngine e; e.prepare(48000.0,0.002);
+        CorrectionEngine::Params p;
+        p.skellLive=live;
+        p.speedMs=30.0;
+        p.stabilizerMs=0.0;
+        p.hysteresisCents=live?7.0:15.0;
+        e.setParams(p);
+        for(int hop=0;hop<90;++hop)
+        {
+            e.onEstimate(est(midiToFreq(60.20)));
+            for(int i=0;i<96;++i)e.nextRatio();
+        }
+        return e;
+    };
+
+    auto live=setup(true), normal=setup(false);
+    CHECK(live.targetNote()==60 && normal.targetNote()==60);
+    // Near-boundary one-hop motion is not enough to open Skell Live's
+    // stronger sustained-note hold. Standard tuning flips at 65c past C.
+    live.onEstimate(est(midiToFreq(60.67)));
+    normal.onEstimate(est(midiToFreq(60.67)));
+    CHECK(live.targetNote()==60);
+    CHECK(normal.targetNote()==61);
+    live.onEstimate(est(midiToFreq(60.63)));
+    CHECK(live.targetNote()==60);
+
+    // A genuine rising melodic/rap pitch trajectory gets a bounded
+    // lookahead after two consecutive YIN motion hops, acquiring C# as
+    // the raw input reaches only 60.56.
+    live=setup(true); normal=setup(false);
+    for(double m: {60.32,60.44,60.56})
+    {
+        live.onEstimate(est(midiToFreq(m)));
+        normal.onEstimate(est(midiToFreq(m)));
+    }
+    CHECK(live.targetNote()==61);
+    CHECK(normal.targetNote()==60);
+}
+
 TEST (skell_live_tracks_lower_confidence_voiced_rap)
 {
     CorrectionEngine e; e.prepare(48000,0.002);
