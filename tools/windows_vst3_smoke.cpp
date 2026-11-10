@@ -74,6 +74,18 @@ int main(int argc,char**argv)
         editor->addToDesktop(juce::ComponentPeer::windowIsTemporary);
         editor->setVisible(true);
         juce::MessageManager::getInstance()->runDispatchLoopUntil(200);
+        // Render the JUCE component hierarchy to an ARGB image, rather
+        // than screenshotting the native peer. Windows CI runners have no
+        // visible interactive desktop, and createComponentSnapshot() can
+        // return an opaque black capture even while paint() is correct.
+        auto rasterizeEditor=[&]() -> juce::Image
+        {
+            juce::Image image(juce::Image::ARGB, editor->getWidth(),
+                              editor->getHeight(), true);
+            juce::Graphics g(image);
+            editor->paintEntireComponent(g, true);
+            return image;
+        };
         juce::Image neutral;
         for(const auto& size : {juce::Point<int>(683,540),
                                 juce::Point<int>(1000,790),
@@ -93,7 +105,7 @@ int main(int argc,char**argv)
                     return 19;
                 }
             }
-            auto snapshot = editor->createComponentSnapshot(editor->getLocalBounds(),true);
+            auto snapshot = rasterizeEditor();
             if(snapshot.isNull() || snapshot.getWidth()!=size.x
                || snapshot.getHeight()!=size.y) return 20;
             if(size.x==1366) neutral = snapshot;
@@ -107,9 +119,9 @@ int main(int argc,char**argv)
         if(!speedParam) return 21;
         speedParam->setValueNotifyingHost(1.0f);
         juce::MessageManager::getInstance()->runDispatchLoopUntil(460);
-        auto negative = editor->createComponentSnapshot(editor->getLocalBounds(),true);
+        auto negative = rasterizeEditor();
         juce::MessageManager::getInstance()->runDispatchLoopUntil(180);
-        auto animated = editor->createComponentSnapshot(editor->getLocalBounds(),true);
+        auto animated = rasterizeEditor();
         if(negative.isNull() || animated.isNull()) return 22;
         auto pinkScore=[](const juce::Image& img)->double
         {
