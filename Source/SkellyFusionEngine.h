@@ -66,6 +66,17 @@ public:
             translated.correction.speedMs < 0.0 || s.precisionHardTune
                 ? 0.0 : std::min(150.0, confirmation + stabilizer);
         translated.correction.sustain = sustain;
+        // These MetaTune APVTS controls were previously read in the processor
+        // but silently omitted by this adapter. Forward them to the actual
+        // Lyra correction engine without changing their stable automation IDs.
+        translated.correction.glideMs = std::isfinite(s.glideMs)
+            ? std::clamp((double)s.glideMs, 0.0, 500.0) : 0.0;
+        translated.correction.maxCorrectionSemitones =
+            std::isfinite(s.maxCorrectionSemitones)
+                ? std::clamp((double)s.maxCorrectionSemitones, 0.0, 12.0) : 12.0;
+        translated.correction.consonantReleaseMs =
+            std::isfinite(s.consonantReleaseMs)
+                ? std::clamp((double)s.consonantReleaseMs, 0.0, 30.0) : 8.0;
 
         // Always detect down to 70Hz. Ultra Live retains Lyra's pitch
         // controller and shifter but uses a 160Hz-safe centre delay; voiced
