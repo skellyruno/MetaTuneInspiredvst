@@ -60,6 +60,11 @@ public:
     void process (float* const* channels, int numChannels, int numSamples) noexcept;
 
     int latencySamples() const noexcept { return shifter.latencySamples() + (hq ? lookahead : 0); }
+    // Ratio actually reaching the output, accounting for Ultra Live's
+    // low-register protection and bypass wet fade. UI meters must not claim
+    // bass is corrected when the output deliberately preserves natural pitch.
+    float appliedPitchRatio() const noexcept
+    { return 1.0f + wet * (lastAppliedRatio - 1.0f); }
     static int lookaheadFor (double sampleRate) noexcept { return int (std::lround (kLookaheadSeconds * sampleRate)); }
     static int latencyFor (double sampleRate, double minFreq, bool hq = false,
                            bool ultraLive = false) noexcept
@@ -89,6 +94,7 @@ private:
     // The pitch ratio, not the audio output, is crossfaded toward unity in
     // the low register. This leaves low notes audible without invalid splices.
     float fastCorrectionMix = 1.0f, fastCorrectionTarget = 1.0f, fastMixCoeff = 0.01f;
+    float lastAppliedRatio = 1.0f;
     TelemetryQueue* telemetry = nullptr;
     double sr = 48000, minFreq = 70;
     // Select a stable analysis side when L/R are strongly anti-correlated.
