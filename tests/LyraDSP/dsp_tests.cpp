@@ -20,7 +20,9 @@ using namespace lyra;
 
 // Global allocation counter: lets tests assert the real-time path never allocates.
 // (malloc/free pairs are correct here; GCC's mismatched-new-delete check cannot see that.)
+#if defined(__GNUC__) && !defined(_MSC_VER)
 #pragma GCC diagnostic ignored "-Wmismatched-new-delete"
+#endif
 static std::atomic<long> gAllocs { 0 };
 void* operator new (size_t n) { ++gAllocs; if (void* p = std::malloc (n ? n : 1)) return p; throw std::bad_alloc(); }
 void* operator new[] (size_t n) { ++gAllocs; if (void* p = std::malloc (n ? n : 1)) return p; throw std::bad_alloc(); }
