@@ -94,11 +94,16 @@ endif()
 option(SKELLTUNE_BUILD_WINDOWS_HOST_SMOKE "Build JUCE VST3 host smoke executable" OFF)
 if(WIN32 AND SKELLTUNE_BUILD_WINDOWS_HOST_SMOKE)
   juce_add_console_app(SkellyVST3Smoke PRODUCT_NAME "Skelly VST3 Smoke")
+  juce_generate_juce_header(SkellyVST3Smoke)
   target_sources(SkellyVST3Smoke PRIVATE tools/windows_vst3_smoke.cpp)
+  # The VST3 host wrapper is a native child window, so its JUCE component
+  # surface can legitimately rasterize black in headless Windows CI. Link
+  # the exact same plugin shared-code target for independent software UI
+  # rendering, while retaining actual VST3 scan/process/PDC tests.
   target_compile_features(SkellyVST3Smoke PRIVATE cxx_std_17)
   target_compile_definitions(SkellyVST3Smoke PRIVATE
       JUCE_PLUGINHOST_VST3=1 JUCE_MODAL_LOOPS_PERMITTED=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
   target_link_libraries(SkellyVST3Smoke PRIVATE
-      juce::juce_audio_processors juce::juce_audio_utils
+      MetaTuneInspired juce::juce_audio_processors juce::juce_audio_utils
       juce::juce_recommended_config_flags)
 endif()
