@@ -2,6 +2,7 @@
 // integration smoke test, not a substitute for FL Studio or a plugin validator.
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <juce_graphics/juce_graphics.h>
 #include <cmath>
 #include <cstdio>
 #include <memory>
@@ -60,6 +61,97 @@ int main(int argc,char**argv)
         // Verify real VST3 instance, state save/reload, parameter automation
         // and processBlock without crashes or nonfinite stereo samples.
         if(!runAudio(80))return 6;
+
+        // Real VST3 editor smoke, not an off-line illustration. Instantiate
+        // the actual compiled UI, render at compact/mid/full sizes, and check
+        // that every visible control remains within the panel.
+        if(!plugin->hasEditor()) return 17;
+        std::unique_ptr<juce::AudioProcessorEditor> editor(plugin->createEditorIfNeeded());
+        if(!editor) return 18;
+        juce::Image neutral;
+        for(const auto& size : {juce::Point<int>(683,540),
+                                juce::Point<int>(1000,790),
+                                juce::Point<int>(1366,1080)})
+        {
+            editor->setSize(size.x, size.y);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil(150);
+            for(int childIndex=0; childIndex<editor->getNumChildComponents(); ++childIndex)
+            {
+                auto* child = editor->getChildComponent(childIndex);
+                if(!child || !child->isVisible()) continue;
+                const auto b = child->getBounds();
+                if(b.getX()<0 || b.getY()<0 || b.getRight()>editor->getWidth()+1
+                   || b.getBottom()>editor->getHeight()+1)
+                {
+                    std::fprintf(stderr,"UI control outside viewport at %dx%d\n",size.x,size.y);
+                    return 19;
+                }
+            }
+            auto snapshot = editor->createComponentSnapshot(editor->getLocalBounds(),true);
+            if(snapshot.isNull() || snapshot.getWidth()!=size.x
+               || snapshot.getHeight()!=size.y) return 20;
+            if(size.x==1366) neutral = snapshot;
+        }
+
+        // The user-requested LyraTune visual: the middle ring must visibly
+        // become pink when Speed enters -3ms; it must also keep animating.
+        juce::AudioProcessorParameter* speedParam = nullptr;
+        for(auto* param:plugin->getParameters())
+            if(param->getName(128).equalsIgnoreCase("Speed")) speedParam=param;
+        if(!speedParam) return 21;
+        speedParam->setValueNotifyingHost(1.0f);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(460);
+        auto negative = editor->createComponentSnapshot(editor->getLocalBounds(),true);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(180);
+        auto animated = editor->createComponentSnapshot(editor->getLocalBounds(),true);
+        if(negative.isNull() || animated.isNull()) return 22;
+        auto pinkScore=[](const juce::Image& img)->double
+        {
+            double score=0;
+            // 1366x1080 design canvas; only the 154px inner ring,
+            // excluding colour-changing plasma/core and Speed knob.
+            for(int y=201;y<529;y+=2)
+                for(int x=307;x<634;x+=2)
+                {
+                    const double radius = std::hypot(double(x-470),double(y-365));
+                    if(radius < 148.0 || radius > 164.0) continue;
+                    const auto c=img.getPixelAt(x,y);
+                    score += double(c.getRed()) - double(c.getGreen());
+                }
+            return score;
+        };
+        const double normalPink=pinkScore(neutral);
+        const double aggressivePink=pinkScore(negative);
+        if(aggressivePink <= normalPink + 250.0)
+        {
+            std::fprintf(stderr,"Negative retune ring missing: neutral %.0f active %.0f\n",
+                         normalPink,aggressivePink);
+            return 23;
+        }
+        // Verify animation moves when only time changes; the Speed value
+        // stays pinned in the same negative state.
+        int visualChanged=0;
+        for(int y=201;y<529;y+=4)
+            for(int x=307;x<634;x+=4)
+                if(negative.getPixelAt(x,y)!=animated.getPixelAt(x,y))
+                    ++visualChanged;
+        if(visualChanged < 5) return 24;
+
+        const auto shotDir=juce::File::getCurrentWorkingDirectory().getChildFile("ui_shots");
+        shotDir.createDirectory();
+        juce::PNGImageFormat png;
+        auto saveImage=[&](const juce::Image& img,const juce::String& name)->bool
+        {
+            auto stream=shotDir.getChildFile(name).createOutputStream();
+            return stream != nullptr && png.writeImageToStream(img,*stream);
+        };
+        if(!saveImage(neutral,"MetaTune_normal.png")
+           ||!saveImage(negative,"MetaTune_negative_retune.png"))
+            return 25;
+        std::printf("UI visual smoke: 3 sizes, controls in-bounds, pink ring %.0f -> %.0f, animated pixels=%d\n",
+                    normalPink,aggressivePink,visualChanged);
+        editor.reset();
+
         juce::MemoryBlock state;
         plugin->getStateInformation(state);
         if(state.isEmpty())return 7;
@@ -97,7 +189,12 @@ int main(int argc,char**argv)
             // A V1.2 project can recall this ON. Production builds must ignore it.
             legacyParam->setValueNotifyingHost(1.f);
             juce::MessageManager::getInstance()->runDispatchLoopUntil(200);
-            const int budget=(int)std::ceil(sampleRate*(live?0.0035:0.008));
+            const int fadeLength=std::max(1,(int)std::lround(sampleRate*0.004));
+            const double margin=2.0+fadeLength*(1.0594630943592953-1.0);
+            const int budget=live
+                ? (int)std::ceil(margin+0.5*sampleRate/160.0)
+                : (int)std::ceil(margin+0.5*sampleRate/70.0)
+                  +(int)std::lround(sampleRate*0.002);
             if (plugin->getLatencySamples()!=budget ||
                 (double)budget/sampleRate*1000.0>10.0)
             {
