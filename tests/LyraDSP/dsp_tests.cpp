@@ -1180,4 +1180,41 @@ TEST (chain_rt_no_alloc_and_switching)
     CHECK (maxStep < 0.15);
 }
 
+TEST (chain_stereo_antiphase_analysis)
+{
+    // Opposite-polarity L/R must not cancel in the detector. The two output
+    // channels still need to preserve their opposite polarity and stereo link.
+    constexpr double sr = 48000.0;
+    TunerChain chain; chain.prepare (sr, 70.0);
+    TunerChain::Settings s;
+    s.correction.speedMs = -3.0;  // user's aggressive retune mode
+    s.correction.stabilizerMs = 0.0;
+    s.minFreq = 70.0;
+    chain.setSettings (s);
+    std::vector<float> l (128), r (128);
+    double maxStereoSum = 0.0;
+    for (int block = 0; block < 250; ++block)
+    {
+        for (int i = 0; i < 128; ++i)
+        {
+            const double t = (double)(block * 128 + i) / sr;
+            l[(size_t)i] = (float)(0.32 * std::sin(2.0 * kPi * 220.0 * t));
+            r[(size_t)i] = -l[(size_t)i];
+        }
+        float* ch[] = { l.data(), r.data() };
+        chain.process (ch, 2, 128);
+        for (int i = 0; i < 128; ++i)
+        {
+            CHECK (std::isfinite(l[(size_t)i]) && std::isfinite(r[(size_t)i]));
+            if (block > 100)
+                maxStereoSum = std::max(maxStereoSum,
+                                       std::abs((double)l[(size_t)i] + (double)r[(size_t)i]));
+        }
+    }
+    CHECK (chain.detector().latest().voiced);
+    CHECK_NEAR (chain.correction().inputMidi(), 57.0, 0.2);
+    CHECK (chain.correction().targetNote() == 57);
+    CHECK (maxStereoSum < 0.005);
+}
+
 int main() { return th::runAll(); }
