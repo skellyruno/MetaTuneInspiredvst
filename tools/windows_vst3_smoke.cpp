@@ -68,6 +68,12 @@ int main(int argc,char**argv)
         if(!plugin->hasEditor()) return 17;
         std::unique_ptr<juce::AudioProcessorEditor> editor(plugin->createEditorIfNeeded());
         if(!editor) return 18;
+        // An unattached VST3 editor can return an all-transparent snapshot
+        // even though its JUCE controls and bounds exist. Give the component
+        // a proper native peer and dispatch paint events before capturing.
+        editor->addToDesktop(juce::ComponentPeer::windowIsTemporary);
+        editor->setVisible(true);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(200);
         juce::Image neutral;
         for(const auto& size : {juce::Point<int>(683,540),
                                 juce::Point<int>(1000,790),
@@ -122,6 +128,22 @@ int main(int argc,char**argv)
         };
         const double normalPink=pinkScore(neutral);
         const double aggressivePink=pinkScore(negative);
+        const auto shotDir=juce::File::getCurrentWorkingDirectory().getChildFile("ui_shots");
+        shotDir.createDirectory();
+        juce::PNGImageFormat png;
+        auto saveImage=[&](const juce::Image& img,const juce::String& name)->bool
+        {
+            auto stream=shotDir.getChildFile(name).createOutputStream();
+            return stream != nullptr && png.writeImageToStream(img,*stream);
+        };
+        if(!saveImage(neutral,"MetaTune_normal.png")
+           || !saveImage(negative,"MetaTune_negative_retune.png")) return 25;
+        const auto normalCentre=neutral.getPixelAt(470,365);
+        const auto activeCentre=negative.getPixelAt(470,365);
+        std::printf("Snapshot diagnostics: neutral alpha=%d rgb=%d,%d,%d; active alpha=%d rgb=%d,%d,%d; pink scores %.0f -> %.0f\n",
+                    normalCentre.getAlpha(),normalCentre.getRed(),normalCentre.getGreen(),normalCentre.getBlue(),
+                    activeCentre.getAlpha(),activeCentre.getRed(),activeCentre.getGreen(),activeCentre.getBlue(),
+                    normalPink,aggressivePink);
         if(aggressivePink <= normalPink + 250.0)
         {
             std::fprintf(stderr,"Negative retune ring missing: neutral %.0f active %.0f\n",
@@ -137,17 +159,7 @@ int main(int argc,char**argv)
                     ++visualChanged;
         if(visualChanged < 5) return 24;
 
-        const auto shotDir=juce::File::getCurrentWorkingDirectory().getChildFile("ui_shots");
-        shotDir.createDirectory();
-        juce::PNGImageFormat png;
-        auto saveImage=[&](const juce::Image& img,const juce::String& name)->bool
-        {
-            auto stream=shotDir.getChildFile(name).createOutputStream();
-            return stream != nullptr && png.writeImageToStream(img,*stream);
-        };
-        if(!saveImage(neutral,"MetaTune_normal.png")
-           ||!saveImage(negative,"MetaTune_negative_retune.png"))
-            return 25;
+
         std::printf("UI visual smoke: 3 sizes, controls in-bounds, pink ring %.0f -> %.0f, animated pixels=%d\n",
                     normalPink,aggressivePink,visualChanged);
         editor.reset();
