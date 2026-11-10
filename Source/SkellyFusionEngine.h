@@ -50,8 +50,11 @@ public:
         const auto relativeMask = static_cast<lyra::PitchClassMask>(
             scaleMask(s.scale, s.customScale));
         translated.correction.mask = lyra::transposeMask(relativeMask, s.key);
-        translated.correction.minConfidence = std::isfinite(s.voicingThreshold)
-            ? std::clamp(s.voicingThreshold, 0.55f, 0.92f) : 0.70f;
+        // Keep Lyra's tested 0.70 voiced-confidence floor. MetaTune's old
+        // 0.85 stabilizer threshold was tuned for another detector and would
+        // wrongly reject airy/breathy vowels here; stabilization is performed
+        // by Lyra's separate note-confirmation controller below.
+        translated.correction.minConfidence = 0.70f;
         // Snap Live now uses the SAME Lyra shifter, but with a more responsive
         // scale boundary (a deliberate controller variant, not a fake DSP mode).
         translated.correction.hysteresisCents = s.snapLive ? 10.0 : 15.0;
