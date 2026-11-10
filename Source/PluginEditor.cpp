@@ -836,9 +836,9 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     snapLiveAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(processor.parameters,"snapLive",snapLive);
     // Note Stabilizer and Low Latency are independently selectable in MetaTune.
     // Live also changes the host-reported PDC; Normal uses a larger grain budget.
-    lowLatency.setTooltip("Live: <=3.5 ms bounded vocal transport (or Snap Live, ~4 ms nominal, when enabled). Off: <=8 ms Quality transport. Both under 10 ms, including the short doubler tap. Host PDC refresh on mode change.");
+    lowLatency.setTooltip("LyraTune Live: period-synchronous low-latency tracking. Off: enables 2 ms of detector lookahead for more accurate correction timing. Host PDC follows the actual prepared voice range.");
     stabilizer.setEnabled(true);
-    snapLive.setTooltip("Snap Live (needs Low Latency): SnapTune-style pitch-synchronous renderer. Reads the input through a delay line at the correction speed and jumps whole cycles, so low voices keep their full waveform. ~4 ms nominal host latency; corrected voiced audio moves about +-0.6 source period around it. Host PDC refresh on change.");
+    snapLive.setTooltip("LyraTune Snap Live: tighter note-selection hysteresis using the same linked-stereo shifter. Live latency is unchanged. For the most aggressive snap, raise Speed into the negative-ms range.");
     snapLive.setEnabled(lowLatency.getToggleState());
     lowLatency.onClick = [this]() { snapLive.setEnabled(lowLatency.getToggleState()); repaint(); };
     stabilizer.onClick = [this]() { repaint(); };
@@ -1600,8 +1600,8 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
 
     g.restoreState();
 
-    // Left group selector rail
-    g.setColour(juce::Colour(0xff18181b)); g.fillRoundedRectangle(-15,150,73,430,22.0f);
+    // Keep the left note selector fully inside the resizable canvas.
+    g.setColour(juce::Colour(0xff18181b)); g.fillRoundedRectangle(0,150,58,430,18.0f);
     g.setColour(purple); g.setFont(uiFont(15.0f,juce::Font::bold));
     g.drawText("NOTES",5,170,48,40,juce::Justification::centred);
     g.setColour(muted); g.setFont(uiFont(19.0f,juce::Font::bold));
@@ -1654,10 +1654,13 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.drawText("Minor", 529, 687, 52, 33, juce::Justification::centred);
     g.drawText("H", 581, 687, 27, 33, juce::Justification::centred);
 
+    // Allocate a dedicated 210px zone for the four stabilizer-time choices.
+    // Previous mode pills occupied the Snap Live toggle and overlapped its text.
     g.setColour(juce::Colour(0xff09090a)); g.fillRoundedRectangle(685,684,657,39,19.0f);
     g.setColour(juce::Colour(0xff35343b)); g.drawRoundedRectangle(685,684,657,39,19.0f,1.0f);
-    const float modeCenters[] = { 713.0f, 780.0f, 850.0f, 921.0f };
-    const float modeWidths[] = { 49.0f, 66.0f, 65.0f, 61.0f };
+    g.setColour(juce::Colour(0xff18171c)); g.fillRoundedRectangle(691,687,204,32,15.0f);
+    const float modeCenters[] = { 716.0f, 765.0f, 815.0f, 865.0f };
+    const float modeWidths[] = { 47.0f, 49.0f, 49.0f, 49.0f };
     const char* modeNames[] = { "None", "Short", "Mid", "Long" };
     for (int i = 0; i < 4; ++i)
     {
@@ -1668,7 +1671,7 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
                                    modeWidths[i], 32.0f, 15.0f);
         }
         g.setColour(i == selectedCorrectionTime ? juce::Colour(0xffffbfec) : muted);
-        g.setFont(uiFont(12.0f, juce::Font::bold));
+        g.setFont(uiFont(13.0f, juce::Font::bold));
         g.drawText(modeNames[i], (int)(modeCenters[i] - modeWidths[i] * 0.5f), 687,
                    (int)modeWidths[i], 32, juce::Justification::centred);
     }
@@ -1748,8 +1751,8 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     const juce::String currentScaleName = scale.getSelectedItemIndex() == 1 ? "major" :
                                           (scale.getSelectedItemIndex() == 2 ? "minor" : "custom");
     g.drawText(currentScaleName,15,943,135,22,juce::Justification::centred);
-    g.drawText("hover to",15,969,135,22,juce::Justification::centred);
-    g.drawText("set scale",15,990,135,22,juce::Justification::centred);
+    g.drawText("click to",15,969,135,22,juce::Justification::centred);
+    g.drawText("edit scale",15,990,135,22,juce::Justification::centred);
 
     // Keyboard and right status rail
     drawPiano(g,{165,788,1047,287});
@@ -2213,11 +2216,11 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
         if (x >= 503.0f && x < 529.0f) { majorHold = !majorHold; repaint(); return; }
         if (x >= 529.0f && x < 581.0f) { setScaleMode(2); return; }
         if (x >= 581.0f && x < 608.0f) { minorHold = !minorHold; repaint(); return; }
-        if (x >= 685.0f && x < 970.0f)
+        if (x >= 691.0f && x < 895.0f)
         {
-            if (x < 755.0f) selectedCorrectionTime = 0;
-            else if (x < 815.0f) selectedCorrectionTime = 1;
-            else if (x < 885.0f) selectedCorrectionTime = 2;
+            if (x < 740.0f) selectedCorrectionTime = 0;
+            else if (x < 789.0f) selectedCorrectionTime = 1;
+            else if (x < 839.0f) selectedCorrectionTime = 2;
             else selectedCorrectionTime = 3;
             if (auto* parameter = processor.parameters.getParameter("stabilizerTime"))
                 parameter->setValueNotifyingHost(parameter->convertTo0to1((float)selectedCorrectionTime));
@@ -2260,11 +2263,14 @@ void MetaTuneInspiredAudioProcessorEditor::resized()
     amountLabel.setBounds(px(1097), py(575), px(220), py(25));
     scale.setBounds(px(165), py(686), px(176), py(35));
     root.setBounds(px(350), py(686), px(100), py(35));
-    stabilizer.setBounds(px(990), py(686), px(185), py(35));
-    lowLatency.setBounds(px(1177), py(686), px(175), py(35));
-    snapLive.setBounds(px(790), py(686), px(190), py(35));
+    // Four time buttons + three independent toggles; non-overlapping bounds
+    // at every supported resizable scale (down to the compact 683x540).
+    snapLive.setBounds(px(904), py(686), px(144), py(35));
+    stabilizer.setBounds(px(1049), py(686), px(150), py(35));
+    lowLatency.setBounds(px(1201), py(686), px(150), py(35));
     noteReadout.setBounds(px(360), py(365), px(230), py(70));
-    status.setBounds(px(32), py(610), px(600), py(25));
+    // The status line was behind the moveable Doubler dot at y~620.
+    status.setBounds(px(32), py(642), px(600), py(24));
     const float uiScale = juce::jmin(sx, sy);
     noteReadout.setFont(uiFont(juce::jlimit(16.0f, 42.0f, 42.0f * uiScale),
                               juce::Font::bold));

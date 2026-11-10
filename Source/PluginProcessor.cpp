@@ -89,18 +89,15 @@ void MetaTuneInspiredAudioProcessor::prepareToPlay(double sr, int maxBlock)
     stopTimer();
     currentSampleRate = juce::jmax(8000.0, sr);
 
-    // Pulse-aligned TD-PSOLA tracks 70-1000 Hz. The same fixed budget is both
-    // reported to the host and enforced by the output compensation stage below.
+    // LyraTune is the sole tuned-audio renderer. Its period-synchronous read
+    // head has a fixed centre delay based on the prepared 70Hz voice range;
+    // the HQ setting adds exactly 2ms of detector lookahead.
     realtimeAutotune.prepare(currentSampleRate, 70.0f, 1000.0f);
-    // Switchable mode: reserve the larger Normal-mode budget in all delay
-    // buffers, but publish the actual active budget to the host. The original
-    // implementation always reported Normal PDC, making Low Latency appear
-    // ineffective even though the detector and grain scheduler were faster.
-    // No production processing mode is permitted to exceed 10ms.
-    // "Quality" selects the bounded 8ms shifter, never the legacy 35ms PSOLA.
-    normalLatencySamples = autotune::RealtimeAutotune::realtimeQualityHostSamples(currentSampleRate);
-    liveLatencySamples = autotune::RealtimeAutotune::ultraLowLatencyHostSamples(currentSampleRate);
-    snapLiveLatencySamples = autotune::SnapLiveShifter::hostLatencySamples(currentSampleRate);
+    liveLatencySamples = lyra::TunerChain::latencyFor(currentSampleRate, 70.0, false);
+    normalLatencySamples = lyra::TunerChain::latencyFor(currentSampleRate, 70.0, true);
+    // Snap Live now means the responsive LyraTune note-controller variant;
+    // it shares the SAME shifter and therefore the same host delay as Live.
+    snapLiveLatencySamples = liveLatencySamples;
     fixedHorizonLatencySamples = normalLatencySamples; // only for existing ABI/state compatibility
     const int maxPreparedLatency = normalLatencySamples;
 #if defined(SKELLTUNE_LIVE_FIXED_LOW_LATENCY) && SKELLTUNE_LIVE_FIXED_LOW_LATENCY
@@ -229,15 +226,12 @@ void MetaTuneInspiredAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
             && customDegreeParameters[(size_t)i]->load(std::memory_order_relaxed) > 0.5f;
     settings.referenceHz = juce::jlimit(415.3047f, 466.1638f, referenceHz);
     const float mappedMs = speedControlToMilliseconds(speed);
-    settings.retuneMs = mappedMs <= 0.0f ? 0.0f : mappedMs;
-    // Sustain lengthens or shortens retuning in the same direction as the existing UI macro.
-    if (settings.retuneMs > 0.0f)
-    {
-        const float sustainFactor = sustain >= 0.0f
-            ? (1.0f - 0.70f * juce::jlimit(0.0f, 100.0f, sustain) / 100.0f)
-            : (1.0f + 1.50f * juce::jlimit(0.0f, 100.0f, -sustain) / 100.0f);
-        settings.retuneMs *= juce::jmax(0.10f, sustainFactor);
-    }
+    // Signed speed is essential: -3..0ms invokes the uploaded LyraTune
+    // aggressive effect, not the ordinary zero-ms smoothing path.
+    settings.retuneMs = mappedMs;
+    // LyraTune applies its own age-dependent sustain response. Do not apply
+    // MetaTune's old multiplier as well (which would double the effect).
+    realtimeAutotune.setSustain(juce::jlimit(-1.0f, 1.0f, sustain / 100.0f));
     settings.glideMs = glideParameter != nullptr
         ? glideParameter->load(std::memory_order_relaxed) : 0.0f;
     settings.maxCorrectionSemitones = correctionLimitParameter != nullptr
@@ -256,20 +250,21 @@ void MetaTuneInspiredAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
 #if defined(SKELLTUNE_LIVE_FIXED_LOW_LATENCY) && SKELLTUNE_LIVE_FIXED_LOW_LATENCY
     // Do not let an automated normal-mode toggle exceed the smaller Live PDC.
     settings.lowLatency = true;
-    settings.snapLive = publishedLatencySamples.load(std::memory_order_acquire) == snapLiveLatencySamples;
+    settings.snapLive = snapLiveParameter != nullptr
+        && snapLiveParameter->load(std::memory_order_relaxed) > 0.5f;
 #else
     // The host-reported delay and the engine mode change together. The UI
     // parameter is polled by the message-thread timer, never used to resize
     // PDC history or call JUCE's host notifications from the audio thread.
     {
         const int published = publishedLatencySamples.load(std::memory_order_acquire);
-        settings.snapLive = published == snapLiveLatencySamples;
-        settings.lowLatency = published == liveLatencySamples || settings.snapLive;
+        settings.lowLatency = published == liveLatencySamples;
+        settings.snapLive = settings.lowLatency && snapLiveParameter != nullptr
+            && snapLiveParameter->load(std::memory_order_relaxed) > 0.5f;
     }
 #endif
-    // Strict-time profile: 3.5ms Live, 8ms Quality. Both synth branches read
-    // only within their respective budgets; legacy historical and 80ms
-    // reconstruction paths remain in research source but are not reachable.
+    // LyraTune live and 2ms-lookahead HQ both use the same linked-stereo
+    // period-synchronous shifter; obsolete MetaTune research modes are unused.
     settings.strictRealtime = true;
     settings.ultraLowLatency = true;
     settings.fixedHorizonVoiced = false;
@@ -292,7 +287,10 @@ void MetaTuneInspiredAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
     {
         const float* d = buffer.getReadPointer(c);
         for (int i = 0; i < samples; ++i)
-            energy += (double)d[i] * (double)d[i];
+            {
+                const double sample = (double)autotune::boundedAudioSample(d[i]);
+                energy += sample * sample;
+            }
     }
     inputRms.store((float)std::sqrt(energy / (double)(channels * samples)), std::memory_order_relaxed);
 
