@@ -561,6 +561,21 @@ TEST (metatune_consonant_release_is_independent_of_retune_speed)
     CHECK(fast < 1.0);
     CHECK(slow > 20.0);
     CHECK(fast < slow * 0.15);
+
+    // Even a requested 0ms release must not instantaneously reset -35
+    // cents in one sample at the start of a consonant.
+    CorrectionEngine zero; zero.prepare(48000.0,0.002);
+    CorrectionEngine::Params z;
+    z.speedMs=-3.0;
+    z.consonantReleaseMs=0.0;
+    zero.setParams(z); zero.reset();
+    zero.onEstimate(est(midiToFreq(60.35)));
+    float previous=1.0f;
+    for(int n=0;n<960;++n) previous=zero.nextRatio();
+    zero.onEstimate({0.0f,0.0f,false});
+    const float next=zero.nextRatio();
+    const double jumpCents=std::abs(1200.0*std::log2((double)next/previous));
+    CHECK(jumpCents < 2.0);
 }
 
 TEST (lyra_glide_output_meter_respects_shifter_ratio_limits)
