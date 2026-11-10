@@ -563,6 +563,47 @@ TEST (metatune_consonant_release_is_independent_of_retune_speed)
     CHECK(fast < slow * 0.15);
 }
 
+TEST (lyra_glide_output_meter_respects_shifter_ratio_limits)
+{
+    // A deliberately huge C4->C5 glide asks for a full octave of temporary
+    // downward correction. The real time-domain shifter is physically
+    // limited to +/- ~7 semitones; output telemetry must describe THAT
+    // applied pitch ratio instead of the unrenderable requested -12.
+    constexpr double sr=48000.0;
+    constexpr int blockSize=128;
+    TunerChain chain; chain.prepare(sr,70.0);
+    TunerChain::Settings s;
+    s.minFreq=70.0;
+    s.ultraLive=true;
+    s.correction.speedMs=-3.0;
+    s.correction.glideMs=450.0;
+    s.correction.mask=PitchClassMask(1u << 0);
+    s.correction.stabilizerMs=0.0;
+    chain.setSettings(s);
+    float left[blockSize]{};
+    double phase=0.0;
+    double minRatio=10.0;
+    const long allocations=gAllocs.load();
+    for (int block=0; block<400; ++block)
+    {
+        const double f=block<140 ? midiToFreq(60.0) : midiToFreq(72.0);
+        for(int i=0;i<blockSize;++i)
+        {
+            phase += 2.0*kPi*f/sr;
+            left[i]=(float)(0.25*std::sin(phase));
+        }
+        float* channels[]={left};
+        chain.process(channels,1,blockSize);
+        const double actual=chain.appliedPitchRatio();
+        CHECK(std::isfinite(actual));
+        CHECK(actual >= 1.0 / PitchShifter::kMaxRatio - 1e-5);
+        CHECK(actual <= PitchShifter::kMaxRatio + 1e-5);
+        if(block>=140) minRatio=std::min(minRatio,actual);
+    }
+    CHECK(gAllocs.load()==allocations);
+    CHECK(minRatio<0.90); // real glide and shifter saturation exercised
+}
+
 TEST (metatune_parameter_sanitization_is_finite)
 {
     CorrectionEngine e; e.prepare(96000.0, 0.002);
