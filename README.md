@@ -1,60 +1,60 @@
-# Skelly Fusion Tune Engine
+# MetaTune Inspired — LyraTune DSP edition
 
-This repository is the destination for **SkellyTune mini** engine consolidation, while retaining the existing **MetaTune Inspired** editor, orb, piano and all existing parameter IDs and saved-state behavior. The new integration lives on `feature/skelly-fusion-tune-engine` until the full VST3 and listening benchmarks pass.
+This is the original **MetaTune** plugin and UI, now running the **LyraTune pitch-correction engine from the supplied ZIP**. The JUCE editor, orb, piano, preset/automation IDs and plugin identity remain in place.
 
-## Architecture
+## Active tuning signal path
 
-```text
-MetaTune UI (UNCHANGED)
-  -> existing JUCE parameter/state processor
-    -> SkellyFusionEngine (new shared DSP boundary)
-      |-> established MetaTune YIN tracker and note-lock / onset control
-      |-> independent fixed-memory NSDF periodicity verifier (new)
-      |     -> conservative additional note confirmation ONLY on weak evidence
-      |-> existing linked-stereo 3.5 ms Live / 4 ms Snap Live / 8 ms Quality engines
-      |-> existing output latency compensation and aligned dry bypass
+```
+MetaTune APVTS / UI (unchanged layout)
+  -> input sanitation + input meters
+  -> LyraTune TunerChain
+        -> anti-aliased streaming YIN (octave continuity guard)
+        -> pitch prediction, note stabilizer and vibrato analysis
+        -> signed retune (-3..400 ms engine domain)
+        -> stereo-linked period-synchronous delay-line shifter
+        -> internal aligned dry/wet path
+  -> existing MetaTune doubler macro + delayed reference piano
+  -> MetaTune host-PDC-aligned global bypass
 ```
 
-No second independent pitch-shifter is mixed into the audio output. Duplicating TD-PSOLA, Rubber Band, LPC and variable-delay synthesis inside a single callback would create competing clocks, misaligned dry signals and an unstable CPU/latency budget.
+The older `RealtimeAutotune.h` PSOLA, fusion verifier and research DSP files remain in source for compatibility/provenance, but they are **not in the active tuned-audio signal path**. We intentionally do not run two independent shifters at once.
 
-## What was integrated
+### Retune behavior
 
-* **MetaTune Inspired (primary)**: preserves its existing 3.5 ms Live, 4 ms Snap Live and 8 ms Quality renderers, YIN analysis, two-period onset checks, formant guard, phase coherence, voice-range policy, stereo linking and matched-bypass logic.
-* **SkellyTune / skell-autotune-vst**: the existing MetaTune transition logic is retained rather than replacing it with a second state machine; the fusion layer adds independent evidence before extending a doubtful note-confirmation hold.
-* **NoteForge**: the existing MetaTune two-period onset validation remains in place; its approach to causal low-latency correction is already reflected in the Snap Live path. Do not copy its separate high-latency editor/renderer into live recording mode.
-* **Autotuner**: a new compact NSDF-style verification calculation is implemented independently in `Source/FusionPeriodGuard.h`. It does not copy the original recursive period-vote routine or any callback allocations.
-* **QPitch**: kept as a listening/quality reference. Its Rubber Band renderer is not copied into Live, because its latency would prevent the 3.5–8 ms objective and its GPL obligations would need separate review.
-* **AutoTuneRack**: its LPC idea remains a research candidate; the current stateful stereo shifter and unaligned dry/wet implementation are not imported.
+The existing Speed dial is still a 0–100 control and keeps the established mapping: **0 → 200 ms**, **30 → 30 ms**, **approximately 94 → 0 ms**, **100 → -3 ms**. Unlike the old engine, the signed negative range is passed directly to LyraTune's correction controller. Below zero, correction responds instantly and scale-target hysteresis shrinks toward zero, creating the user's preferred aggressive hard-snap effect. Precision Hard Tune requests the -3 ms controller profile.
 
-The implementation is intentionally **selective** rather than a literal full-source merge. The alternative renderers are not claimed to have beaten the existing engine without objective and listening comparisons.
+Sustain uses LyraTune's note-age-dependent speed adjustment, rather than applying the old MetaTune sustain multiplier a second time.
 
-## Fusion risk controller
+The Note Stabilizer toggle and None/Short/Mid/Long selector map to Lyra's candidate-note confirmation. Snap Live keeps the same low-delay Lyra synthesis and selects slightly tighter note hysteresis. Both toggles keep their original UI names and stored IDs.
 
-The new `FusionPeriodGuard` is a preallocated stereo periodicity witness. It analyzes an independent copy of the original audio (before in-place tuning), cross-checks one and two pitch periods and watches the YIN detector's two-cycle aperiodicity and confidence.
+### Latency
 
-When repeated evidence is weak, it can extend *nonzero* note-transition confirmation by at most 10 ms. It does **not** add audio delay, alter host PDC, change scale, modify the pitch ratio, or affect zero-ms retune / Precision Hard Tune. All existing UI controls are unchanged. This behavior is deliberately conservative and requires real-vocal A/B tests.
+LyraTune's delay-line shifter is pitch synchronous and has a prepared latency budget based on the **70 Hz floor**. At 48 kHz:
 
-## Tests
+* **Low Latency on:** about 7.5 ms of nominal input-to-output delay.
+* **Low Latency off:** about 9.5 ms, including 2 ms causal detector lookahead.
+* **Snap Live:** same audio latency as Low Latency on, but a different note-switch controller.
 
-`tests/RealtimeAutotune_fusion_guard.cpp` tests periodicity at 44.1/48/96 kHz, 32–1024-sample callback chunking, anti-phase stereo, octave mismatch, and safeguards for max retune and zero confirmation.
+The host's reported latency changes on the message thread and dry/bypass output is aligned to the corresponding Lyra delay. These are plugin transport figures, not DAW device round-trip latency; output pitch may have locally varying read-head age as an inherent property of the Lyra shifter.
 
-Standalone test (does not need JUCE):
+### Original source
 
-```sh
-c++ -std=c++17 -O2 -Wall -Wextra -Werror -ISource tests/RealtimeAutotune_fusion_guard.cpp -o fusion_guard_test
-./fusion_guard_test
-```
+The engine code in `Source/LyraDSP` is copied directly from the user-supplied archive `tune demo that sounds better than metatune.zip` (LyraTune-main), whose embedded source revision matches `333stack/LyraTune` commit `5f611543a21e3cf9b7ac4bc06ed9f854cde45235`. The only functional modification to the imported source is anti-phase-safe stereo analysis handoff in `TunerChain.cpp/.h`, leaving the distinct left and right synthesis streams untouched.
 
-JUCE VST3 / full tests:
+The original DSP suite is preserved in `tests/LyraDSP`. It tests negative retune, octave changes, vibrato, stereo, range switching, formant accent, CPU safety and allocation-free callbacks.
 
-```sh
-cmake -S . -B build -DJUCE_PATH=/path/to/JUCE -DSKELLTUNE_BUILD_TESTS=ON
-cmake --build build --config Release
+### Build and tests
+
+A JUCE 8 checkout and CMake 3.22+ are needed:
+
+```powershell
+cmake -S . -B build -DJUCE_PATH=C:/JUCE -DSKELLTUNE_BUILD_TESTS=ON
+cmake --build build --config Release --target MetaTuneInspired_VST3 LyraOriginalDSPTests
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-**Validation status:** the standalone guard tests pass locally. The full Windows JUCE VST3 build, DAW host loading and real-vocal artifact/latency benchmarks are still required before merging this branch into `main`. Source code comments and nominal latency budgets are not substitutes for measured performance.
+GitHub Actions runs the DSP suite on Linux and compiles the VST3 on Windows. **Final sound quality and behavior in FL Studio should also be auditioned with real vocals**, especially fast note changes, low voices, negative retune and stereo/bypass transitions.
 
-## Release, license, and provenance
+### Licensing and distribution
 
-The source includes AGPL-derived code identified in `Source/RealtimeAutotune.h`. This branch restores `LICENSE` and `THIRD_PARTY_NOTICES.md` from repository history; do not erase copyright notices. Consult the notices, JUCE licensing and all upstream source provenance before distributing binaries or selling a proprietary plugin.
+Read `LICENSE` and `THIRD_PARTY_NOTICES.md` before distributing binaries. Legacy MetaTune DSP has AGPL-derived provenance; the supplied LyraTune archive did not include a LICENSE file. The source revision is recorded for provenance, **not** as a claim that importing a public repository automatically grants distribution rights.
