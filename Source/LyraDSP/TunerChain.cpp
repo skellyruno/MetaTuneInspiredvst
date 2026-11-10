@@ -38,6 +38,7 @@ void TunerChain::reset() noexcept
     strike.reset();
     strikeLastNote = -1;
     strikeSilentHops = 0;
+    stereoFallbackChannel = 0;
     wet = wetTarget;
 }
 
@@ -69,7 +70,6 @@ void TunerChain::process (float* const* ch, int numCh, int total) noexcept
     numCh = std::clamp (numCh, 0, kMaxChannels);
     if (numCh == 0 || total <= 0)
         return;
-    const float invCh = 1.0f / float (numCh);
 
     for (int start = 0; start < total; start += kSubBlock)
     {
@@ -83,12 +83,31 @@ void TunerChain::process (float* const* ch, int numCh, int total) noexcept
         }
 
         // Stereo-linked detection: one pitch decision for both channels.
-        for (int i = 0; i < n; ++i)
+        // Averaging anti-phase stereo vocals can erase the fundamental even
+        // though the listener still hears both channels. If the coherent sum
+        // nearly cancels, analyze the stronger single side instead; do not
+        // alter the stereo audio or create a second pitch-control clock.
+        bool antiphase = false;
+        if (numCh == 2)
         {
-            float s = 0;
-            for (int c = 0; c < numCh; ++c) s += io[c][i];
-            mono[i] = s * invCh;
+            double leftPower = 0.0, rightPower = 0.0, sumPower = 0.0;
+            for (int i = 0; i < n; ++i)
+            {
+                const double l = io[0][i], r = io[1][i];
+                leftPower += l * l;
+                rightPower += r * r;
+                sumPower += (l + r) * (l + r);
+            }
+            antiphase = leftPower + rightPower > 1.0e-12
+                        && sumPower < 0.15 * (leftPower + rightPower);
+            // Only switch analysis sides for clear relative level changes.
+            if (leftPower > 1.45 * rightPower) stereoFallbackChannel = 0;
+            else if (rightPower > 1.45 * leftPower) stereoFallbackChannel = 1;
         }
+        for (int i = 0; i < n; ++i)
+            mono[i] = antiphase ? io[stereoFallbackChannel][i]
+                               : (numCh == 2 ? 0.5f * (io[0][i] + io[1][i])
+                                             : io[0][i]);
         yin.process (mono, n, [this] (int i, const PitchEstimate& e) {
             engine.onEstimate (e, i);
             shifter.setPeriod (e.voiced ? sr / e.frequency : 0.0);
