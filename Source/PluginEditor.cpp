@@ -1815,10 +1815,10 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(snapLive.getToggleState() && lowLatency.getToggleState()
                     ? juce::Colour(0xffd9a2e8) : juce::Colour(0xffb0a9b9));
     g.setFont(uiFont(14.0f, juce::Font::bold));
-    g.drawText("LIVE PERFORMANCE", 705, 687, 256, 18, juce::Justification::centredLeft);
+    g.drawText("LIVE PERFORMANCE", 705, 688, 256, 15, juce::Justification::centredLeft);
     g.setColour(juce::Colour(0xff77747f));
     g.setFont(uiFont(10.0f, juce::Font::plain));
-    g.drawText("FAST TRACKING  /  OCTAVE GUARD", 705, 702, 256, 15,
+    g.drawText("FAST TRACKING  /  OCTAVE GUARD", 705, 704, 256, 13,
                juce::Justification::centredLeft);
 
     // Heatmaps
