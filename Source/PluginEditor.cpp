@@ -516,19 +516,69 @@ juce::Image createInnerOrbArtwork()
 class MetaTuneKnobLookAndFeel final : public juce::LookAndFeel_V4
 {
 public:
+    // GUI-thread-only visual state; never read or written by processBlock().
+    // LyraTune's negative-ms Speed animation is part of the control, not
+    // merely a pink ring around the large central orb.
+    void setSpeedOverloadVisuals(juce::Slider& speedControl,
+                                 float amount, float phaseSeconds, float shock)
+    {
+        // Store per-control GUI state. A global LookAndFeel is shared across
+        // every plugin instance in FL Studio; putting the animation on the
+        // LookAndFeel itself would let two open instances overwrite each
+        // other's Speed animation and shockwave.
+        static const juce::Identifier amountId("skellyOverloadAmount");
+        static const juce::Identifier phaseId("skellyOverloadPhase");
+        static const juce::Identifier shockId("skellyOverloadShock");
+        auto& props = speedControl.getProperties();
+        props.set(amountId, (double)juce::jlimit(0.0f, 1.0f, amount));
+        props.set(phaseId, (double)phaseSeconds);
+        props.set(shockId, (double)juce::jlimit(0.0f, 1.0f, shock));
+    }
+
     void drawRotarySlider(juce::Graphics& g, int x, int y, int width, int height,
                           float sliderPos, float startAngle, float endAngle,
                           juce::Slider& slider) override
     {
         const float side = (float)juce::jmin(width, height);
-        const float cx = x + width * 0.5f;
-        const float cy = y + height * 0.5f;
         const bool isSpeed = slider.getName() == "Speed";
+        static const juce::Identifier amountId("skellyOverloadAmount");
+        static const juce::Identifier phaseId("skellyOverloadPhase");
+        static const juce::Identifier shockId("skellyOverloadShock");
+        const auto& properties = slider.getProperties();
+        const float overload = isSpeed
+            ? (float)(double)properties.getWithDefault(amountId, 0.0) : 0.0f;
+        const float phase = isSpeed
+            ? (float)(double)properties.getWithDefault(phaseId, 0.0) : 0.0f;
+        const float shock = isSpeed
+            ? (float)(double)properties.getWithDefault(shockId, 0.0) : 0.0f;
+        // Lyra's overloaded Speed dial trembles by ~1px; the shadow, display
+        // and indicator move together. No transform escapes the slider bounds.
+        const float trembleX = overload * 1.25f * std::sin(phase * 71.0f);
+        const float trembleY = overload * 1.25f * std::cos(phase * 53.0f);
+        const float cx = x + width * 0.5f + trembleX;
+        const float cy = y + height * 0.5f + trembleY;
         const bool isAmount = slider.getName() == "Amount";
         const bool isSustain = slider.getName() == "Sustain";
         const float radius = side * (isSpeed ? 0.435f : (isAmount ? 0.435f : 0.405f));
         const float tickRadius = radius * (isSustain ? 0.78f : 0.82f);
         const juce::Colour accent = isAmount ? pink : (isSustain ? juce::Colour(0xff55545c) : purple);
+        const juce::Colour overloadHeat(0xffff485e);
+
+        // The original LyraTune Speed knob grows a red, pulsing halo when
+        // passing below 0 ms. Keep the original MetaTune C-shaped hardware
+        // housing and restrict the effect to the Speed control.
+        if (isSpeed && (overload > 0.001f || shock > 0.001f))
+        {
+            const float pulse = 0.75f + 0.25f *
+                std::sin(phase * (8.0f + 10.0f * overload));
+            const float glow = juce::jlimit(0.0f, 0.9f,
+                                           0.60f * overload * pulse + 0.45f * shock);
+            const float outer = radius + 14.0f;
+            g.setGradientFill(juce::ColourGradient(
+                overloadHeat.withAlpha(0.27f * glow), cx, cy,
+                overloadHeat.withAlpha(0.0f), cx + outer, cy, true));
+            g.fillEllipse(cx - outer, cy - outer, 2.0f * outer, 2.0f * outer);
+        }
 
         // Deep, machined outer housing with two edge bevels.
         g.setColour(juce::Colour(0xff050506).withAlpha(0.82f));
@@ -631,6 +681,25 @@ public:
                        cx + std::cos(gapEnd) * outerR, cy + std::sin(gapEnd) * outerR, 1.0f);
         }
 
+        // LyraTune's 0 ms detent marker; MetaTune's current Speed mapping
+        // reaches exactly zero at 93.636... of the 0-100 dial.
+        constexpr float speedZeroPos = (30.0f + 30.0f * 70.0f / 33.0f) / 100.0f;
+        if (isSpeed)
+        {
+            const float markAngle = startAngle + (endAngle - startAngle) * speedZeroPos;
+            const float radiusOuter = tickRadius + 8.0f;
+            const juce::Point<float> dir(std::cos(markAngle), std::sin(markAngle));
+            const juce::Point<float> tangent(-dir.y, dir.x);
+            const juce::Point<float> tip(cx + dir.x * radiusOuter,
+                                          cy + dir.y * radiusOuter);
+            juce::Path marker;
+            marker.addTriangle(tip, tip + dir * 7.0f + tangent * 3.0f,
+                               tip + dir * 7.0f - tangent * 3.0f);
+            g.setColour(overload > 0.001f ? overloadHeat.brighter(0.8f)
+                                          : juce::Colour(0xffd3cbd8));
+            g.fillPath(marker);
+        }
+
         // Small segmented LEDs and major marks at fifth-tick intervals.
         const int ticks = isSustain ? 0 : (isSpeed ? 63 : 57);
         for (int i = 0; i < ticks; ++i)
@@ -648,6 +717,17 @@ public:
                 led = pink.interpolatedWith(cyan, (t - 0.72f) / 0.28f);
             else if (isSpeed)
                 led = purple.interpolatedWith(pink, t * 0.82f);
+            // In the negative-millisecond zone, the last few illuminated
+            // Speed ticks flicker red-white with the same fast deterministic
+            // Lyra phase. Other controls retain their original LEDs.
+            if (isSpeed && t > speedZeroPos && t <= sliderPos && overload > 0.001f)
+            {
+                const float wave = 0.5f + 0.5f *
+                    std::sin((float)i * 12.9898f +
+                             phase * (23.0f + 3.0f * (float)(i % 5)));
+                led = overloadHeat.interpolatedWith(juce::Colours::white,
+                         0.15f + 0.55f * wave * overload);
+            }
             if (t <= sliderPos)
             {
                 g.setColour(led.withAlpha(isSpeed ? 0.16f : 0.11f));
@@ -663,10 +743,12 @@ public:
             juce::Path progress;
             progress.addCentredArc(cx, cy, tickRadius - 4.0f, tickRadius - 4.0f, 0.0f,
                                    startAngle, startAngle + (endAngle - startAngle) * sliderPos, true);
-            g.setColour(accent.withAlpha(0.13f));
+            const auto progressColour = isSpeed && overload > 0.001f
+                ? accent.interpolatedWith(overloadHeat, 0.82f * overload) : accent;
+            g.setColour(progressColour.withAlpha(0.13f + 0.08f * overload));
             g.strokePath(progress, juce::PathStrokeType(7.0f, juce::PathStrokeType::curved,
                                                         juce::PathStrokeType::rounded));
-            g.setColour(accent.withAlpha(0.92f));
+            g.setColour(progressColour.withAlpha(0.92f));
             g.strokePath(progress, juce::PathStrokeType(isSpeed ? 2.8f : 2.3f,
                                                         juce::PathStrokeType::curved,
                                                         juce::PathStrokeType::rounded));
@@ -681,10 +763,22 @@ public:
                           cy + std::sin(thumbAngle) * thumbR - 4.2f, 8.4f, 8.4f);
         }
 
+        // 350 ms red shockwave follows the exact transition below 0 ms. It
+        // expands across the existing dial's metal ring; no new UI assets.
+        if (isSpeed && shock > 0.001f)
+        {
+            const float waveRadius = radius * (0.95f + 0.14f * (1.0f - shock));
+            g.setColour(overloadHeat.withAlpha(0.70f * shock));
+            g.drawEllipse(cx - waveRadius, cy - waveRadius, 2.0f * waveRadius,
+                          2.0f * waveRadius, 2.0f + 2.0f * shock);
+        }
         const juce::String value = isSpeed
             ? juce::String(MetaTuneInspiredAudioProcessor::speedControlToMilliseconds((float)slider.getValue()), 1)
             : juce::String(slider.getValue(), 0);
-        g.setColour(juce::Colour(0xfff0edf4));
+        g.setColour(isSpeed && overload > 0.001f
+            ? juce::Colour(0xfff0edf4).interpolatedWith(overloadHeat,
+                                                    overload * 0.26f)
+            : juce::Colour(0xfff0edf4));
         const float valueFontSize = juce::jlimit(isSustain ? 11.0f : 13.0f,
                                                  isSustain ? 16.0f : 23.0f,
                                                  side * (isSustain ? 0.19f : 0.185f));
@@ -774,7 +868,7 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     if (auto* toneVolumeRaw = processor.parameters.getRawParameterValue("toneVolume"))
         toneVolume = juce::jlimit(0.0f, 1.0f, toneVolumeRaw->load(std::memory_order_relaxed) / 100.0f);
     speed.setName("Speed"); amount.setName("Amount"); sustain.setName("Sustain");
-    speed.setTooltip("Retune Speed: 200 ms to -3 ms. Below 0 ms LyraTune enables aggressive hard-snap correction and the orb glows pink.");
+    speed.setTooltip("Retune Speed: 200 ms to -3 ms. Below 0 ms: Lyra hard-snap, red knob overload with shockwave and jitter, and pink orb ring.");
     amount.setTooltip("Correction Amount: 0% to 100%");
     sustain.setTooltip("Sustain response changes how retuning reacts on held notes; negative values slow it down and positive values speed it up.");
     styleKnob(speed); styleKnob(amount); styleKnob(sustain);
@@ -2378,6 +2472,25 @@ void MetaTuneInspiredAudioProcessorEditor::timerCallback()
     const float negativeTarget = juce::jlimit(0.0f, 1.0f, -signedRetuneMs / 3.0f);
     const float easing = 1.0f - std::exp(-12.0f * juce::jlimit(0.0f, 0.08f, deltaSeconds));
     negativeRetuneGlow += (negativeTarget - negativeRetuneGlow) * easing;
+
+    // Match LyraTune's Speed-knob overload, distinct from the orb animation.
+    // A single 350ms shockwave triggers when automation or a drag crosses
+    // below zero; further movement deeper into the negative zone changes
+    // the pulsing glow, tick flicker and ~1px mechanical tremble.
+    const bool nowNegative = signedRetuneMs < -0.0001f;
+    if (nowNegative && !wasSpeedNegative)
+        speedOverloadShock = 1.0f;
+    wasSpeedNegative = nowNegative;
+    speedOverloadShock = juce::jmax(0.0f, speedOverloadShock
+                                   - juce::jlimit(0.0f, 0.08f, deltaSeconds) / 0.35f);
+    speedOverloadPhase += juce::jlimit(0.0f, 0.08f, deltaSeconds);
+    if (speedOverloadPhase > 10000.0f) speedOverloadPhase = 0.0f;
+    metaTuneKnobLookAndFeel.setSpeedOverloadVisuals(speed, negativeRetuneGlow,
+                                                   speedOverloadPhase, speedOverloadShock);
+    // Sliders are child Components: repainting only the parent orb would not
+    // animate the Speed control in a real VST3 host.
+    if (negativeRetuneGlow > 0.002f || speedOverloadShock > 0.001f)
+        speed.repaint();
 
     // The inner plasma spins quickly on launch, then settles to a rate tied to Speed.
     const float speedNorm = juce::jlimit(0.0f, 1.0f, (float)speed.getValue() / 100.0f);

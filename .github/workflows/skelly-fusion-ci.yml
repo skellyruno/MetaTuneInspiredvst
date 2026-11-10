@@ -6,6 +6,7 @@ on:
       - feature/skelly-fusion-tune-engine
       - feature/lyratune-engine-replacement
       - feature/meta-negative-orb-ultra-3p5
+      - feature/complete-negative-retune-overload-animation
   pull_request:
     branches:
       - main
