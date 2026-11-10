@@ -21,8 +21,6 @@ MetaTuneInspiredAudioProcessor::MetaTuneInspiredAudioProcessor()
     lowLatencyParameter = parameters.getRawParameterValue("lowLatency");
     snapLiveParameter = parameters.getRawParameterValue("snapLive");
     fixedHorizonParameter = parameters.getRawParameterValue("fixedHorizonVoiced");
-    stabilizerParameter = parameters.getRawParameterValue("stabilizer");
-    stabilizerTimeParameter = parameters.getRawParameterValue("stabilizerTime");
     pitchReferenceParameter = parameters.getRawParameterValue("pitchReference");
     doublerWidthParameter = parameters.getRawParameterValue("doublerWidth");
     doublerMixParameter = parameters.getRawParameterValue("doublerMix");
@@ -54,12 +52,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout MetaTuneInspiredAudioProcess
     p.add(std::make_unique<AudioParameterBool>("precisionHardTune", "Precision Hard Tune", false));
     p.add(std::make_unique<AudioParameterFloat>("noteConfirm", "Note Confirmation (ms)", NormalisableRange<float>(0.0f, 100.0f, 1.0f), 10.0f));
     p.add(std::make_unique<AudioParameterFloat>("consonantRelease", "Consonant Release (ms)", NormalisableRange<float>(0.0f, 30.0f, 1.0f), 8.0f));
-    p.add(std::make_unique<AudioParameterBool>("stabilizer", "Note Stabilizer", true));
-    p.add(std::make_unique<AudioParameterChoice>("stabilizerTime", "Note Stabilizer Time",
+    // Keep old IDs (and value ranges) in the serialized APVTS so previous
+    // FL Studio sessions reopen with their original plugin state. The old
+    // stabilizer is removed from the UI and is no longer used by the DSP.
+    p.add(std::make_unique<AudioParameterBool>("stabilizer", "Legacy Stabilizer (Inactive)", true));
+    p.add(std::make_unique<AudioParameterChoice>("stabilizerTime", "Legacy Stabilizer Time (Inactive)",
                                                   StringArray { "None", "Short", "Mid", "Long" }, 1));
     p.add(std::make_unique<AudioParameterBool>("lowLatency", "Low Latency", true));
-    // Added in V1.13. Default off, so sessions saved by earlier versions load exactly as before.
-    p.add(std::make_unique<AudioParameterBool>("snapLive", "Snap Live (full-cycle Live, ~4 ms nominal)", false));
+    // Rename the host-facing label, but preserve "snapLive" as the stable
+    // automation ID for existing projects and presets.
+    p.add(std::make_unique<AudioParameterBool>("snapLive", "Skell Live", false));
     p.add(std::make_unique<AudioParameterBool>("fixedHorizonVoiced", "Legacy Fixed Mode (Disabled: >10ms)", false));
     p.add(std::make_unique<AudioParameterChoice>("scale", "Scale",
         StringArray{"Chromatic", "Major", "Minor", "Harmonic Minor", "Major Pentatonic",
@@ -217,9 +219,6 @@ void MetaTuneInspiredAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
         ? (int)std::lround(rootParameter->load(std::memory_order_relaxed)) : 0;
     const float referenceHz = pitchReferenceParameter != nullptr
         ? pitchReferenceParameter->load(std::memory_order_relaxed) : 440.0f;
-    const bool stabilizer = stabilizerParameter != nullptr
-        && stabilizerParameter->load(std::memory_order_relaxed) > 0.5f;
-
     autotune::Settings settings;
     settings.key = juce::jlimit(0, 11, root);
     settings.scale = static_cast<autotune::Scale>(juce::jlimit(0, (int)autotune::Scale::Custom, scaleChoice));
@@ -248,7 +247,7 @@ void MetaTuneInspiredAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
     settings.humanize = 0.0f;
     settings.vibratoPreserve = 0.70f;
     settings.follow = 0.85f; // responsive for rap/spoken vocals while retaining some centre stability
-    settings.voicingThreshold = stabilizer ? 0.85f : 0.68f;
+    settings.voicingThreshold = 0.68f; // legacy Note Stabilizer has no DSP influence
 #if defined(SKELLTUNE_LIVE_FIXED_LOW_LATENCY) && SKELLTUNE_LIVE_FIXED_LOW_LATENCY
     // Do not let an automated normal-mode toggle exceed the smaller Live PDC.
     settings.lowLatency = true;
@@ -270,13 +269,10 @@ void MetaTuneInspiredAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
     settings.strictRealtime = true;
     settings.ultraLowLatency = true;
     settings.fixedHorizonVoiced = false;
-    // None disables the slow pitch centre; progressively longer settings reject
-    // vibrato-driven target changes. The default Short retains the prior 300 ms.
-    const int stabilizerTimeChoice = stabilizerTimeParameter != nullptr
-        ? (int) std::lround (stabilizerTimeParameter->load(std::memory_order_relaxed)) : 1;
-    constexpr std::array<float, 4> stabilizerTimesMs { 0.0f, 300.0f, 450.0f, 650.0f };
-    settings.noteStabilizerMs = stabilizer
-        ? stabilizerTimesMs[(size_t)juce::jlimit (0, 3, stabilizerTimeChoice)] : 0.0f;
+    // Removed Note Stabilizer. Retain its old APVTS fields only to keep
+    // existing DAW project state compatible. Normal uses the independent
+    // Note Confirmation setting; Skell Live confirms immediately.
+    settings.noteStabilizerMs = 0.0f;
     // Keep the DSP history warm during host bypass. The final bypass crossfade
     // happens after host PDC, between time-aligned paths, not with raw input.
     settings.bypass = false;

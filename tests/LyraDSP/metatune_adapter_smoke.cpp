@@ -109,7 +109,74 @@ static void testGlideThroughProductionAdapter() {
     require(portamento < instant-0.35, "200ms Glide must audibly slow target-note transitions");
 }
 
+static void testSkellLiveProductionRouting()
+{
+    for (double sr: {44100.0,48000.0,96000.0})
+    {
+        autotune::SkellyFusionEngine e;
+        e.prepare(sr,70.0f,1000.0f);
+        autotune::Settings s;
+        s.lowLatency=true;
+        s.snapLive=false; // historical APVTS ID
+        s.noteStabilizerMs=650.0f; // legacy control must be ignored
+        e.setSettings(s);
+        const int original=e.latencySamples();
+        require(!e.isSkellLiveEnabled(), "standard mode really disables Skell controller");
+
+        s.snapLive=true;
+        e.setSettings(s);
+        require(e.isSkellLiveEnabled(), "Skell Live legacy ID activates distinct DSP controller");
+        require(e.latencySamples()==original,
+                "Skell Live adds no audio delay and retains original host PDC");
+
+        int clock=0;
+        render(e,sr,220.0,0.20,128,clock);
+        render(e,sr,261.62556,0.16,128,clock);
+        require(std::isfinite(e.getCorrectionSemitones()),
+                "Skell Live processes real fast-note audio without non-finite output");
+
+        s.lowLatency=false;
+        e.setSettings(s);
+        require(!e.isSkellLiveEnabled(), "Skell Live cannot silently run in Quality");
+        require(e.latencySamples()>original,"Quality retains full-range host PDC");
+
+        s.lowLatency=true;
+        s.snapLive=true;
+        e.setSettings(s);
+        require(e.isSkellLiveEnabled() && e.latencySamples()==original,
+                "Skell Live reactivates after Quality/Live switch");
+
+        std::printf("Skell Live controller @%.0f Hz: enabled, no extra PDC (%d samples)\n",
+                    sr,original);
+    }
+}
+
+static void testLegacyStabilizerIsActuallyInactive()
+{
+    auto measure=[](float legacy) {
+        autotune::SkellyFusionEngine e;
+        e.prepare(48000.0,70.0f,1000.0f);
+        autotune::Settings s;
+        s.lowLatency=true;
+        s.snapLive=false;
+        s.retuneMs=-3.0f;
+        s.noteStabilizerMs=legacy;
+        s.noteConfirmMs=0.0f;
+        e.setSettings(s);
+        int clock=0;
+        render(e,48000.0,220.0,0.25,128,clock);
+        render(e,48000.0,261.62556,0.25,128,clock);
+        return e.getCorrectionSemitones();
+    };
+    const float oldOff=measure(0.0f);
+    const float oldLong=measure(650.0f);
+    require(std::isfinite(oldOff) && std::abs(oldOff-oldLong)<1.0e-6f,
+            "deprecated Note Stabilizer controls must not change the active DSP");
+}
+
 int main() {
+    testSkellLiveProductionRouting();
+    testLegacyStabilizerIsActuallyInactive();
     testGlideThroughProductionAdapter();
     for(double rate: {44100.0,48000.0,96000.0})
         for(int block: {32,128,256})

@@ -633,6 +633,147 @@ TEST (metatune_parameter_sanitization_is_finite)
         CHECK(std::isfinite(e.nextRatio()));
 }
 
+// ---------- Skell Live: performance-controller, not a second shifter ----------
+TEST (skell_live_octave_glitch_guard_still_works_at_negative_speed)
+{
+    auto setup = [] (bool live)
+    {
+        CorrectionEngine e; e.prepare(48000.0, 0.002);
+        CorrectionEngine::Params p;
+        p.skellLive = live;
+        p.speedMs = -3.0; // zero hysteresis for both modes
+        p.stabilizerMs = 0.0;
+        p.minConfidence = live ? 0.65f : 0.70f;
+        e.setParams(p);
+        return e;
+    };
+    auto live = setup(true);
+    auto normal = setup(false);
+    for(int hop=0; hop<50; ++hop)
+    {
+        live.onEstimate(est(220.0)); normal.onEstimate(est(220.0));
+        for(int i=0;i<96;++i) { live.nextRatio(); normal.nextRatio(); }
+    }
+    CHECK(live.targetNote()==57 && normal.targetNote()==57);
+    // A single half-period detector error on a real A3 vocal must not
+    // retarget Skell Live to A4, even with Speed=-3ms.
+    live.onEstimate(est(440.0));
+    normal.onEstimate(est(440.0));
+    CHECK(live.targetNote()==57);
+    CHECK(normal.targetNote()==69); // proves the mode is NOT only hysteresis
+    live.onEstimate(est(220.0));
+    CHECK(live.targetNote()==57);
+    // A genuine octave sung continuously is confirmed on the second
+    // independent estimate (typically 2ms), without a long stabilizer.
+    live.onEstimate(est(440.0));
+    CHECK(live.targetNote()==57);
+    live.onEstimate(est(440.0));
+    CHECK(live.targetNote()==69);
+}
+
+TEST (skell_live_acquires_note_transitions_faster_than_standard)
+{
+    auto measure = [] (bool live)
+    {
+        CorrectionEngine e; e.prepare(48000.0,0.002);
+        CorrectionEngine::Params p;
+        p.speedMs=20.0;
+        p.skellLive=live;
+        p.stabilizerMs=live?0.0:10.0; // legacy noteConfirm, not Note Stabilizer
+        p.hysteresisCents=live?7.0:15.0;
+        e.setParams(p);
+        for(int hop=0;hop<80;++hop)
+        {
+            e.onEstimate(est(220.0));
+            for(int i=0;i<96;++i)e.nextRatio();
+        }
+        CHECK(e.targetNote()==57);
+        e.onEstimate(est(261.6255653)); // A3 -> C4, non-octave
+        return e.targetNote();
+    };
+    CHECK(measure(false)==TargetSelector::kNoTarget); // waiting confirmation
+    CHECK(measure(true)==60); // immediately acquired, same 2ms YIN hop
+}
+
+TEST (skell_live_steady_lock_and_monotonic_rap_run)
+{
+    auto setup=[] (bool live)
+    {
+        CorrectionEngine e; e.prepare(48000.0,0.002);
+        CorrectionEngine::Params p;
+        p.skellLive=live;
+        p.speedMs=30.0;
+        p.stabilizerMs=0.0;
+        p.hysteresisCents=live?7.0:15.0;
+        e.setParams(p);
+        for(int hop=0;hop<90;++hop)
+        {
+            e.onEstimate(est(midiToFreq(60.20)));
+            for(int i=0;i<96;++i)e.nextRatio();
+        }
+        return e;
+    };
+
+    auto live=setup(true), normal=setup(false);
+    CHECK(live.targetNote()==60 && normal.targetNote()==60);
+    // Near-boundary one-hop motion is not enough to open Skell Live's
+    // stronger sustained-note hold. Standard tuning flips at 65c past C.
+    live.onEstimate(est(midiToFreq(60.67)));
+    normal.onEstimate(est(midiToFreq(60.67)));
+    CHECK(live.targetNote()==60);
+    CHECK(normal.targetNote()==61);
+    live.onEstimate(est(midiToFreq(60.63)));
+    CHECK(live.targetNote()==60);
+
+    // A genuine rising melodic/rap pitch trajectory gets a bounded
+    // lookahead after two consecutive YIN motion hops, acquiring C# as
+    // the raw input reaches only 60.56.
+    live=setup(true); normal=setup(false);
+    for(double m: {60.32,60.44,60.56})
+    {
+        live.onEstimate(est(midiToFreq(m)));
+        normal.onEstimate(est(midiToFreq(m)));
+    }
+    CHECK(live.targetNote()==61);
+    CHECK(normal.targetNote()==60);
+}
+
+TEST (skell_live_tracks_lower_confidence_voiced_rap)
+{
+    CorrectionEngine e; e.prepare(48000,0.002);
+    CorrectionEngine::Params p;
+    p.skellLive=true; p.speedMs=-3.0; p.minConfidence=0.65f;
+    e.setParams(p);
+    e.onEstimate({220.0f,0.67f,true});
+    CHECK(e.targetNote()==57);
+    p.skellLive=false; p.minConfidence=0.70f; e.setParams(p); e.reset();
+    e.onEstimate({220.0f,0.67f,true});
+    CHECK(e.targetNote()==TargetSelector::kNoTarget);
+    e.onEstimate({0.0f,0.98f,false});
+    CHECK(e.targetNote()==TargetSelector::kNoTarget);
+}
+
+TEST (skell_live_mode_switch_is_rt_safe_and_retains_negative_retune)
+{
+    CorrectionEngine e; e.prepare(48000,0.002);
+    CorrectionEngine::Params p;
+    p.speedMs=-3.0; p.stabilizerMs=0.0;
+    const long baseline=gAllocs.load();
+    for(int hop=0;hop<300;++hop)
+    {
+        p.skellLive=(hop%7)<4; p.hysteresisCents=p.skellLive?7.0:15.0;
+        p.minConfidence=p.skellLive?0.65f:0.70f;
+        e.setParams(p);
+        e.onEstimate(est(hop%15>8?246.94165:220.0));
+        for(int i=0;i<96;++i)
+        {
+            const float r=e.nextRatio();
+            CHECK(std::isfinite(r) && r>=1.0f/1.5f && r<=1.5f);
+        }
+    }
+    CHECK(gAllocs.load()==baseline);
+}
+
 TEST (correction_negative_speed_and_edges)
 {
     CorrectionEngine e; e.prepare (48000);

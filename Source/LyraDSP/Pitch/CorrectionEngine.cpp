@@ -38,6 +38,9 @@ void CorrectionEngine::reset() noexcept
     alpha = baseAlpha;
     glideMidi = 0.0;
     glideValid = false;
+    octaveCandidateMidi = 0.0;
+    octaveCandidateHops = 0;
+    motionDirection = motionRunHops = 0;
     correctionLimitCurrent = p.maxCorrectionSemitones;
 }
 
@@ -55,9 +58,16 @@ void CorrectionEngine::setParams (const Params& np) noexcept
     q.consonantReleaseMs = std::isfinite(q.consonantReleaseMs)
         ? std::clamp(q.consonantReleaseMs, 0.0, 30.0) : 8.0;
     const bool coeffs = q.speedMs != p.speedMs
+        || q.skellLive != p.skellLive
         || q.hysteresisCents != p.hysteresisCents
         || q.glideMs != p.glideMs
         || q.consonantReleaseMs != p.consonantReleaseMs;
+    // A mode change cannot carry a half-confirmed octave hypothesis.
+    if (q.skellLive != p.skellLive)
+    {
+        octaveCandidateHops = 0;
+        motionDirection = motionRunHops = 0;
+    }
     p = q;
     selector.setMask (p.mask);
     if (coeffs)
@@ -121,6 +131,8 @@ void CorrectionEngine::onEstimate (const PitchEstimate& e, int samplesBeforeRati
     if (! voiced)
     {
         unvoicedTime += dt;
+        octaveCandidateHops = 0;
+        motionDirection = motionRunHops = 0;
         prevMidi = vel = velSmooth = 0;
         steadyHops = 0;
         restartVibrato();
@@ -134,22 +146,85 @@ void CorrectionEngine::onEstimate (const PitchEstimate& e, int samplesBeforeRati
     }
     else
     {
+        const double priorGap = unvoicedTime;
         unvoicedTime = 0;
         inMidi = freqToMidi (e.frequency, p.referenceHz);
+
+        // Skell Live rejects a one-hop 2x/0.5x harmonic alias even at
+        // negative Speed, where hysteresis intentionally falls to zero.
+        // A *real* octave leap survives two successive measurements and is
+        // accepted at the next detector hop (usually 2ms). Non-octave
+        // intervals, phrase onsets and continuous pitch motion are immediate.
+        if (p.skellLive && prevMidi > 0 && priorGap < 0.025
+            && std::abs(std::abs(inMidi - prevMidi) - 12.0) < 0.65)
+        {
+            if (octaveCandidateHops > 0
+                && std::abs(inMidi - octaveCandidateMidi) < 0.35)
+                ++octaveCandidateHops;
+            else
+            {
+                octaveCandidateMidi = inMidi;
+                octaveCandidateHops = 1;
+            }
+            if (octaveCandidateHops < 2)
+                inMidi = prevMidi; // neutral first frame; no false note hop
+            else
+                octaveCandidateHops = 0;
+        }
+        else
+            octaveCandidateHops = 0;
+
         const double step = inMidi - prevMidi;
         const bool continuous = prevMidi > 0 && std::abs (step) <= kJumpSemitones;
         vel = continuous ? std::clamp (step / dt, -kMaxVelocity, kMaxVelocity) : 0.0;
         velSmooth = continuous ? (steadyHops == 0 ? vel : velSmooth + 0.25 * (vel - velSmooth)) : 0.0; // ~8 ms average
         steadyHops = continuous ? steadyHops + 1 : 0;
+        // A fast melodic run keeps moving in the SAME direction for at
+        // least two YIN hops. Alternating vibrato and jitter do not count
+        // as a reliable note-change trajectory.
+        const int direction = continuous && std::abs(vel) > 5.0
+            ? (vel > 0.0 ? 1 : -1) : 0;
+        if (p.skellLive && direction != 0)
+        {
+            motionRunHops = direction == motionDirection
+                ? std::min(motionRunHops + 1, 32) : 1;
+            motionDirection = direction;
+        }
+        else
+            motionDirection = motionRunHops = 0;
         prevMidi = inMidi;
         lead = winSec > 0 ? std::clamp (0.5 * (winSec + 1.0 / e.frequency) + 1e-4 - delaySec, 0.0, kMaxLeadSeconds) : 0.0;
         if (! continuous)
             restartVibrato();
         analyseVibrato();
-        const double h = vibOn && p.hysteresisCents > 0 ? baseHyst * (1.0 + 0.5 * 100.0 * vibDepth / p.hysteresisCents) : baseHyst;
-        selector.setHysteresisCents (std::min (h, std::max (baseHyst, kVibratoMaxHysteresisCents)));
+        // Skell Live is a distinct performance-controller mode rather
+        // than an alternate shifter. Near a fast note boundary the hold
+        // shrinks and a bounded 2.5ms slope projection acquires the next
+        // note sooner. On sustained/vibrato notes it retains hysteresis to
+        // prevent a flurry of note-flips. Negative retune keeps the original
+        // immediate zero-hysteresis sound, but still benefits from the
+        // octave guard above and lower confidence gating.
+        double holdCents = baseHyst;
+        double noteForSelection = inMidi;
+        if (p.skellLive && !vibOn && p.speedMs >= 0.0)
+        {
+            const bool movingWithEvidence = continuous && motionRunHops >= 2
+                && e.confidence > 0.80f && std::abs(velSmooth) > 5.0;
+            // Stronger-than-normal 18c lock on steady notes; open to 3c
+            // during real monotonic movement. Skell Live also instantly
+            // handles abrupt non-octave jumps (no note-confirmation hold).
+            holdCents = movingWithEvidence ? std::min(baseHyst, 3.0)
+                                           : std::max(baseHyst, 18.0);
+            if (movingWithEvidence)
+                noteForSelection += std::clamp(velSmooth * 0.0025, -0.16, 0.16);
+        }
+        const double h = vibOn && p.hysteresisCents > 0
+            ? holdCents * (1.0 + 0.5 * 100.0 * vibDepth / p.hysteresisCents)
+            : holdCents;
+        selector.setHysteresisCents(
+            std::min(h, std::max(holdCents, kVibratoMaxHysteresisCents)));
 
-        const int n = selector.select (inMidi);
+        const int n = selector.select (noteForSelection);
         if (n == TargetSelector::kNoTarget)
         {
             confirmed = candidate = TargetSelector::kNoTarget;

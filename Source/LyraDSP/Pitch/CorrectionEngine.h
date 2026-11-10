@@ -87,6 +87,7 @@ public:
         double glideMs = 0.0;      // 0..500, smooth confirmed target-note transitions only
         double maxCorrectionSemitones = 12.0; // 0..12, output correction limit
         double consonantReleaseMs = 8.0; // 0..30, return to natural pitch during unvoiced input
+        bool skellLive = false; // faster note decisions, confidence tracking and octave guard; same renderer/PDC
     };
 
     static constexpr double kSustainRampSeconds = 0.5;
@@ -113,7 +114,8 @@ public:
     // Diagnostics (audio-thread values; copy out through a queue for the UI).
     double inputMidi() const noexcept { return inMidi; }      // 0 when unvoiced
     int targetNote() const noexcept { return target; }        // TargetSelector::kNoTarget when none
-    int pendingNote() const noexcept { return candidate; }    // stabilizer candidate, or kNoTarget
+    int pendingNote() const noexcept { return candidate; }    // note-confirm candidate, or kNoTarget
+    bool skellLiveEnabled() const noexcept { return p.skellLive; } // controller-mode telemetry
     double noteAgeSeconds() const noexcept { return noteAge; }
     double correctionSemitones() const noexcept { return c; }
     double vibratoDepthCents() const noexcept { return vibOn ? 100.0 * vibDepth : 0.0; } // 0 = none
@@ -133,6 +135,15 @@ private:
     bool glideValid = false;
     // A 4ms output-limit slew avoids clicks when max correction is automated.
     double correctionLimitCurrent = 12.0, correctionLimitAlpha = 1.0;
+    // Skell Live: require one consistent follow-up estimate before accepting
+    // a raw +/- octave leap. A single harmonic detector glitch must never
+    // retarget the note; a real octave remains available within 1 hop (~2ms).
+    double octaveCandidateMidi = 0.0;
+    int octaveCandidateHops = 0;
+    // A genuine melodic run has sustained pitch movement in one direction;
+    // one-hop detector jitter and alternating vibrato should not open the
+    // tight Skell Live target-selection boundary.
+    int motionDirection = 0, motionRunHops = 0;
     double c = 0, c1 = 0, inMidi = 0; // c1: first smoothing stage
     double prevMidi = 0, vel = 0, velSmooth = 0, lead = 0, sinceEst = 0, winSec = 0, delaySec = 0; // prediction (st, st/s, s); prevMidi 0 = none
     double noteAge = 0, candidateAge = 0, unvoicedTime = 1.0, now = 0;

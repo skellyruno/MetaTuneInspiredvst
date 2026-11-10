@@ -890,7 +890,7 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     presetLabel.setText("No preset selected", juce::dontSendNotification);
     presetLabel.setJustificationType(juce::Justification::centredLeft);
 
-    juce::Component* components[] = { &speed, &amount, &sustain, &scale, &root, &stabilizer, &lowLatency, &snapLive,
+    juce::Component* components[] = { &speed, &amount, &sustain, &scale, &root, &lowLatency, &snapLive,
                                       &noteReadout, &status };
     for (auto* c : components) addAndMakeVisible(c);
 
@@ -903,7 +903,7 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
         combo->setColour(juce::ComboBox::outlineColourId, juce::Colour(0xff77777e));
         combo->setColour(juce::ComboBox::arrowColourId, text);
     }
-    for (auto* toggle : { &stabilizer, &lowLatency, &snapLive })
+    for (auto* toggle : { &lowLatency, &snapLive })
     {
         toggle->setColour(juce::ToggleButton::textColourId, text);
         toggle->setColour(juce::ToggleButton::tickColourId, cyan);
@@ -925,17 +925,14 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     sustain.onValueChange = [this]() { repaint(); };
     scaleAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor.parameters,"scale",scale);
     rootAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor.parameters,"root",root);
-    stabAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(processor.parameters,"stabilizer",stabilizer);
     latencyAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(processor.parameters,"lowLatency",lowLatency);
     snapLiveAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(processor.parameters,"snapLive",snapLive);
-    // Note Stabilizer and Low Latency are independently selectable in MetaTune.
-    // Live also changes the host-reported PDC; Normal uses a larger grain budget.
+    // Legacy Note Stabilizer fields remain serialized for old presets, but
+    // only two functional performance/latency toggles are visible now.
     lowLatency.setTooltip("Ultra Live: about 3.4 ms host latency for voices above 170 Hz. Lower notes remain audible at natural pitch for safety. Off: full-range 70 Hz LyraTune Quality (~9.5 ms @48k) with 2 ms detector lookahead.");
-    stabilizer.setEnabled(true);
-    snapLive.setTooltip("LyraTune Snap Live: tighter note-selection hysteresis using the same linked-stereo shifter. Live latency is unchanged. For the most aggressive snap, raise Speed into the negative-ms range.");
+    snapLive.setTooltip("Skell Live: faster note acquisition, movement-aware pitch lock, and octave glitch protection for melodic runs and rap. Same ~3.4 ms high-register Live latency, including negative retune.");
     snapLive.setEnabled(lowLatency.getToggleState());
     lowLatency.onClick = [this]() { snapLive.setEnabled(lowLatency.getToggleState()); repaint(); };
-    stabilizer.onClick = [this]() { repaint(); };
     selectedNoteIndex = juce::jlimit(0, 11, root.getSelectedItemIndex() < 0 ? 4 : root.getSelectedItemIndex());
     if (auto* rawWidth = processor.parameters.getRawParameterValue("doublerWidth"))
         doublerWidth = juce::jlimit(0.0f, 1.0f, rawWidth->load(std::memory_order_relaxed) / 100.0f);
@@ -943,8 +940,6 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
         doublerMix = juce::jlimit(0.0f, 1.0f, rawMix->load(std::memory_order_relaxed) / 100.0f);
     if (auto* rawBypass = processor.parameters.getRawParameterValue("globalBypass"))
         globalBypass = rawBypass->load(std::memory_order_relaxed) > 0.5f;
-    if (auto* stabilizerTime = processor.parameters.getRawParameterValue("stabilizerTime"))
-        selectedCorrectionTime = juce::jlimit(0, 3, (int) std::lround(stabilizerTime->load()));
     lastNonChromaticScaleMode = scale.getSelectedItemIndex() == 2 ? 2 : 1;
     slotA = processor.parameters.copyState();
     slotB = slotA.createCopy();
@@ -994,7 +989,6 @@ MetaTuneInspiredAudioProcessorEditor::~MetaTuneInspiredAudioProcessorEditor()
     speed.setLookAndFeel(nullptr);
     amount.setLookAndFeel(nullptr);
     sustain.setLookAndFeel(nullptr);
-    stabilizer.setLookAndFeel(nullptr);
     lowLatency.setLookAndFeel(nullptr);
     snapLive.setLookAndFeel(nullptr);
     scale.setLookAndFeel(nullptr);
@@ -1813,27 +1807,19 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.drawText("Minor", 529, 687, 52, 33, juce::Justification::centred);
     g.drawText("H", 581, 687, 27, 33, juce::Justification::centred);
 
-    // Allocate a dedicated 210px zone for the four stabilizer-time choices.
-    // Previous mode pills occupied the Snap Live toggle and overlapped its text.
+    // No hidden Note Stabilizer timings: two real toggles and one clear
+    // performance-mode descriptor, all inside the existing selector row.
     g.setColour(juce::Colour(0xff09090a)); g.fillRoundedRectangle(685,684,657,39,19.0f);
     g.setColour(juce::Colour(0xff35343b)); g.drawRoundedRectangle(685,684,657,39,19.0f,1.0f);
-    g.setColour(juce::Colour(0xff18171c)); g.fillRoundedRectangle(691,687,204,32,15.0f);
-    const float modeCenters[] = { 716.0f, 765.0f, 815.0f, 865.0f };
-    const float modeWidths[] = { 47.0f, 49.0f, 49.0f, 49.0f };
-    const char* modeNames[] = { "None", "Short", "Mid", "Long" };
-    for (int i = 0; i < 4; ++i)
-    {
-        if (selectedCorrectionTime == i)
-        {
-            g.setColour(juce::Colour(0xffd58acb).withAlpha(0.28f));
-            g.fillRoundedRectangle(modeCenters[i] - modeWidths[i] * 0.5f, 687.0f,
-                                   modeWidths[i], 32.0f, 15.0f);
-        }
-        g.setColour(i == selectedCorrectionTime ? juce::Colour(0xffffbfec) : muted);
-        g.setFont(uiFont(13.0f, juce::Font::bold));
-        g.drawText(modeNames[i], (int)(modeCenters[i] - modeWidths[i] * 0.5f), 687,
-                   (int)modeWidths[i], 32, juce::Justification::centred);
-    }
+    g.setColour(juce::Colour(0xff18171c)); g.fillRoundedRectangle(691,687,284,32,15.0f);
+    g.setColour(snapLive.getToggleState() && lowLatency.getToggleState()
+                    ? juce::Colour(0xffd9a2e8) : juce::Colour(0xffb0a9b9));
+    g.setFont(uiFont(14.0f, juce::Font::bold));
+    g.drawText("LIVE PERFORMANCE", 705, 688, 256, 15, juce::Justification::centredLeft);
+    g.setColour(juce::Colour(0xff77747f));
+    g.setFont(uiFont(10.0f, juce::Font::plain));
+    g.drawText("FAST TRACKING  /  OCTAVE GUARD", 705, 704, 256, 13,
+               juce::Justification::centredLeft);
 
     // Heatmaps
     g.setColour(juce::Colour(0xff1d1d20)); g.fillRect(0,734,1366,53);
@@ -2007,12 +1993,8 @@ void MetaTuneInspiredAudioProcessorEditor::openHeaderMenu()
             safeThis->majorHold = false;
             safeThis->minorHold = false;
             safeThis->toneVolume = 0.65f;
-            safeThis->stabilizer.setToggleState(true, juce::sendNotificationSync);
             safeThis->lowLatency.setToggleState(true, juce::sendNotificationSync);
             safeThis->snapLive.setToggleState(false, juce::sendNotificationSync);
-            safeThis->selectedCorrectionTime = 1;
-            if (auto* parameter = safeThis->processor.parameters.getParameter("stabilizerTime"))
-                parameter->setValueNotifyingHost(parameter->convertTo0to1(1.0f));
             safeThis->globalBypass = false;
             if (auto* parameter = safeThis->processor.parameters.getParameter("pitchReference"))
                 parameter->setValueNotifyingHost(parameter->convertTo0to1(440.0f));
@@ -2028,7 +2010,6 @@ void MetaTuneInspiredAudioProcessorEditor::openHeaderMenu()
             safeThis->showDetectedNotes = true;
             safeThis->pitchReferenceHz = 440.0f;
             safeThis->selectedPresetName = "No preset selected";
-            safeThis->stabilizer.setEnabled(!safeThis->lowLatency.getToggleState());
             safeThis->repaint();
         }
     });
@@ -2088,9 +2069,6 @@ void MetaTuneInspiredAudioProcessorEditor::loadPresetFromFile()
                     safeThis->selectedNoteIndex = juce::jlimit(0, 11, safeThis->root.getSelectedItemIndex());
                     if (safeThis->scale.getSelectedItemIndex() != 0)
                         safeThis->lastNonChromaticScaleMode = safeThis->scale.getSelectedItemIndex();
-                    if (safeThis->lowLatency.getToggleState() && safeThis->stabilizer.getToggleState())
-                        safeThis->stabilizer.setToggleState(false, juce::sendNotificationSync);
-                    safeThis->stabilizer.setEnabled(!safeThis->lowLatency.getToggleState());
                     safeThis->snapLive.setEnabled(safeThis->lowLatency.getToggleState());
                     safeThis->repaint();
                 }
@@ -2375,16 +2353,6 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
         if (x >= 503.0f && x < 529.0f) { majorHold = !majorHold; repaint(); return; }
         if (x >= 529.0f && x < 581.0f) { setScaleMode(2); return; }
         if (x >= 581.0f && x < 608.0f) { minorHold = !minorHold; repaint(); return; }
-        if (x >= 691.0f && x < 895.0f)
-        {
-            if (x < 740.0f) selectedCorrectionTime = 0;
-            else if (x < 789.0f) selectedCorrectionTime = 1;
-            else if (x < 839.0f) selectedCorrectionTime = 2;
-            else selectedCorrectionTime = 3;
-            if (auto* parameter = processor.parameters.getParameter("stabilizerTime"))
-                parameter->setValueNotifyingHost(parameter->convertTo0to1((float)selectedCorrectionTime));
-            repaint(); return;
-        }
     }
 
     // Tone-volume bar controls the real reference-tone audition level in the processor.
@@ -2422,11 +2390,9 @@ void MetaTuneInspiredAudioProcessorEditor::resized()
     amountLabel.setBounds(px(1097), py(575), px(220), py(25));
     scale.setBounds(px(165), py(686), px(176), py(35));
     root.setBounds(px(350), py(686), px(100), py(35));
-    // Four time buttons + three independent toggles; non-overlapping bounds
-    // at every supported resizable scale (down to the compact 683x540).
-    snapLive.setBounds(px(904), py(686), px(144), py(35));
-    stabilizer.setBounds(px(1049), py(686), px(150), py(35));
-    lowLatency.setBounds(px(1201), py(686), px(150), py(35));
+    // Only two toggles, both inside the design canvas at every resize.
+    snapLive.setBounds(px(983), py(686), px(174), py(35));
+    lowLatency.setBounds(px(1160), py(686), px(180), py(35));
     noteReadout.setBounds(px(360), py(365), px(230), py(70));
     // The status line was behind the moveable Doubler dot at y~620.
     status.setBounds(px(32), py(642), px(600), py(24));
@@ -2438,7 +2404,7 @@ void MetaTuneInspiredAudioProcessorEditor::resized()
 }
 void MetaTuneInspiredAudioProcessorEditor::timerCallback()
 {
-    // Snap Live only exists inside Live; keep its enabled state in step with host automation too.
+    // Skell Live shares the short-delay engine; disable it only in Quality mode.
     if (snapLive.isEnabled() != lowLatency.getToggleState())
         snapLive.setEnabled(lowLatency.getToggleState());
     // One-shot startup sequence: fast spinning plasma and an illumination sweep
@@ -2522,8 +2488,6 @@ void MetaTuneInspiredAudioProcessorEditor::timerCallback()
         doublerMix = juce::jlimit(0.0f, 1.0f, rawMix->load(std::memory_order_relaxed) / 100.0f);
     if (auto* rawBypass = processor.parameters.getRawParameterValue("globalBypass"))
         globalBypass = rawBypass->load(std::memory_order_relaxed) > 0.5f;
-    if (auto* stabilizerTime = processor.parameters.getRawParameterValue("stabilizerTime"))
-        selectedCorrectionTime = juce::jlimit(0, 3, (int) std::lround(stabilizerTime->load()));
     const float hz = processor.getDetectedHz();
     const float confidence = processor.getPitchConfidence();
 

@@ -74,10 +74,8 @@ private:
     std::array<std::atomic<float>*, 12> customDegreeParameters {};
     std::atomic<float>* rootParameter = nullptr;
     std::atomic<float>* lowLatencyParameter = nullptr;
-    std::atomic<float>* snapLiveParameter = nullptr; // V1.13: SnapTune-derived Live renderer (needs Low Latency)
+    std::atomic<float>* snapLiveParameter = nullptr; // Legacy ID: now Skell Live performance controller
     std::atomic<float>* fixedHorizonParameter = nullptr;
-    std::atomic<float>* stabilizerParameter = nullptr;
-    std::atomic<float>* stabilizerTimeParameter = nullptr;
     std::atomic<float>* pitchReferenceParameter = nullptr;
     std::atomic<float>* doublerWidthParameter = nullptr;
     std::atomic<float>* doublerMixParameter = nullptr;

@@ -9,7 +9,7 @@ MetaTune APVTS / UI (unchanged layout)
   -> input sanitation + input meters
   -> LyraTune TunerChain
         -> anti-aliased streaming YIN (octave continuity guard)
-        -> pitch prediction, note stabilizer and vibrato analysis
+        -> pitch prediction, vibrato analysis and Skell Live note tracking
         -> signed retune (-3..400 ms engine domain)
         -> stereo-linked period-synchronous delay-line shifter
         -> internal aligned dry/wet path
@@ -51,7 +51,40 @@ correction under automation, independent consonant release, and real output
 ratios from the production MetaTune/Lyra adapter across 44.1/48/96 kHz.
 
 
-The Note Stabilizer toggle and None/Short/Mid/Long selector map to Lyra's candidate-note confirmation. Snap Live keeps the same low-delay Lyra synthesis and selects slightly tighter note hysteresis. Both toggles keep their original UI names and stored IDs.
+### Skell Live (replaces Snap Live)
+
+The switch in the MetaTune selector bar is now **Skell Live**. The
+underlying host automation ID remains `snapLive` so previous FL Studio
+sessions and presets still load and still control the switch.
+
+Skell Live is a **distinct low-latency pitch-controller profile**, not
+a second synthesis engine:
+
+* **Fast note acquisition:** no per-note confirmation delay in Skell Live;
+  normal tuning retains the independent `noteConfirm` automation setting.
+* **Motion-aware note lock:** on a steady note it holds the selected target;
+  on an actively moving voice, the boundary opens and the incoming pitch
+  is projected forward by at most 0.16 semitones for a responsive run.
+* **Octave glitch protection:** one isolated detector octave error cannot
+  change the target. A real octave sung for two consecutive detector hops
+  is confirmed without a long wait (typically about 2 ms extra).
+* **Breathy rap/melodic tracking:** a slightly lower voiced-confidence floor
+  acquires legitimate borderline-vocal estimates earlier. The detector's
+  own voicing and octave guards remain active.
+* **Negative Speed:** the original instant snap and overload animations
+  still work. Skell Live's octave and confidence handling remain active
+  even at -3 ms, where ordinary hysteresis shrinks to zero.
+
+**Note Stabilizer has been removed from the visible plugin**: the toggle,
+None/Short/Mid/Long pills, mouse actions and reset/preset-loading logic are
+gone. Old `stabilizer` and `stabilizerTime` IDs remain in APVTS as
+**inactive compatibility entries**, preventing broken saved DAW sessions.
+Their values no longer change the DSP. The separate advanced
+`noteConfirm` automation still works in normal mode, but Skell Live always
+prioritizes immediate note acquisition.
+
+Skell Live requires **Low Latency enabled** and shares the same genuine
+3.4 ms high-register delay; switching it doesn't change host PDC.
 
 ### Negative-retune orb animation
 
@@ -73,7 +106,7 @@ Below 0 ms, the orb's **middle violet ring transitions toward hot pink**, with a
 * **155–170 Hz:** sample-smoothed transition toward uncorrected source pitch.
 * **Below 155 Hz:** input stays audible at its natural pitch; attempting to splice a full 70 Hz cycle at only 3.5 ms of history would require future samples or cause artifacts.
 * **Low Latency off (Quality):** full-range 70 Hz LyraTune reconstruction with 2 ms detector lookahead, approximately **9.5 ms at 48 kHz**. Suitable for low-voice tuning.
-* **Snap Live:** tighter note-controller hysteresis; uses the same shifter and PDC as Ultra Live.
+* **Skell Live:** adaptive, fast note-tracking controller using the same shifter and PDC as Ultra Live; not a new full-range synthesis mode.
 
 The current **3.5 ms target is intentionally limited to higher registers**. This is a quality/physics tradeoff, not a hidden failure to retune bass notes. True high-quality 70 Hz pitch correction at 3.5 ms requires a separate validated low-register synthesis approach. Low Latency changes notify the DAW of PDC on the message thread; aligned dry, bypass and reference tone follow the selected budget. Plugin latency is not audio-device round-trip latency.
 
@@ -81,7 +114,7 @@ The current **3.5 ms target is intentionally limited to higher registers**. This
 
 The engine code in `Source/LyraDSP` is copied directly from the user-supplied archive `tune demo that sounds better than metatune.zip` (LyraTune-main), whose embedded source revision matches `333stack/LyraTune` commit `5f611543a21e3cf9b7ac4bc06ed9f854cde45235`. The imported DSP retains its original pitch detector, pitch-target controller and stereo-linked shift architecture. Integration changes add anti-phase-safe analysis, host-sample sanitization, a bounded Ultra Live mode, click-softened read-head changes and truthful applied-correction telemetry.
 
-The original DSP suite is preserved in `tests/LyraDSP`. It tests negative retune, octave changes, vibrato, stereo, range switching, formant accent, CPU safety and allocation-free callbacks.
+The original DSP suite is preserved in `tests/LyraDSP`. It tests negative retune, octave changes, vibrato, stereo, range switching, formant accent, CPU safety and allocation-free callbacks. Extra Skell Live tests verify genuine octave leaps versus one-frame aliases, immediate rap/melodic note acquisition, confidence handling, unchanged PDC, negative retune and removed-stabilizer backward compatibility.
 
 ### Build and tests
 
