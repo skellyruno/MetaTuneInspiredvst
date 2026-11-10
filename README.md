@@ -27,19 +27,31 @@ Sustain uses LyraTune's note-age-dependent speed adjustment, rather than applyin
 
 The Note Stabilizer toggle and None/Short/Mid/Long selector map to Lyra's candidate-note confirmation. Snap Live keeps the same low-delay Lyra synthesis and selects slightly tighter note hysteresis. Both toggles keep their original UI names and stored IDs.
 
-### Latency
+### Negative-retune orb animation
 
-LyraTune's delay-line shifter is pitch synchronous and has a prepared latency budget based on the **70 Hz floor**. At 48 kHz:
+The current MetaTune UI and resizable canvas are preserved. Below 0 ms, the orb's **middle violet ring transitions toward hot pink**, with a smooth pink bloom, moving white-pink pitch-class glint, and an arc showing the detected-to-**actually corrected** pitch. These mirror LyraTune's negative-retune visual cues without replacing MetaTune's orb artwork. The GUI animation is driven exclusively by the editor's 60 Hz timer and follows automated Speed changes as well as mouse drags.
 
-* **Low Latency on:** about 7.5 ms of nominal input-to-output delay.
-* **Low Latency off:** about 9.5 ms, including 2 ms causal detector lookahead.
-* **Snap Live:** same audio latency as Low Latency on, but a different note-switch controller.
+### Latency and register limitation
 
-The host's reported latency changes on the message thread and dry/bypass output is aligned to the corresponding Lyra delay. These are plugin transport figures, not DAW device round-trip latency; output pitch may have locally varying read-head age as an inherent property of the Lyra shifter.
+**Low Latency on** now uses the original Lyra read-head engine with a **160 Hz-safe centre delay**, maintaining the independent pitch detector's 70 Hz floor. The host is told the true delay, not a theoretical output-delay target.
+
+| Sample rate | Ultra Live PDC | Time |
+|---|---:|---:|
+| 44.1 kHz | 151 samples | 3.424 ms |
+| 48 kHz | 164 samples | 3.417 ms |
+| 96 kHz | 325 samples | 3.385 ms |
+
+* **170 Hz and above:** full LyraTune retune processing and negative-Speed snapping at ~3.4 ms.
+* **155–170 Hz:** sample-smoothed transition toward uncorrected source pitch.
+* **Below 155 Hz:** input stays audible at its natural pitch; attempting to splice a full 70 Hz cycle at only 3.5 ms of history would require future samples or cause artifacts.
+* **Low Latency off (Quality):** full-range 70 Hz LyraTune reconstruction with 2 ms detector lookahead, approximately **9.5 ms at 48 kHz**. Suitable for low-voice tuning.
+* **Snap Live:** tighter note-controller hysteresis; uses the same shifter and PDC as Ultra Live.
+
+The current **3.5 ms target is intentionally limited to higher registers**. This is a quality/physics tradeoff, not a hidden failure to retune bass notes. True high-quality 70 Hz pitch correction at 3.5 ms requires a separate validated low-register synthesis approach. Low Latency changes notify the DAW of PDC on the message thread; aligned dry, bypass and reference tone follow the selected budget. Plugin latency is not audio-device round-trip latency.
 
 ### Original source
 
-The engine code in `Source/LyraDSP` is copied directly from the user-supplied archive `tune demo that sounds better than metatune.zip` (LyraTune-main), whose embedded source revision matches `333stack/LyraTune` commit `5f611543a21e3cf9b7ac4bc06ed9f854cde45235`. The only functional modification to the imported source is anti-phase-safe stereo analysis handoff in `TunerChain.cpp/.h`, leaving the distinct left and right synthesis streams untouched.
+The engine code in `Source/LyraDSP` is copied directly from the user-supplied archive `tune demo that sounds better than metatune.zip` (LyraTune-main), whose embedded source revision matches `333stack/LyraTune` commit `5f611543a21e3cf9b7ac4bc06ed9f854cde45235`. The imported DSP retains its original pitch detector, pitch-target controller and stereo-linked shift architecture. Integration changes add anti-phase-safe analysis, host-sample sanitization, a bounded Ultra Live mode, click-softened read-head changes and truthful applied-correction telemetry.
 
 The original DSP suite is preserved in `tests/LyraDSP`. It tests negative retune, octave changes, vibrato, stereo, range switching, formant accent, CPU safety and allocation-free callbacks.
 
@@ -53,7 +65,7 @@ cmake --build build --config Release --target MetaTuneInspired_VST3 LyraOriginal
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-GitHub Actions runs the DSP suite on Linux and compiles the VST3 on Windows. **Final sound quality and behavior in FL Studio should also be auditioned with real vocals**, especially fast note changes, low voices, negative retune and stereo/bypass transitions.
+GitHub Actions runs the DSP suite on Linux, the VST3 build plus regression tests on Windows, and a native JUCE VST3 host smoke that scans the built plugin, checks its PDC and bypass impulse, renders the editor at compact/medium/full sizes and captures before/after screenshots of negative-retune glow. **Final sound quality and behavior in FL Studio should also be auditioned with real vocals**, especially fast note changes, low voices, negative retune and stereo/bypass transitions.
 
 ### Licensing and distribution
 
