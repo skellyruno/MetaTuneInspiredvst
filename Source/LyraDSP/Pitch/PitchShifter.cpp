@@ -36,7 +36,23 @@ void PitchShifter::setMinFreq (double hz) noexcept
 {
     hz = std::max (hz, floorFreq);
     maxPeriod = sr / hz;
-    centre = latencyFor (sr, hz);
+    const int nextCentre = latencyFor (sr, hz);
+    if (nextCentre != centre)
+    {
+        if (started)
+        {
+            // Rebase the read head to the host's new delay timeline with a
+            // bounded crossfade. Changing centre alone leaves unity-ratio
+            // audio at the OLD latency indefinitely (a PDC correctness bug).
+            dOld = d;
+            d = double(nextCentre);
+            curFade = fadeLen;
+            fadePos = 0;
+            fading = true;
+        }
+        else d = dOld = double(nextCentre);
+        centre = nextCentre;
+    }
     unvoicedPeriod = std::min (maxPeriod, 0.010 * sr);
     period = std::min (period, maxPeriod);
 }
@@ -49,6 +65,7 @@ void PitchShifter::reset() noexcept
     d = dOld = centre;
     period = unvoicedPeriod;
     fading = false;
+    started = false;
     fadePos = 0;
 }
 
@@ -75,6 +92,8 @@ float PitchShifter::read (int ch, double delay) const noexcept
 void PitchShifter::process (float* const* ch, int numCh, int n, const float* ratio) noexcept
 {
     numCh = std::min (numCh, int (rings.size()));
+    if (numCh <= 0 || n <= 0) return;
+    started = true;
     const double dMax = double (mask) - 3.0;
     for (int i = 0; i < n; ++i)
     {

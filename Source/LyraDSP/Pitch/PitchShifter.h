@@ -46,6 +46,6 @@ private:
     int mask = 0, writePos = 0;
     double sr = 48000, floorFreq = 70, d = 0, dOld = 0, period = 0, unvoicedPeriod = 0, maxPeriod = 0;
     int centre = 0, fadeLen = 1, curFade = 1, fadePos = 0;
-    bool fading = false;
+    bool fading = false, started = false;
 };
 } // namespace lyra

@@ -97,7 +97,11 @@ void YinDetector::analyse() noexcept
             d += diff * diff;
         }
         running += d;
-        cmndf[size_t (tau)] = running > 0 ? float (d * tau / running) : 1.0f;
+        // Multiply in double precision so the integer lag never narrows to
+        // float before the normalization (and to avoid -Wconversion).
+        cmndf[size_t(tau)] = running > 0
+            ? static_cast<float>((static_cast<double>(d) * static_cast<double>(tau)) / running)
+            : 1.0f;
     }
 
     // Absolute threshold: first dip below threshold, then slide to its local minimum (step 4).

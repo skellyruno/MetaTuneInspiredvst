@@ -20,7 +20,9 @@ using namespace lyra;
 
 // Global allocation counter: lets tests assert the real-time path never allocates.
 // (malloc/free pairs are correct here; GCC's mismatched-new-delete check cannot see that.)
+#if defined(__GNUC__) && !defined(_MSC_VER)
 #pragma GCC diagnostic ignored "-Wmismatched-new-delete"
+#endif
 static std::atomic<long> gAllocs { 0 };
 void* operator new (size_t n) { ++gAllocs; if (void* p = std::malloc (n ? n : 1)) return p; throw std::bad_alloc(); }
 void* operator new[] (size_t n) { ++gAllocs; if (void* p = std::malloc (n ? n : 1)) return p; throw std::bad_alloc(); }
@@ -1215,6 +1217,133 @@ TEST (chain_stereo_antiphase_analysis)
     CHECK_NEAR (chain.correction().inputMidi(), 57.0, 0.2);
     CHECK (chain.correction().targetNote() == 57);
     CHECK (maxStereoSum < 0.005);
+}
+
+
+TEST (ultra_live_latency_and_audio_alignment)
+{
+    for (double sr : {44100.0, 48000.0, 96000.0})
+    {
+        TunerChain::Settings s;
+        s.minFreq = 70.0;
+        s.ultraLive = true;
+        s.hq = false;
+        s.correction.amount = 0.0;
+        s.correction.speedMs = -3.0;
+        TunerChain chain; chain.prepare(sr, 70.0); chain.setSettings(s); chain.reset();
+        const int delay = chain.latencySamples();
+        CHECK(delay == TunerChain::latencyFor(sr, 70.0, false, true));
+        CHECK(delay <= int(std::ceil(sr * 0.0035)));
+
+        auto x = tone(sr, 220.0, 0.45, true);
+        auto y = runChain(x, s, sr, 128);
+        double maxError = 0;
+        for(size_t i = size_t(delay + 0.20*sr); i < y.size(); ++i)
+            maxError = std::max(maxError, std::abs(double(y[i] - x[i-size_t(delay)])));
+        CHECK(maxError < 1e-4);
+        std::printf("  Ultra Live @ %.0f Hz delay %d samples %.3f ms (dry error %.3g)\n",
+                    sr, delay, 1000.0*delay/sr, maxError);
+    }
+}
+
+TEST (ultra_live_aggressive_retune_is_audible_and_in_tune)
+{
+    for (double sr : {44100.0, 48000.0, 96000.0})
+    {
+        TunerChain::Settings s;
+        s.minFreq = 70.0;
+        s.ultraLive = true;
+        s.correction.speedMs = -3.0;
+        s.correction.stabilizerMs = 0.0;
+        auto x = tone(sr, 225.0, 0.85, true); // actual 225 Hz -> corrected A3 / 220 Hz
+        auto y = runChain(x, s, sr, 128);
+        YinDetector detector; detector.prepare(sr, {});
+        double totalHz = 0; int voiced = 0;
+        const int begin = int(sr*0.55);
+        detector.process(y.data() + begin, int(y.size())-begin,
+                         [&](int, const PitchEstimate& e) {
+            if(e.voiced && e.confidence >= 0.7f) { totalHz += e.frequency; ++voiced; }
+        });
+        CHECK(voiced > 10);
+        if(voiced > 0)
+        {
+            const double corrected = totalHz/double(voiced);
+            CHECK(std::abs(1200.0*std::log2(corrected/220.0)) < 5.0);
+        }
+        double peak = 0, steadyStep = 0;
+        for(size_t i=1;i<y.size();++i)
+        {
+            CHECK(std::isfinite(y[i]));
+            peak = std::max(peak, std::abs(double(y[i])));
+            // The input fixture itself starts with a hard onset; don't
+            // falsely mark that exact delayed onset as a processing click.
+            if(i > size_t(sr*0.15))
+                steadyStep = std::max(steadyStep, std::abs(double(y[i]-y[i-1])));
+        }
+        CHECK(peak < 1.0 && steadyStep < 0.25);
+    }
+}
+
+TEST (ultra_live_bass_is_preserved_instead_of_synthesized_from_future_samples)
+{
+    for (double sr : {44100.0, 48000.0, 96000.0})
+    {
+        TunerChain::Settings s;
+        s.minFreq = 70.0;
+        s.ultraLive = true;
+        s.correction.speedMs = -3.0;
+        auto x = tone(sr, 70.0, 0.85, true);
+        auto y = runChain(x, s, sr, 128);
+        const int delay = TunerChain::latencyFor(sr, 70.0, false, true);
+        double error = 0; int n = 0;
+        for(int i=int(sr*0.55); i<int(y.size()); ++i)
+        {
+            const double e = y[size_t(i)] - x[size_t(i-delay)];
+            error += e*e; ++n;
+        }
+        CHECK(n > 0);
+        if(n > 0) CHECK(std::sqrt(error/double(n)) < 0.012);
+    }
+}
+
+TEST (ultra_live_switching_does_not_allocate_or_corrupt_stereo)
+{
+    for(double sr : {44100.0, 48000.0, 96000.0})
+    {
+        TunerChain chain; chain.prepare(sr, 70.0);
+        TunerChain::Settings s;
+        s.minFreq = 70.0;
+        s.hq = true;
+        s.correction.speedMs = -3.0;
+        chain.setSettings(s);
+        constexpr int N = 128;
+        float L[N] {}, R[N] {};
+        double last = 0, maxStep = 0;
+        const long allocated = gAllocs.load();
+        for(int block=0; block<750; ++block)
+        {
+            if(block == 220) {s.hq=false; s.ultraLive=true; chain.setSettings(s);}
+            if(block == 440) {s.hq=true; s.ultraLive=false; chain.setSettings(s);}
+            for(int i=0; i<N; ++i)
+            {
+                const double ph=2.0*kPi*220.0*(block*N+i)/sr;
+                L[i]=float(0.25*std::sin(ph));
+                R[i]=-L[i];
+            }
+            if(block == 120) L[22] = std::numeric_limits<float>::quiet_NaN();
+            if(block == 121) L[23] = std::numeric_limits<float>::denorm_min();
+            float* audio[]{L,R};
+            chain.process(audio,2,N);
+            for(int i=0; i<N; ++i)
+            {
+                CHECK(std::isfinite(L[i]) && std::isfinite(R[i]));
+                maxStep = std::max(maxStep, std::abs(double(L[i])-last));
+                last=L[i];
+            }
+        }
+        CHECK(gAllocs.load()==allocated);
+        CHECK(maxStep < 0.3);
+    }
 }
 
 int main() { return th::runAll(); }

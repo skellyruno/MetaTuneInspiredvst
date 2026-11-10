@@ -67,11 +67,13 @@ public:
                 ? 0.0 : std::min(150.0, confirmation + stabilizer);
         translated.correction.sustain = sustain;
 
-        // Fixed 70Hz prepared range: avoids allocations and fluctuating host
-        // PDC. With Low Latency off, Lyra's *own* 2ms detector lookahead is on.
-        // Snap Live shares the low-latency synthesis path.
+        // Always detect down to 70Hz. Ultra Live retains Lyra's pitch
+        // controller and shifter but uses a 160Hz-safe centre delay; voiced
+        // fundamentals below 155Hz are left at their natural pitch. Quality
+        // mode retains full-range 70Hz correction and 2ms lookahead.
         translated.minFreq = floorHz;
         translated.hq = !s.lowLatency;
+        translated.ultraLive = s.lowLatency;
         translated.bypass = s.bypass || translated.correction.amount <= 1.0e-6;
         // Preserve MetaTune's existing doubler as the ONLY doubler; avoid
         // running two independent double/chorus processors by accident.
@@ -96,7 +98,10 @@ public:
         const auto& p = engine.detector().latest();
         detected = c.inputMidi() > 0 ? (float)c.inputMidi() : -1.0f;
         target = c.targetNote();
-        correction = (float)c.correctionSemitones();
+        // Report the ratio the listener actually hears. Below 155Hz in
+        // Ultra Live the safe output is natural, so the meter shows 0 cents.
+        correction = 12.0f * std::log2(std::max(1.0e-5f,
+                                    engine.appliedPitchRatio()));
         confidence = std::isfinite(p.confidence) ? std::clamp(p.confidence, 0.0f, 1.0f) : 0.0f;
         if (intrinsicLatencySamples != nullptr) {
             const auto count = (std::size_t)numSamples * (std::size_t)used;

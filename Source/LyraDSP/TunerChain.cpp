@@ -24,6 +24,7 @@ void TunerChain::prepare (double sampleRate, double lowestMinFreq)
     doubler.prepare (sr);
     strike.prepare (sr);
     wetStep = float (1.0 / (0.010 * sr));
+    fastMixCoeff = float(1.0 - std::exp(-1.0 / (0.008 * sr)));
     reset();
 }
 
@@ -40,12 +41,14 @@ void TunerChain::reset() noexcept
     strikeSilentHops = 0;
     stereoFallbackChannel = 0;
     wet = wetTarget;
+    fastCorrectionMix = fastCorrectionTarget = ultraLive ? 0.0f : 1.0f;
+    lastAppliedRatio = 1.0f;
 }
 
 void TunerChain::setSettings (const Settings& s) noexcept
 {
     engine.setParams (s.correction);
-    if (s.minFreq != minFreq || s.hq != hq)
+    if (s.minFreq != minFreq || s.hq != hq || s.ultraLive != ultraLive)
     {
         if (s.minFreq != minFreq)
         {
@@ -54,6 +57,9 @@ void TunerChain::setSettings (const Settings& s) noexcept
             shifter.setMinFreq (minFreq);
         }
         hq = s.hq;
+        ultraLive = s.ultraLive;
+        shifter.setMinFreq(ultraLive ? std::max(minFreq, kUltraLiveFloorHz) : minFreq);
+        if (!ultraLive) fastCorrectionTarget = 1.0f;
         aheadDelay.setDelay (hq ? lookahead : 0); // crossfaded inside FixedDelay: no click
         dryDelay.setDelay (latencySamples());
         engine.setTiming (yin.windowSeconds(), latencySamples() / sr);
@@ -79,6 +85,12 @@ void TunerChain::process (float* const* ch, int numCh, int total) noexcept
         for (int c = 0; c < numCh; ++c)
         {
             io[c] = ch[c] + start;
+            // Sanitize the original source before it enters ANY filter or
+            // delay ring. YIN alone rejecting NaNs cannot protect the shifter.
+            for (int i = 0; i < n; ++i)
+                if (!std::isfinite(io[c][i]) || std::abs(io[c][i]) > 32.0f
+                    || std::abs(io[c][i]) < 1.0e-25f)
+                    io[c][i] = 0.0f;
             std::copy (io[c], io[c] + n, dry[c]);
         }
 
@@ -111,6 +123,12 @@ void TunerChain::process (float* const* ch, int numCh, int total) noexcept
         yin.process (mono, n, [this] (int i, const PitchEstimate& e) {
             engine.onEstimate (e, i);
             shifter.setPeriod (e.voiced ? sr / e.frequency : 0.0);
+            // 3.5ms cannot span a complete 70Hz cycle. In Ultra Live only,
+            // taper the requested ratio toward unity from 170 to 155 Hz.
+            // The low voice stays audible with correct PDC and natural pitch.
+            fastCorrectionTarget = !ultraLive ? 1.0f :
+                (e.voiced ? float(std::clamp((double(e.frequency) - 155.0) / 15.0,
+                                             0.0, 1.0)) : 0.0f);
             doubler.setPeriod (e.voiced ? sr / e.frequency : 0.0);
             // LyraStrike: accent each note-to-note change. Pending (stabilizer) or short consonant gaps
             // keep the previous note; >= 60 ms unvoiced starts a new phrase (no accent on its first note).
@@ -138,7 +156,12 @@ void TunerChain::process (float* const* ch, int numCh, int total) noexcept
             }
         });
         for (int i = 0; i < n; ++i)
-            ratio[i] = engine.nextRatio();
+        {
+            fastCorrectionMix += (fastCorrectionTarget - fastCorrectionMix) * fastMixCoeff;
+            const float requested = engine.nextRatio();
+            ratio[i] = 1.0f + fastCorrectionMix * (requested - 1.0f);
+            lastAppliedRatio = ratio[i];
+        }
 
         aheadDelay.process (io, numCh, n); // HQ lookahead (0 samples when off)
         shifter.process (io, numCh, n, ratio);

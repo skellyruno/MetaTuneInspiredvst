@@ -93,10 +93,12 @@ void MetaTuneInspiredAudioProcessor::prepareToPlay(double sr, int maxBlock)
     // head has a fixed centre delay based on the prepared 70Hz voice range;
     // the HQ setting adds exactly 2ms of detector lookahead.
     realtimeAutotune.prepare(currentSampleRate, 70.0f, 1000.0f);
-    liveLatencySamples = lyra::TunerChain::latencyFor(currentSampleRate, 70.0, false);
-    normalLatencySamples = lyra::TunerChain::latencyFor(currentSampleRate, 70.0, true);
-    // Snap Live now means the responsive LyraTune note-controller variant;
-    // it shares the SAME shifter and therefore the same host delay as Live.
+    // Genuine read-head budget: ~3.4ms Ultra Live for voices >=160Hz,
+    // full-range 70Hz HQ ~9.5ms. A 70Hz cycle cannot fit in 3.5ms
+    // without a different synthesis algorithm, so bass uses Quality mode.
+    liveLatencySamples = lyra::TunerChain::latencyFor(currentSampleRate, 70.0, false, true);
+    normalLatencySamples = lyra::TunerChain::latencyFor(currentSampleRate, 70.0, true, false);
+    // Snap Live remains a Lyra controller setting, sharing Ultra Live PDC.
     snapLiveLatencySamples = liveLatencySamples;
     fixedHorizonLatencySamples = normalLatencySamples; // only for existing ABI/state compatibility
     const int maxPreparedLatency = normalLatencySamples;
