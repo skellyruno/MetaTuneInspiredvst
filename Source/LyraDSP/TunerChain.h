@@ -35,6 +35,10 @@ public:
     static constexpr int kSubBlock = 32; // control-rate granularity (0.67 ms @48 kHz)
     static constexpr int kMaxChannels = 2;
     static constexpr double kLookaheadSeconds = 0.002; // HQ mode
+    // The original Lyra shifter needs half a pitch period of causal history.
+    // Ultra Live targets 3.5ms for voices >=160Hz, retaining the 70Hz detector
+    // range but bypassing pitch correction below the renderer's safe floor.
+    static constexpr double kUltraLiveFloorHz = 160.0;
     static_assert (kSubBlock <= Doubler::kMaxBlock);
 
     struct Settings
@@ -42,6 +46,7 @@ public:
         CorrectionEngine::Params correction;
         double minFreq = 70.0; // range floor: sets detector frame and shifter latency
         bool hq = false;       // 2 ms detector lookahead (+2 ms latency)
+        bool ultraLive = false; // ~3.4ms Live; F0 <155Hz remains neutral
         bool bypass = false;
         Doubler::Params doubler;
         bool strike = false;   // LyraStrike formant accent on note changes
@@ -56,9 +61,12 @@ public:
 
     int latencySamples() const noexcept { return shifter.latencySamples() + (hq ? lookahead : 0); }
     static int lookaheadFor (double sampleRate) noexcept { return int (std::lround (kLookaheadSeconds * sampleRate)); }
-    static int latencyFor (double sampleRate, double minFreq, bool hq = false) noexcept
+    static int latencyFor (double sampleRate, double minFreq, bool hq = false,
+                           bool ultraLive = false) noexcept
     {
-        return PitchShifter::latencyFor (sampleRate, minFreq) + (hq ? lookaheadFor (sampleRate) : 0);
+        const double renderFloor = ultraLive ? std::max(minFreq, kUltraLiveFloorHz) : minFreq;
+        return PitchShifter::latencyFor (sampleRate, renderFloor)
+             + (hq ? lookaheadFor (sampleRate) : 0);
     }
 
     // Optional; the queue must outlive the chain. Set before processing starts.
@@ -77,7 +85,10 @@ private:
     FormantAccent strike;
     int strikeLastNote = -1, strikeSilentHops = 0; // previous note for LyraStrike's direction
     int lookahead = 0;
-    bool hq = false;
+    bool hq = false, ultraLive = false;
+    // The pitch ratio, not the audio output, is crossfaded toward unity in
+    // the low register. This leaves low notes audible without invalid splices.
+    float fastCorrectionMix = 1.0f, fastCorrectionTarget = 1.0f, fastMixCoeff = 0.01f;
     TelemetryQueue* telemetry = nullptr;
     double sr = 48000, minFreq = 70;
     // Select a stable analysis side when L/R are strongly anti-correlated.
