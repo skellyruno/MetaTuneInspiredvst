@@ -29,7 +29,9 @@ The Note Stabilizer toggle and None/Short/Mid/Long selector map to Lyra's candid
 
 ### Negative-retune orb animation
 
-The current MetaTune UI and resizable canvas are preserved. Below 0 ms, the orb's **middle violet ring transitions toward hot pink**, with a smooth pink bloom, moving white-pink pitch-class glint, and an arc showing the detected-to-**actually corrected** pitch. These mirror LyraTune's negative-retune visual cues without replacing MetaTune's orb artwork. The GUI animation is driven exclusively by the editor's 60 Hz timer and follows automated Speed changes as well as mouse drags.
+The current MetaTune UI and resizable canvas are preserved. Below 0 ms, **the Speed knob enters Lyra's overload state**: its indicator trembles subtly, lit ticks flicker red-white, the metal ring gains a pulsing red halo, a zero-ms detent becomes hot, and a 350ms shockwave fires on the transition into negative retune. These overlays are computed by the GUI timer and preserved by the existing MetaTune C-shaped knob housing.
+
+Below 0 ms, the orb's **middle violet ring transitions toward hot pink**, with a smooth pink bloom, moving white-pink pitch-class glint, and an arc showing the detected-to-**actually corrected** pitch. These mirror LyraTune's negative-retune visual cues without replacing MetaTune's orb artwork. The GUI animation is driven exclusively by the editor's 60 Hz timer and follows automated Speed changes as well as mouse drags.
 
 ### Latency and register limitation
 
