@@ -128,7 +128,9 @@ int main(int argc,char**argv)
         if(auto* uiSpeed=uiProcessor.parameters.getParameter("speed"))
             uiSpeed->setValueNotifyingHost(1.0f);
         else return 21;
-        juce::MessageManager::getInstance()->runDispatchLoopUntil(460);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(90);
+        auto overloadShock = rasterizeEditor(); // 350ms entrance shockwave
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(370);
         auto negative = rasterizeEditor();
         juce::MessageManager::getInstance()->runDispatchLoopUntil(180);
         auto animated = rasterizeEditor();
@@ -159,6 +161,7 @@ int main(int argc,char**argv)
             return stream != nullptr && png.writeImageToStream(img,*stream);
         };
         if(!saveImage(neutral,"MetaTune_normal.png")
+           || !saveImage(overloadShock,"MetaTune_negative_speed_shockwave.png")
            || !saveImage(negative,"MetaTune_negative_retune.png")) return 25;
         const auto normalCentre=neutral.getPixelAt(470,365);
         const auto activeCentre=negative.getPixelAt(470,365);
@@ -172,6 +175,36 @@ int main(int argc,char**argv)
                          normalPink,aggressivePink);
             return 23;
         }
+        // The original LyraTune visual also includes an independent RED
+        // Speed-dial overload (flickering LEDs and rotating shockwave), not
+        // merely the pink orb. Verify the actual child control changes in
+        // response to negative-ms automation at the design-resolution bounds.
+        auto speedHeatScore=[](const juce::Image& image)->double
+        {
+            double score=0.0;
+            for(int y=128;y<336;y+=2)
+                for(int x=960;x<1175;x+=2)
+                {
+                    const double distance=std::hypot(double(x-1067.5),
+                                                     double(y-232.5));
+                    if(distance<76.0 || distance>110.0) continue;
+                    const auto c=image.getPixelAt(x,y);
+                    score += std::max(0.0, double(c.getRed()) -
+                                          0.6*double(c.getGreen()) -
+                                          0.4*double(c.getBlue()));
+                }
+            return score;
+        };
+        const double normalHeat=speedHeatScore(neutral);
+        const double negativeHeat=speedHeatScore(negative);
+        const double shockHeat=speedHeatScore(overloadShock);
+        std::printf("Speed overload: normal %.0f, negative %.0f, entrance shock %.0f\n",
+                    normalHeat,negativeHeat,shockHeat);
+        if(negativeHeat <= normalHeat + 100.0) return 26;
+        // Crossing 0ms must produce a distinct entrance frame that ends
+        // after 350ms, even though negative Speed remains selected.
+        if(std::abs(shockHeat - negativeHeat) < 20.0) return 27;
+
         // Verify animation moves when only time changes; the Speed value
         // stays pinned in the same negative state.
         int visualChanged=0;
