@@ -69,6 +69,23 @@ if(SKELLTUNE_BUILD_TESTS)
     target_include_directories("${test_name}" PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Source")
     add_test(NAME "${test_name}" COMMAND "${test_name}")
   endforeach()
+
+  # Original, framework-free LyraTune regression suite from the user ZIP.
+  # This verifies source parity and exercises negative speed, note transitions,
+  # vibrato, range changes, strict real-time allocation tests and stereo output.
+  add_executable(LyraOriginalDSPTests
+    tests/LyraDSP/dsp_tests.cpp
+    Source/LyraDSP/Pitch/TargetSelector.cpp
+    Source/LyraDSP/Pitch/YinDetector.cpp
+    Source/LyraDSP/Pitch/PitchShifter.cpp
+    Source/LyraDSP/Pitch/CorrectionEngine.cpp
+    Source/LyraDSP/TunerChain.cpp
+    Source/LyraDSP/Doubler.cpp
+    Source/LyraDSP/FormantAccent.cpp)
+  target_include_directories(LyraOriginalDSPTests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/Source/LyraDSP")
+  target_compile_features(LyraOriginalDSPTests PRIVATE cxx_std_20)
+  add_test(NAME LyraOriginalDSPTests COMMAND LyraOriginalDSPTests)
 endif()
 
 # This target is compiled and executed only by the Windows GitHub Actions job.
