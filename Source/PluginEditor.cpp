@@ -519,11 +519,20 @@ public:
     // GUI-thread-only visual state; never read or written by processBlock().
     // LyraTune's negative-ms Speed animation is part of the control, not
     // merely a pink ring around the large central orb.
-    void setSpeedOverloadVisuals(float amount, float phaseSeconds, float shock) noexcept
+    void setSpeedOverloadVisuals(juce::Slider& speedControl,
+                                 float amount, float phaseSeconds, float shock)
     {
-        speedOverload = juce::jlimit(0.0f, 1.0f, amount);
-        speedOverloadPhase = phaseSeconds;
-        speedOverloadShock = juce::jlimit(0.0f, 1.0f, shock);
+        // Store per-control GUI state. A global LookAndFeel is shared across
+        // every plugin instance in FL Studio; putting the animation on the
+        // LookAndFeel itself would let two open instances overwrite each
+        // other's Speed animation and shockwave.
+        static const juce::Identifier amountId("skellyOverloadAmount");
+        static const juce::Identifier phaseId("skellyOverloadPhase");
+        static const juce::Identifier shockId("skellyOverloadShock");
+        auto& props = speedControl.getProperties();
+        props.set(amountId, (double)juce::jlimit(0.0f, 1.0f, amount));
+        props.set(phaseId, (double)phaseSeconds);
+        props.set(shockId, (double)juce::jlimit(0.0f, 1.0f, shock));
     }
 
     void drawRotarySlider(juce::Graphics& g, int x, int y, int width, int height,
@@ -532,12 +541,20 @@ public:
     {
         const float side = (float)juce::jmin(width, height);
         const bool isSpeed = slider.getName() == "Speed";
-        const float overload = isSpeed ? speedOverload : 0.0f;
-        const float shock = isSpeed ? speedOverloadShock : 0.0f;
+        static const juce::Identifier amountId("skellyOverloadAmount");
+        static const juce::Identifier phaseId("skellyOverloadPhase");
+        static const juce::Identifier shockId("skellyOverloadShock");
+        const auto& properties = slider.getProperties();
+        const float overload = isSpeed
+            ? (float)(double)properties.getWithDefault(amountId, 0.0) : 0.0f;
+        const float phase = isSpeed
+            ? (float)(double)properties.getWithDefault(phaseId, 0.0) : 0.0f;
+        const float shock = isSpeed
+            ? (float)(double)properties.getWithDefault(shockId, 0.0) : 0.0f;
         // Lyra's overloaded Speed dial trembles by ~1px; the shadow, display
         // and indicator move together. No transform escapes the slider bounds.
-        const float trembleX = overload * 1.25f * std::sin(speedOverloadPhase * 71.0f);
-        const float trembleY = overload * 1.25f * std::cos(speedOverloadPhase * 53.0f);
+        const float trembleX = overload * 1.25f * std::sin(phase * 71.0f);
+        const float trembleY = overload * 1.25f * std::cos(phase * 53.0f);
         const float cx = x + width * 0.5f + trembleX;
         const float cy = y + height * 0.5f + trembleY;
         const bool isAmount = slider.getName() == "Amount";
@@ -553,7 +570,7 @@ public:
         if (isSpeed && (overload > 0.001f || shock > 0.001f))
         {
             const float pulse = 0.75f + 0.25f *
-                std::sin(speedOverloadPhase * (8.0f + 10.0f * overload));
+                std::sin(phase * (8.0f + 10.0f * overload));
             const float glow = juce::jlimit(0.0f, 0.9f,
                                            0.60f * overload * pulse + 0.45f * shock);
             const float outer = radius + 14.0f;
@@ -707,7 +724,7 @@ public:
             {
                 const float wave = 0.5f + 0.5f *
                     std::sin((float)i * 12.9898f +
-                             speedOverloadPhase * (23.0f + 3.0f * (float)(i % 5)));
+                             phase * (23.0f + 3.0f * (float)(i % 5)));
                 led = overloadHeat.interpolatedWith(juce::Colours::white,
                          0.15f + 0.55f * wave * overload);
             }
@@ -784,11 +801,6 @@ public:
                    juce::Justification::centred);
     }
 
-private:
-    float speedOverload = 0.0f;
-    float speedOverloadPhase = 0.0f;
-    float speedOverloadShock = 0.0f;
-public:
     juce::Font getComboBoxFont(juce::ComboBox& box) override
     {
         const float h = juce::jlimit(8.0f, 15.0f, (float)box.getHeight() * 0.48f);
@@ -2473,7 +2485,7 @@ void MetaTuneInspiredAudioProcessorEditor::timerCallback()
                                    - juce::jlimit(0.0f, 0.08f, deltaSeconds) / 0.35f);
     speedOverloadPhase += juce::jlimit(0.0f, 0.08f, deltaSeconds);
     if (speedOverloadPhase > 10000.0f) speedOverloadPhase = 0.0f;
-    metaTuneKnobLookAndFeel.setSpeedOverloadVisuals(negativeRetuneGlow,
+    metaTuneKnobLookAndFeel.setSpeedOverloadVisuals(speed, negativeRetuneGlow,
                                                    speedOverloadPhase, speedOverloadShock);
     // Sliders are child Components: repainting only the parent orb would not
     // animate the Speed control in a real VST3 host.
