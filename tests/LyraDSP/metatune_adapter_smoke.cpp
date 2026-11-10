@@ -81,7 +81,36 @@ static void testRate(double sr,int block) {
                 sr,block,limited,full);
 }
 
+static void testGlideThroughProductionAdapter() {
+    auto transitionCorrection=[](float glideMs) {
+        constexpr double sr=48000.0;
+        autotune::SkellyFusionEngine e;
+        e.prepare(sr,70.0f,1000.0f);
+        autotune::Settings s;
+        s.scale=autotune::Scale::Chromatic;
+        s.retuneMs=-3.0f;
+        s.precisionHardTune=true;
+        s.noteConfirmMs=0.0f;
+        s.noteStabilizerMs=0.0f;
+        s.lowLatency=true;
+        s.strength=1.0f;
+        s.glideMs=glideMs;
+        e.setSettings(s);
+        int clock=0;
+        render(e,sr,220.0,0.45,128,clock); // A3
+        render(e,sr,246.94165,0.08,128,clock); // B3, fast note jump
+        return (double)e.getCorrectionSemitones();
+    };
+    const double instant=transitionCorrection(0.0f);
+    const double portamento=transitionCorrection(200.0f);
+    std::printf("MetaTune Glide contract: instant %.3f st, Glide 200ms %.3f st\n",
+                instant,portamento);
+    require(std::abs(instant)<0.12, "0ms Glide must preserve instant hard tune");
+    require(portamento < instant-0.35, "200ms Glide must audibly slow target-note transitions");
+}
+
 int main() {
+    testGlideThroughProductionAdapter();
     for(double rate: {44100.0,48000.0,96000.0})
         for(int block: {32,128,256})
             testRate(rate,block);
