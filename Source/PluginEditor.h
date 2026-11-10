@@ -30,11 +30,11 @@ private:
     MetaTuneInspiredAudioProcessor& processor;
     juce::Slider speed, amount, sustain;
     juce::ComboBox scale, root;
-    juce::ToggleButton stabilizer { "Note Stabilizer" }, lowLatency { "Low Latency" }, snapLive { "Snap Live" };
+    juce::ToggleButton lowLatency { "Low Latency" }, snapLive { "Skell Live" }; // snapLive: stable APVTS ID
     juce::Label speedLabel, amountLabel, noteReadout, status, presetLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> speedAttach, amountAttach, sustainAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> scaleAttach, rootAttach;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> stabAttach, latencyAttach, snapLiveAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> latencyAttach, snapLiveAttach;
 
     int selectedNoteIndex = 4;
     int lastNonChromaticScaleMode = 1;
@@ -47,7 +47,6 @@ private:
     float doublerDragStartWidth = 0.46f;
     float doublerDragStartMix = 0.49f;
     int activeNoteGroup = 0;
-    int selectedCorrectionTime = 1; // None, Short, Mid, Long
     bool majorHold = false;
     bool minorHold = false;
     bool globalBypass = false;
