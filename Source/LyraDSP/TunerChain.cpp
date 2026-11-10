@@ -42,6 +42,7 @@ void TunerChain::reset() noexcept
     stereoFallbackChannel = 0;
     wet = wetTarget;
     fastCorrectionMix = fastCorrectionTarget = ultraLive ? 0.0f : 1.0f;
+    lastAppliedRatio = 1.0f;
 }
 
 void TunerChain::setSettings (const Settings& s) noexcept
@@ -159,6 +160,7 @@ void TunerChain::process (float* const* ch, int numCh, int total) noexcept
             fastCorrectionMix += (fastCorrectionTarget - fastCorrectionMix) * fastMixCoeff;
             const float requested = engine.nextRatio();
             ratio[i] = 1.0f + fastCorrectionMix * (requested - 1.0f);
+            lastAppliedRatio = ratio[i];
         }
 
         aheadDelay.process (io, numCh, n); // HQ lookahead (0 samples when off)
