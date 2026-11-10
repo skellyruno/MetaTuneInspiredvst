@@ -159,7 +159,13 @@ void TunerChain::process (float* const* ch, int numCh, int total) noexcept
         {
             fastCorrectionMix += (fastCorrectionTarget - fastCorrectionMix) * fastMixCoeff;
             const float requested = engine.nextRatio();
-            ratio[i] = 1.0f + fastCorrectionMix * (requested - 1.0f);
+            // The shifter can only render ratios in [1/1.5, 1.5].
+            // Match its physical limit *before* publishing the output ratio:
+            // a large Glide jump must not make the meter claim an octave
+            // of correction when the actual read head caps near 7 semitones.
+            ratio[i] = std::clamp(1.0f + fastCorrectionMix * (requested - 1.0f),
+                                  float(1.0 / PitchShifter::kMaxRatio),
+                                  float(PitchShifter::kMaxRatio));
             lastAppliedRatio = ratio[i];
         }
 

@@ -36,6 +36,9 @@ void CorrectionEngine::reset() noexcept
     restartVibrato();
     target = confirmed = candidate = TargetSelector::kNoTarget;
     alpha = baseAlpha;
+    glideMidi = 0.0;
+    glideValid = false;
+    correctionLimitCurrent = p.maxCorrectionSemitones;
 }
 
 void CorrectionEngine::setParams (const Params& np) noexcept
@@ -46,7 +49,15 @@ void CorrectionEngine::setParams (const Params& np) noexcept
     q.referenceHz = std::isfinite (q.referenceHz) ? std::clamp (q.referenceHz, 400.0, 480.0) : 440.0;
     q.stabilizerMs = std::isfinite (q.stabilizerMs) ? std::clamp (q.stabilizerMs, 0.0, 1000.0) : 0.0;
     q.sustain = std::isfinite (q.sustain) ? std::clamp (q.sustain, -1.0, 1.0) : 0.0;
-    const bool coeffs = q.speedMs != p.speedMs || q.hysteresisCents != p.hysteresisCents;
+    q.glideMs = std::isfinite(q.glideMs) ? std::clamp(q.glideMs, 0.0, 500.0) : 0.0;
+    q.maxCorrectionSemitones = std::isfinite(q.maxCorrectionSemitones)
+        ? std::clamp(q.maxCorrectionSemitones, 0.0, 12.0) : 12.0;
+    q.consonantReleaseMs = std::isfinite(q.consonantReleaseMs)
+        ? std::clamp(q.consonantReleaseMs, 0.0, 30.0) : 8.0;
+    const bool coeffs = q.speedMs != p.speedMs
+        || q.hysteresisCents != p.hysteresisCents
+        || q.glideMs != p.glideMs
+        || q.consonantReleaseMs != p.consonantReleaseMs;
     p = q;
     selector.setMask (p.mask);
     if (coeffs)
@@ -56,7 +67,15 @@ void CorrectionEngine::setParams (const Params& np) noexcept
 void CorrectionEngine::updateCoefficients() noexcept
 {
     baseAlpha = alpha = criticalAlpha (p.speedMs, sr);
-    releaseAlpha = criticalAlpha (std::max (p.speedMs, 20.0), sr);
+    // Consonant Release is independent of retune Speed: fast sung notes may
+    // remain locked while a short "s", "t" or breath returns to natural pitch.
+    // 0ms selects the fastest click-safe response (1ms minimum), rather
+    // than an abrupt single-sample pitch-ratio jump on a consonant.
+    // 8ms is a gentle 2-stage fade; negative hard-tune remains instant
+    // on voiced notes.
+    releaseAlpha = criticalAlpha (std::max(1.0, p.consonantReleaseMs), sr);
+    glideAlpha = onePoleAlpha(p.glideMs / 1000.0, sr);
+    correctionLimitAlpha = onePoleAlpha(0.004, sr);
     baseHyst = std::max (0.0, p.speedMs < 0 ? p.hysteresisCents * (1.0 + p.speedMs / 3.0) : p.hysteresisCents);
     selector.setHysteresisCents (baseHyst);
 }
@@ -106,7 +125,10 @@ void CorrectionEngine::onEstimate (const PitchEstimate& e, int samplesBeforeRati
         steadyHops = 0;
         restartVibrato();
         if (unvoicedTime >= kOnsetGapSeconds)
+        {
             confirmed = TargetSelector::kNoTarget; // phrase ended: the next note is an onset
+            glideValid = false; // no glide from a different vocal phrase
+        }
         candidate = TargetSelector::kNoTarget;
         candidateAge = 0;
     }
@@ -159,7 +181,16 @@ void CorrectionEngine::onEstimate (const PitchEstimate& e, int samplesBeforeRati
 
     target = active ? confirmed : TargetSelector::kNoTarget;
     if (active)
+    {
         noteAge += dt;
+        // The first note of a phrase starts in tune; only subsequent
+        // confirmed note-to-note transitions slide between targets.
+        if (!glideValid)
+        {
+            glideMidi = double(target);
+            glideValid = true;
+        }
+    }
 
     // Effective Speed: Sustain (by note age), then the steady-onset shortcut.
     alpha = baseAlpha;
@@ -179,19 +210,29 @@ void CorrectionEngine::onEstimate (const PitchEstimate& e, int samplesBeforeRati
 
 float CorrectionEngine::nextRatio() noexcept
 {
-    double u = 0;
+    // Slide the *confirmed target note*, not noisy detector measurements.
+    // Disabled by default; negative Speed still remains sample-accurate
+    // instant tuning when Glide is 0ms.
+    double u = 0.0;
     if (active)
     {
+        glideMidi += glideAlpha * (double(target) - glideMidi);
         // Pitch of the audio being shifted now (predicted forward), with the kept vibrato taken out.
         double x = inMidi + std::clamp (vel * std::min (lead + sinceEst, kMaxLeadSeconds), -kMaxPredict, kMaxPredict);
         if (vibOn)
             x = vibCentre + flatten * (x - vibCentre);
-        u = (target - x) * p.amount;
+        u = (glideMidi - x) * p.amount;
     }
     sinceEst += 1.0 / sr;
+    // At automation changes, ramp the allowed magnitude over 4ms instead
+    // of clipping from e.g. 12 semitones to 0 in one audio sample.
+    correctionLimitCurrent += correctionLimitAlpha
+        * (p.maxCorrectionSemitones - correctionLimitCurrent);
+    const double limit = std::clamp(correctionLimitCurrent, 0.0, 12.0);
+    u = std::clamp(u, -limit, limit);
     const double a = active ? alpha : releaseAlpha;
     c1 += a * (u - c1);
     c += a * (c1 - c);
-    return float (std::exp2 (c / 12.0));
+    return float (std::exp2 (std::clamp(c, -limit, limit) / 12.0));
 }
 } // namespace lyra

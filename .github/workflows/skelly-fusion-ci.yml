@@ -7,6 +7,7 @@ on:
       - feature/lyratune-engine-replacement
       - feature/meta-negative-orb-ultra-3p5
       - feature/complete-negative-retune-overload-animation
+      - feature/metatune-lyra-controls-note-transitions
   pull_request:
     branches:
       - main
@@ -36,6 +37,18 @@ jobs:
             Source/LyraDSP/FormantAccent.cpp \
             -o lyra_original_tests
           ./lyra_original_tests
+      - name: Test MetaTune automation adapter against real Lyra audio
+        run: |
+          c++ -std=c++17 -O2 -Wall -Wextra -ISource tests/LyraDSP/metatune_adapter_smoke.cpp \
+            Source/LyraDSP/Pitch/TargetSelector.cpp \
+            Source/LyraDSP/Pitch/YinDetector.cpp \
+            Source/LyraDSP/Pitch/PitchShifter.cpp \
+            Source/LyraDSP/Pitch/CorrectionEngine.cpp \
+            Source/LyraDSP/TunerChain.cpp \
+            Source/LyraDSP/Doubler.cpp \
+            Source/LyraDSP/FormantAccent.cpp \
+            -o metatune_adapter_smoke
+          ./metatune_adapter_smoke
 
   windows-vst3:
     runs-on: windows-2022
@@ -49,7 +62,7 @@ jobs:
         run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DJUCE_PATH="$env:GITHUB_WORKSPACE/JUCE" -DSKELLTUNE_BUILD_TESTS=ON -DSKELLTUNE_BUILD_WINDOWS_HOST_SMOKE=ON
       - name: Build VST3 and regression tests
         shell: pwsh
-        run: cmake --build build --config Release --target MetaTuneInspired_VST3 RealtimeAutotune_fusion_guard LyraOriginalDSPTests SkellyVST3Smoke --parallel 4
+        run: cmake --build build --config Release --target MetaTuneInspired_VST3 RealtimeAutotune_fusion_guard LyraOriginalDSPTests MetaTuneLyraAdapterSmoke SkellyVST3Smoke --parallel 4
       - name: Run DSP regression tests
         shell: pwsh
         run: ctest --test-dir build -C Release --output-on-failure

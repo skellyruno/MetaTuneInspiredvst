@@ -25,6 +25,32 @@ The existing Speed dial is still a 0–100 control and keeps the established map
 
 Sustain uses LyraTune's note-age-dependent speed adjustment, rather than applying the old MetaTune sustain multiplier a second time.
 
+### Restored MetaTune automation controls
+
+The existing JUCE parameter/automation IDs **glide**, **correctionLimit**, and
+**consonantRelease** are forwarded into the live Lyra DSP and tested on actual
+audio. Their original ranges and preset/state identifiers are unchanged.
+
+* **Glide (0–500ms)** eases the *confirmed target note* after a transition
+  within a phrase. It never slows down YIN detection or makes a new phrase
+  slide from an old note. At 0ms, negative retune is the same instant snap as
+  before.
+* **Max Correction (0–12 semitones)** limits correction in the controller and
+  ramps changes in the limit over 4ms, protecting automation against sharp
+  sample-to-sample jumps. The Lyra **shifter** still has a physical
+  ±approximately 7-semitone ratio envelope; values above it require a
+  redesigned reconstruction path, and the output meter correctly reflects
+  the real cap.
+* **Consonant Release (0–30ms)** independently controls how the tuning ratio
+  returns to unity on unvoiced or pending sound, rather than inheriting Retune
+  Speed's old 20ms floor. Zero means the fastest **click-safe** response,
+  with a 1ms minimum fade.
+
+Regression tests include note-to-note versus phrase-onset glide, capped
+correction under automation, independent consonant release, and real output
+ratios from the production MetaTune/Lyra adapter across 44.1/48/96 kHz.
+
+
 The Note Stabilizer toggle and None/Short/Mid/Long selector map to Lyra's candidate-note confirmation. Snap Live keeps the same low-delay Lyra synthesis and selects slightly tighter note hysteresis. Both toggles keep their original UI names and stored IDs.
 
 ### Negative-retune orb animation

@@ -84,6 +84,9 @@ public:
         float minConfidence = 0.70f;
         double stabilizerMs = 0.0; // 0 = off
         double sustain = 0.0;      // -1..1
+        double glideMs = 0.0;      // 0..500, smooth confirmed target-note transitions only
+        double maxCorrectionSemitones = 12.0; // 0..12, output correction limit
+        double consonantReleaseMs = 8.0; // 0..30, return to natural pitch during unvoiced input
     };
 
     static constexpr double kSustainRampSeconds = 0.5;
@@ -123,6 +126,13 @@ private:
     Params p;
     TargetSelector selector;
     double sr = 48000, dt = 0.002, baseAlpha = 1, alpha = 1, releaseAlpha = 1, baseHyst = 15;
+    // Separate, sample-accurate glide between CONFIRMED target notes. The
+    // detector, note lock and hysteresis are unchanged; glide cannot alter
+    // target selection or latency.
+    double glideMidi = 0.0, glideAlpha = 1.0;
+    bool glideValid = false;
+    // A 4ms output-limit slew avoids clicks when max correction is automated.
+    double correctionLimitCurrent = 12.0, correctionLimitAlpha = 1.0;
     double c = 0, c1 = 0, inMidi = 0; // c1: first smoothing stage
     double prevMidi = 0, vel = 0, velSmooth = 0, lead = 0, sinceEst = 0, winSec = 0, delaySec = 0; // prediction (st, st/s, s); prevMidi 0 = none
     double noteAge = 0, candidateAge = 0, unvoicedTime = 1.0, now = 0;

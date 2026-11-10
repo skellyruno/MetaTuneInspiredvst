@@ -475,6 +475,164 @@ TEST (correction_speed_time_constant)
     }
 }
 
+// ---------- MetaTune controls carried through the LyraTune adapter ----------
+// These parameters already have stable host automation IDs. A compiler-only
+// test would miss a disconnected control; measure actual ratio trajectories.
+
+TEST (metatune_glide_between_confirmed_notes)
+{
+    const double sr = 48000.0;
+    auto run = [sr] (double glideMs, bool newPhrase)
+    {
+        CorrectionEngine e;
+        e.prepare(sr, 0.002);
+        CorrectionEngine::Params p;
+        p.speedMs = -3.0; // preserve original hard-tune response
+        p.glideMs = glideMs;
+        e.setParams(p);
+        for (int hop=0;hop<70;++hop)
+        {
+            e.onEstimate(est(midiToFreq(60.25)));
+            for (int k=0;k<96;++k) e.nextRatio();
+        }
+        if (newPhrase)
+            for(int hop=0;hop<40;++hop)
+            {
+                e.onEstimate({0.0f, 0.0f, false});
+                for (int k=0;k<96;++k) e.nextRatio();
+            }
+        e.onEstimate(est(midiToFreq(62.25)));
+        const double first = 12.0 * std::log2((double)e.nextRatio());
+        float end = 1.0f;
+        for(int k=0;k<int(sr*0.60);++k) end=e.nextRatio();
+        return std::pair<double,double> {first, 12.0*std::log2((double)end)};
+    };
+    const auto instant = run(0.0, false);
+    const auto glide = run(80.0, false);
+    const auto onset = run(80.0, true);
+    CHECK_NEAR(instant.first, -0.25, 0.004);
+    CHECK(glide.first < -1.80); // from previous C target toward D, no pitch discontinuity in target
+    CHECK_NEAR(glide.second, -0.25, 0.04); // reaches next note
+    CHECK_NEAR(onset.first, -0.25, 0.004); // separate phrase never glides from stale target
+    CHECK_NEAR(onset.second, -0.25, 0.04);
+}
+
+TEST (metatune_max_correction_limits_and_automates_without_click)
+{
+    const double sr=48000.0;
+    CorrectionEngine e; e.prepare(sr,0.002);
+    CorrectionEngine::Params p; p.speedMs=-3.0; p.maxCorrectionSemitones=0.12;
+    e.setParams(p); e.reset();
+    e.onEstimate(est(midiToFreq(60.30)));
+    CHECK_NEAR(1200.0*std::log2((double)e.nextRatio()), -12.0, 0.01);
+    p.maxCorrectionSemitones=0.0;
+    e.setParams(p);
+    double last=1200.0*std::log2((double)e.nextRatio());
+    double maxStep=0.0;
+    for(int i=0;i<4800;++i)
+    {
+        const double current=1200.0*std::log2((double)e.nextRatio());
+        maxStep=std::max(maxStep,std::abs(current-last));
+        last=current;
+    }
+    CHECK(maxStep < 0.15); // avoids the single-sample 12-cent click
+    CHECK(std::abs(last)<0.005);
+    const long allocations=gAllocs.load();
+    for(int i=0;i<2000;++i) e.nextRatio();
+    CHECK(gAllocs.load()==allocations);
+}
+
+TEST (metatune_consonant_release_is_independent_of_retune_speed)
+{
+    auto tail = [] (double releaseMs) {
+        CorrectionEngine e; e.prepare(48000.0,0.002);
+        CorrectionEngine::Params p;
+        p.speedMs=-3.0;
+        p.consonantReleaseMs=releaseMs;
+        e.setParams(p); e.reset();
+        e.onEstimate(est(midiToFreq(60.35)));
+        for(int i=0;i<480;++i) e.nextRatio();
+        e.onEstimate({0.0f,0.0f,false});
+        float r=1.0f;
+        for(int i=0;i<480;++i) r=e.nextRatio();
+        return std::abs(1200.0 * std::log2((double)r));
+    };
+    const double fast=tail(2.0), slow=tail(25.0);
+    CHECK(fast < 1.0);
+    CHECK(slow > 20.0);
+    CHECK(fast < slow * 0.15);
+
+    // Even a requested 0ms release must not instantaneously reset -35
+    // cents in one sample at the start of a consonant.
+    CorrectionEngine zero; zero.prepare(48000.0,0.002);
+    CorrectionEngine::Params z;
+    z.speedMs=-3.0;
+    z.consonantReleaseMs=0.0;
+    zero.setParams(z); zero.reset();
+    zero.onEstimate(est(midiToFreq(60.35)));
+    float previous=1.0f;
+    for(int n=0;n<960;++n) previous=zero.nextRatio();
+    zero.onEstimate({0.0f,0.0f,false});
+    const float next=zero.nextRatio();
+    const double jumpCents=std::abs(1200.0*std::log2((double)next/previous));
+    CHECK(jumpCents < 2.0);
+}
+
+TEST (lyra_glide_output_meter_respects_shifter_ratio_limits)
+{
+    // A deliberately huge C4->C5 glide asks for a full octave of temporary
+    // downward correction. The real time-domain shifter is physically
+    // limited to +/- ~7 semitones; output telemetry must describe THAT
+    // applied pitch ratio instead of the unrenderable requested -12.
+    constexpr double sr=48000.0;
+    constexpr int blockSize=128;
+    TunerChain chain; chain.prepare(sr,70.0);
+    TunerChain::Settings s;
+    s.minFreq=70.0;
+    s.ultraLive=true;
+    s.correction.speedMs=-3.0;
+    s.correction.glideMs=450.0;
+    s.correction.mask=PitchClassMask(1u << 0);
+    s.correction.stabilizerMs=0.0;
+    chain.setSettings(s);
+    float left[blockSize]{};
+    double phase=0.0;
+    double minRatio=10.0;
+    const long allocations=gAllocs.load();
+    for (int block=0; block<400; ++block)
+    {
+        const double f=block<140 ? midiToFreq(60.0) : midiToFreq(72.0);
+        for(int i=0;i<blockSize;++i)
+        {
+            phase += 2.0*kPi*f/sr;
+            left[i]=(float)(0.25*std::sin(phase));
+        }
+        float* channels[]={left};
+        chain.process(channels,1,blockSize);
+        const double actual=chain.appliedPitchRatio();
+        CHECK(std::isfinite(actual));
+        CHECK(actual >= 1.0 / PitchShifter::kMaxRatio - 1e-5);
+        CHECK(actual <= PitchShifter::kMaxRatio + 1e-5);
+        if(block>=140) minRatio=std::min(minRatio,actual);
+    }
+    CHECK(gAllocs.load()==allocations);
+    CHECK(minRatio<0.90); // real glide and shifter saturation exercised
+}
+
+TEST (metatune_parameter_sanitization_is_finite)
+{
+    CorrectionEngine e; e.prepare(96000.0, 0.002);
+    CorrectionEngine::Params p;
+    p.speedMs=-3.0;
+    p.glideMs=std::numeric_limits<double>::quiet_NaN();
+    p.maxCorrectionSemitones=std::numeric_limits<double>::infinity();
+    p.consonantReleaseMs=-500.0;
+    e.setParams(p);
+    e.onEstimate(est(midiToFreq(60.35)));
+    for (int i=0;i<4000;++i)
+        CHECK(std::isfinite(e.nextRatio()));
+}
+
 TEST (correction_negative_speed_and_edges)
 {
     CorrectionEngine e; e.prepare (48000);
@@ -1281,6 +1439,42 @@ TEST (ultra_live_aggressive_retune_is_audible_and_in_tune)
                 steadyStep = std::max(steadyStep, std::abs(double(y[i]-y[i-1])));
         }
         CHECK(peak < 1.0 && steadyStep < 0.25);
+    }
+}
+
+TEST (metatune_low_register_quality_corrects_while_ultra_live_preserves)
+{
+    // Record the physical latency/quality distinction as a measurable
+    // baseline for future predictive bass reconstruction work. We must not
+    // advertise 3.5ms full-range correction until this test can pass with
+    // a genuinely causal low-register synthesis renderer.
+    for(double sr: {44100.0, 48000.0, 96000.0})
+    {
+        const double sourceHz=113.0;  // +46.6 cents above A2 (110Hz)
+        const auto input=tone(sr,sourceHz,0.82,true);
+        TunerChain::Settings s;
+        s.minFreq=70.0;
+        s.correction.speedMs=-3.0;
+        s.correction.stabilizerMs=0.0;
+        s.correction.amount=1.0;
+        s.ultraLive=true;
+        s.hq=false;
+        const auto live=runChain(input,s,sr,128);
+        const double liveHz=medianPitch(live,sr,120);
+        s.ultraLive=false;
+        s.hq=true;
+        const auto quality=runChain(input,s,sr,128);
+        const double qualityHz=medianPitch(quality,sr,120);
+        CHECK(liveHz>0.0 && qualityHz>0.0);
+        if(liveHz>0 && qualityHz>0)
+        {
+            const double preserved=1200.0*std::log2(liveHz/sourceHz);
+            const double tuned=1200.0*std::log2(qualityHz/110.0);
+            std::printf("  A2 low voice @%.0f: 3.5ms Live %+.2f c (natural), full-range Quality %+.2f c (tuned)\n",
+                        sr,preserved,tuned);
+            CHECK(std::abs(preserved)<8.0);
+            CHECK(std::abs(tuned)<8.0);
+        }
     }
 }
 
