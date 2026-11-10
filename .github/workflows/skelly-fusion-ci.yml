@@ -5,6 +5,7 @@ on:
     branches:
       - feature/skelly-fusion-tune-engine
       - feature/lyratune-engine-replacement
+      - feature/meta-negative-orb-ultra-3p5
   pull_request:
     branches:
       - main
