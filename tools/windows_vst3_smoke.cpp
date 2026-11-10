@@ -79,6 +79,17 @@ int main(int argc,char**argv)
         uiProcessor.prepareToPlay(sampleRate,256);
         std::unique_ptr<juce::AudioProcessorEditor> editor(uiProcessor.createEditor());
         if(!editor) return 18;
+        // The renamed host parameter must retain the exact saved ID from
+        // old FL Studio projects and must not accidentally remove the old
+        // stabilizer entries from the state parameter tree.
+        auto* skellParam=uiProcessor.parameters.getParameter("snapLive");
+        if(!skellParam || skellParam->getName(128)!="Skell Live"
+           || uiProcessor.parameters.getParameter("stabilizer")==nullptr
+           || uiProcessor.parameters.getParameter("stabilizerTime")==nullptr)
+        {
+            std::fprintf(stderr, "Skell Live ID/name or legacy preset compatibility missing\n");
+            return 28;
+        }
         editor->setVisible(true);
         juce::MessageManager::getInstance()->runDispatchLoopUntil(200);
         // Software render the original editor directly. No native peer is
@@ -98,10 +109,22 @@ int main(int argc,char**argv)
         {
             editor->setSize(size.x, size.y);
             juce::MessageManager::getInstance()->runDispatchLoopUntil(150);
+            int visibleToggles=0;
+            bool hasSkellLive=false;
             for(int childIndex=0; childIndex<editor->getNumChildComponents(); ++childIndex)
             {
                 auto* child = editor->getChildComponent(childIndex);
                 if(!child || !child->isVisible()) continue;
+                if(auto* toggle=dynamic_cast<juce::ToggleButton*>(child))
+                {
+                    ++visibleToggles;
+                    hasSkellLive |= toggle->getButtonText().equalsIgnoreCase("Skell Live");
+                    if(toggle->getButtonText().containsIgnoreCase("Stabilizer"))
+                    {
+                        std::fprintf(stderr,"Removed Note Stabilizer still visible\n");
+                        return 29;
+                    }
+                }
                 const auto b = child->getBounds();
                 if(b.getX()<0 || b.getY()<0 || b.getRight()>editor->getWidth()+1
                    || b.getBottom()>editor->getHeight()+1)
@@ -110,11 +133,39 @@ int main(int argc,char**argv)
                     return 19;
                 }
             }
+            if(visibleToggles!=2 || !hasSkellLive)
+            {
+                std::fprintf(stderr,"Expected only Skell Live + Low Latency switches\n");
+                return 30;
+            }
             auto snapshot = rasterizeEditor();
             if(snapshot.isNull() || snapshot.getWidth()!=size.x
                || snapshot.getHeight()!=size.y) return 20;
             if(size.x==1366) neutral = snapshot;
         }
+
+        // Skell Live must visibly change the existing performance row and
+        // must not alter its window size or spawn an old stabilizer button.
+        skellParam->setValueNotifyingHost(1.0f);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(140);
+        auto skellModeShot=rasterizeEditor();
+        auto pixelsChanged=[](const juce::Image& a,const juce::Image& b,
+                              int x0,int y0,int x1,int y1)->int
+        {
+            int changed=0;
+            for(int y=y0;y<y1;y+=2)
+                for(int x=x0;x<x1;x+=2)
+                    changed+=a.getPixelAt(x,y)!=b.getPixelAt(x,y);
+            return changed;
+        };
+        const int skellRowPixels=pixelsChanged(neutral,skellModeShot,691,687,974,721);
+        if(skellRowPixels < 10)
+        {
+            std::fprintf(stderr,"Skell Live state not visible in tracking row\n");
+            return 31;
+        }
+        skellParam->setValueNotifyingHost(0.0f);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(100);
 
         // The user-requested LyraTune visual: the middle ring must visibly
         // become pink when Speed enters -3ms; it must also keep animating.
@@ -161,6 +212,7 @@ int main(int argc,char**argv)
             return stream != nullptr && png.writeImageToStream(img,*stream);
         };
         if(!saveImage(neutral,"MetaTune_normal.png")
+           || !saveImage(skellModeShot,"MetaTune_Skell_Live.png")
            || !saveImage(overloadShock,"MetaTune_negative_speed_shockwave.png")
            || !saveImage(negative,"MetaTune_negative_retune.png")) return 25;
         const auto normalCentre=neutral.getPixelAt(470,365);
