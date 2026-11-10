@@ -80,6 +80,9 @@ private:
     bool hq = false;
     TelemetryQueue* telemetry = nullptr;
     double sr = 48000, minFreq = 70;
+    // Select a stable analysis side when L/R are strongly anti-correlated.
+    // This never changes the separate linked-stereo synthesis channels.
+    int stereoFallbackChannel = 0;
     float wet = 1, wetTarget = 1, wetStep = 0.01f;
     float mono[kSubBlock] {}, ratio[kSubBlock] {}, dry[kMaxChannels][kSubBlock] {};
 };
