@@ -33,6 +33,14 @@ target_sources(MetaTuneInspired PRIVATE
     Source/PitchRiskModel.h
     Source/RealtimeLatencyLimits.h
     Source/SnapLiveShifter.h
+    # The supplied LyraTune DSP is now the actual tuned-audio implementation.
+    Source/LyraDSP/TunerChain.cpp
+    Source/LyraDSP/Pitch/YinDetector.cpp
+    Source/LyraDSP/Pitch/TargetSelector.cpp
+    Source/LyraDSP/Pitch/CorrectionEngine.cpp
+    Source/LyraDSP/Pitch/PitchShifter.cpp
+    Source/LyraDSP/Doubler.cpp
+    Source/LyraDSP/FormantAccent.cpp
 )
 target_compile_features(MetaTuneInspired PRIVATE cxx_std_17)
 target_compile_definitions(MetaTuneInspired PUBLIC
