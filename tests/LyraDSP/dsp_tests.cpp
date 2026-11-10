@@ -1427,6 +1427,42 @@ TEST (ultra_live_aggressive_retune_is_audible_and_in_tune)
     }
 }
 
+TEST (metatune_low_register_quality_corrects_while_ultra_live_preserves)
+{
+    // Record the physical latency/quality distinction as a measurable
+    // baseline for future predictive bass reconstruction work. We must not
+    // advertise 3.5ms full-range correction until this test can pass with
+    // a genuinely causal low-register synthesis renderer.
+    for(double sr: {44100.0, 48000.0, 96000.0})
+    {
+        const double sourceHz=113.0;  // +46.6 cents above A2 (110Hz)
+        const auto input=tone(sr,sourceHz,0.82,true);
+        TunerChain::Settings s;
+        s.minFreq=70.0;
+        s.correction.speedMs=-3.0;
+        s.correction.stabilizerMs=0.0;
+        s.correction.amount=1.0;
+        s.ultraLive=true;
+        s.hq=false;
+        const auto live=runChain(input,s,sr,128);
+        const double liveHz=medianPitch(live,sr,120);
+        s.ultraLive=false;
+        s.hq=true;
+        const auto quality=runChain(input,s,sr,128);
+        const double qualityHz=medianPitch(quality,sr,120);
+        CHECK(liveHz>0.0 && qualityHz>0.0);
+        if(liveHz>0 && qualityHz>0)
+        {
+            const double preserved=1200.0*std::log2(liveHz/sourceHz);
+            const double tuned=1200.0*std::log2(qualityHz/110.0);
+            std::printf("  A2 low voice @%.0f: 3.5ms Live %+.2f c (natural), full-range Quality %+.2f c (tuned)\n",
+                        sr,preserved,tuned);
+            CHECK(std::abs(preserved)<8.0);
+            CHECK(std::abs(tuned)<8.0);
+        }
+    }
+}
+
 TEST (ultra_live_bass_is_preserved_instead_of_synthesized_from_future_samples)
 {
     for (double sr : {44100.0, 48000.0, 96000.0})
