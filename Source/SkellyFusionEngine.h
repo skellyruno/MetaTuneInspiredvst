@@ -50,21 +50,24 @@ public:
         const auto relativeMask = static_cast<lyra::PitchClassMask>(
             scaleMask(s.scale, s.customScale));
         translated.correction.mask = lyra::transposeMask(relativeMask, s.key);
-        // Keep Lyra's tested 0.70 voiced-confidence floor. MetaTune's old
-        // 0.85 stabilizer threshold was tuned for another detector and would
-        // wrongly reject airy/breathy vowels here; stabilization is performed
-        // by Lyra's separate note-confirmation controller below.
-        translated.correction.minConfidence = 0.70f;
-        // Snap Live now uses the SAME Lyra shifter, but with a more responsive
-        // scale boundary (a deliberate controller variant, not a fake DSP mode).
-        translated.correction.hysteresisCents = s.snapLive ? 10.0 : 15.0;
+        // Skell Live is a real note-controller profile, not another audio
+        // renderer. It uses stronger low-confidence voiced acquisition, a
+        // movement-aware note boundary and a 1-hop octave hypothesis guard.
+        // Host parameter ID stays "snapLive" for old sessions.
+        translated.correction.skellLive = s.snapLive && s.lowLatency;
+        translated.correction.minConfidence =
+            translated.correction.skellLive ? 0.65f : 0.70f;
+        translated.correction.hysteresisCents =
+            translated.correction.skellLive ? 7.0 : 15.0;
+        // The old Note Stabilizer toggle and four timing pills have been
+        // removed. Their saved APVTS fields are deliberately ignored.
+        // Preserve the separate legacy noteConfirm automation in normal
+        // mode, but never delay Skell Live's target acquisition.
         const double confirmation = std::isfinite(s.noteConfirmMs)
             ? std::clamp((double)s.noteConfirmMs, 0.0, 100.0) : 10.0;
-        const double stabilizer = std::isfinite(s.noteStabilizerMs)
-            ? std::clamp((double)s.noteStabilizerMs * 0.13, 0.0, 110.0) : 0.0;
         translated.correction.stabilizerMs =
-            translated.correction.speedMs < 0.0 || s.precisionHardTune
-                ? 0.0 : std::min(150.0, confirmation + stabilizer);
+            translated.correction.skellLive || translated.correction.speedMs < 0.0
+            || s.precisionHardTune ? 0.0 : confirmation;
         translated.correction.sustain = sustain;
         // These MetaTune APVTS controls were previously read in the processor
         // but silently omitted by this adapter. Forward them to the actual
