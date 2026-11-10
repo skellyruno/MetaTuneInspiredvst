@@ -3,6 +3,7 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_graphics/juce_graphics.h>
+#include "../Source/PluginProcessor.h"
 #include <cmath>
 #include <cstdio>
 #include <memory>
@@ -66,18 +67,22 @@ int main(int argc,char**argv)
         // the actual compiled UI, render at compact/mid/full sizes, and check
         // that every visible control remains within the panel.
         if(!plugin->hasEditor()) return 17;
-        std::unique_ptr<juce::AudioProcessorEditor> editor(plugin->createEditorIfNeeded());
+        // The host's VST3PluginInstance returns a native placeholder
+        // component. Its paint is black because the real VST3 editor lives
+        // inside a CHILD HWND. The original software screenshot check was
+        // inadvertently rasterizing that wrapper, not the plugin UI.
+        //
+        // Keep scan/instantiation/audio/state/PDC on the real VST3 instance.
+        // Render the SAME compiled MetaTune editor from the linked shared
+        // code target to a JUCE image independently of HWND composition.
+        MetaTuneInspiredAudioProcessor uiProcessor;
+        uiProcessor.prepareToPlay(sampleRate,256);
+        std::unique_ptr<juce::AudioProcessorEditor> editor(uiProcessor.createEditor());
         if(!editor) return 18;
-        // An unattached VST3 editor can return an all-transparent snapshot
-        // even though its JUCE controls and bounds exist. Give the component
-        // a proper native peer and dispatch paint events before capturing.
-        editor->addToDesktop(juce::ComponentPeer::windowIsTemporary);
         editor->setVisible(true);
         juce::MessageManager::getInstance()->runDispatchLoopUntil(200);
-        // Render the JUCE component hierarchy to an ARGB image, rather
-        // than screenshotting the native peer. Windows CI runners have no
-        // visible interactive desktop, and createComponentSnapshot() can
-        // return an opaque black capture even while paint() is correct.
+        // Software render the original editor directly. No native peer is
+        // needed, and this is still the actual UI code in the VST3 build.
         auto rasterizeEditor=[&]() -> juce::Image
         {
             juce::Image image(juce::Image::ARGB, editor->getWidth(),
@@ -118,6 +123,11 @@ int main(int argc,char**argv)
             if(param->getName(128).equalsIgnoreCase("Speed")) speedParam=param;
         if(!speedParam) return 21;
         speedParam->setValueNotifyingHost(1.0f);
+        // Also exercise real APVTS automation on the direct shared-code
+        // editor under test, not the unrelated host wrapper instance.
+        if(auto* uiSpeed=uiProcessor.parameters.getParameter("speed"))
+            uiSpeed->setValueNotifyingHost(1.0f);
+        else return 21;
         juce::MessageManager::getInstance()->runDispatchLoopUntil(460);
         auto negative = rasterizeEditor();
         juce::MessageManager::getInstance()->runDispatchLoopUntil(180);
@@ -175,6 +185,7 @@ int main(int argc,char**argv)
         std::printf("UI visual smoke: 3 sizes, controls in-bounds, pink ring %.0f -> %.0f, animated pixels=%d\n",
                     normalPink,aggressivePink,visualChanged);
         editor.reset();
+        uiProcessor.releaseResources();
 
         juce::MemoryBlock state;
         plugin->getStateInformation(state);
