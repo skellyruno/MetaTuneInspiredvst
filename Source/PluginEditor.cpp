@@ -774,7 +774,7 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     if (auto* toneVolumeRaw = processor.parameters.getRawParameterValue("toneVolume"))
         toneVolume = juce::jlimit(0.0f, 1.0f, toneVolumeRaw->load(std::memory_order_relaxed) / 100.0f);
     speed.setName("Speed"); amount.setName("Amount"); sustain.setName("Sustain");
-    speed.setTooltip("Retune Speed: 200 ms (natural) down to -3 ms (hard tune)");
+    speed.setTooltip("Retune Speed: 200 ms to -3 ms. Below 0 ms LyraTune enables aggressive hard-snap correction and the orb glows pink.");
     amount.setTooltip("Correction Amount: 0% to 100%");
     sustain.setTooltip("Sustain response changes how retuning reacts on held notes; negative values slow it down and positive values speed it up.");
     styleKnob(speed); styleKnob(amount); styleKnob(sustain);
@@ -836,7 +836,7 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     snapLiveAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(processor.parameters,"snapLive",snapLive);
     // Note Stabilizer and Low Latency are independently selectable in MetaTune.
     // Live also changes the host-reported PDC; Normal uses a larger grain budget.
-    lowLatency.setTooltip("LyraTune Live: period-synchronous low-latency tracking. Off: enables 2 ms of detector lookahead for more accurate correction timing. Host PDC follows the actual prepared voice range.");
+    lowLatency.setTooltip("Ultra Live: about 3.4 ms host latency for voices above 170 Hz. Lower notes remain audible at natural pitch for safety. Off: full-range 70 Hz LyraTune Quality (~9.5 ms @48k) with 2 ms detector lookahead.");
     stabilizer.setEnabled(true);
     snapLive.setTooltip("LyraTune Snap Live: tighter note-selection hysteresis using the same linked-stereo shifter. Live latency is unchanged. For the most aggressive snap, raise Speed into the negative-ms range.");
     snapLive.setEnabled(lowLatency.getToggleState());
@@ -1541,6 +1541,47 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
             g.setColour(ringColour.withAlpha(alpha));
             g.drawLine(p0.x, p0.y, p1.x, p1.y, ring.width);
         }
+    }
+
+    // LyraTune negative-retune visual state. Below 0 ms Lyra's violet ring
+    // shifts toward hot pink and gains brightness; use the existing MetaTune
+    // silver shell/orb artwork, with only this subtle moving inner-ring bloom.
+    // The additional visual phase is computed on the editor thread, never DSP.
+    if (negativeRetuneGlow > 0.002f)
+    {
+        const float negative = juce::jlimit(0.0f, 1.0f, negativeRetuneGlow);
+        const float animatedPulse = 0.78f + 0.22f * std::sin(orbElapsedSeconds * 7.6f);
+        const float bypassFade = globalBypass ? 0.36f : 1.0f;
+        const float bloom = negative * animatedPulse * bypassFade;
+        const auto aggressivePink = juce::Colour(0xffff72c9).interpolatedWith(
+            juce::Colour(0xffffb8ea), juce::jlimit(0.0f, 1.0f, 0.2f + 0.45f * pitchLock));
+        // The original Lyra animation changes the MIDDLE ring, not the bright
+        // outer hardware shell. Preserve the white shell and purple base glow.
+        for (int halo = 6; halo >= 1; --halo)
+        {
+            const float spread = (float)halo * 1.1f;
+            g.setColour(aggressivePink.withAlpha(bloom * (0.012f + 0.013f * (7 - halo))));
+            g.drawEllipse(316.0f - spread, 211.0f - spread,
+                          308.0f + 2.0f * spread, 308.0f + 2.0f * spread,
+                          2.0f + (float)halo * 1.8f);
+        }
+        g.setColour(aggressivePink.withAlpha(bloom * (0.50f + 0.20f * pitchLock)));
+        g.drawEllipse(316.0f, 211.0f, 308.0f, 308.0f, 3.1f);
+
+        // Pink-white pitch-class arc travels around the ring while the core
+        // keeps MetaTune's own existing speed-linked gyroscope animation.
+        const float notePhase = processor.getSmoothedTargetMidiNote()
+            * (juce::MathConstants<float>::twoPi / 12.0f);
+        const float phase = orbRotationRadians * 0.67f + notePhase;
+        juce::Path movingGlint;
+        movingGlint.addCentredArc(470.0f, 365.0f, 153.5f, 153.5f, 0.0f,
+                                 phase - 0.50f, phase + 0.58f, true);
+        g.setColour(aggressivePink.withAlpha(bloom * 0.18f));
+        g.strokePath(movingGlint, juce::PathStrokeType(12.0f,
+                              juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.setColour(juce::Colour(0xffffe6f9).withAlpha(bloom * 0.78f));
+        g.strokePath(movingGlint, juce::PathStrokeType(2.1f,
+                              juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     }
 
     // Equatorial micro-sparks launch from the glass core and drift outward into
@@ -2306,6 +2347,13 @@ void MetaTuneInspiredAudioProcessorEditor::timerCallback()
     const float deltaSeconds = (float)(nowMs - orbLastTickMs) * 0.001f;
     orbLastTickMs = nowMs;
     updateOrbMotion(deltaSeconds);
+    // The Lyra negative-retune ring smoothly enters and leaves the hard-snap
+    // state even when Speed is automated from FL Studio rather than dragged.
+    const float signedRetuneMs =
+        MetaTuneInspiredAudioProcessor::speedControlToMilliseconds((float)speed.getValue());
+    const float negativeTarget = juce::jlimit(0.0f, 1.0f, -signedRetuneMs / 3.0f);
+    const float easing = 1.0f - std::exp(-12.0f * juce::jlimit(0.0f, 0.08f, deltaSeconds));
+    negativeRetuneGlow += (negativeTarget - negativeRetuneGlow) * easing;
 
     // The inner plasma spins quickly on launch, then settles to a rate tied to Speed.
     const float speedNorm = juce::jlimit(0.0f, 1.0f, (float)speed.getValue() / 100.0f);
