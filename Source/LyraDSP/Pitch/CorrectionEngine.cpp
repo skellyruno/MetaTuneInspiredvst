@@ -69,8 +69,11 @@ void CorrectionEngine::updateCoefficients() noexcept
     baseAlpha = alpha = criticalAlpha (p.speedMs, sr);
     // Consonant Release is independent of retune Speed: fast sung notes may
     // remain locked while a short "s", "t" or breath returns to natural pitch.
-    // 0ms means immediate release, 8ms default is a gentle 2-stage fade.
-    releaseAlpha = criticalAlpha (p.consonantReleaseMs, sr);
+    // 0ms selects the fastest click-safe response (1ms minimum), rather
+    // than an abrupt single-sample pitch-ratio jump on a consonant.
+    // 8ms is a gentle 2-stage fade; negative hard-tune remains instant
+    // on voiced notes.
+    releaseAlpha = criticalAlpha (std::max(1.0, p.consonantReleaseMs), sr);
     glideAlpha = onePoleAlpha(p.glideMs / 1000.0, sr);
     correctionLimitAlpha = onePoleAlpha(0.004, sr);
     baseHyst = std::max (0.0, p.speedMs < 0 ? p.hysteresisCents * (1.0 + p.speedMs / 3.0) : p.hysteresisCents);
