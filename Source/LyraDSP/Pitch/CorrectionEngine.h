@@ -140,6 +140,10 @@ private:
     // retarget the note; a real octave remains available within 1 hop (~2ms).
     double octaveCandidateMidi = 0.0;
     int octaveCandidateHops = 0;
+    // A genuine melodic run has sustained pitch movement in one direction;
+    // one-hop detector jitter and alternating vibrato should not open the
+    // tight Skell Live target-selection boundary.
+    int motionDirection = 0, motionRunHops = 0;
     double c = 0, c1 = 0, inMidi = 0; // c1: first smoothing stage
     double prevMidi = 0, vel = 0, velSmooth = 0, lead = 0, sinceEst = 0, winSec = 0, delaySec = 0; // prediction (st, st/s, s); prevMidi 0 = none
     double noteAge = 0, candidateAge = 0, unvoicedTime = 1.0, now = 0;
