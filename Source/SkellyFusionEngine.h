@@ -98,7 +98,10 @@ public:
         const auto& p = engine.detector().latest();
         detected = c.inputMidi() > 0 ? (float)c.inputMidi() : -1.0f;
         target = c.targetNote();
-        correction = (float)c.correctionSemitones();
+        // Report the ratio the listener actually hears. Below 155Hz in
+        // Ultra Live the safe output is natural, so the meter shows 0 cents.
+        correction = 12.0f * std::log2(std::max(1.0e-5f,
+                                    engine.appliedPitchRatio()));
         confidence = std::isfinite(p.confidence) ? std::clamp(p.confidence, 0.0f, 1.0f) : 0.0f;
         if (intrinsicLatencySamples != nullptr) {
             const auto count = (std::size_t)numSamples * (std::size_t)used;
