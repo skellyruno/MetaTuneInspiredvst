@@ -1993,12 +1993,8 @@ void MetaTuneInspiredAudioProcessorEditor::openHeaderMenu()
             safeThis->majorHold = false;
             safeThis->minorHold = false;
             safeThis->toneVolume = 0.65f;
-            safeThis->stabilizer.setToggleState(true, juce::sendNotificationSync);
             safeThis->lowLatency.setToggleState(true, juce::sendNotificationSync);
             safeThis->snapLive.setToggleState(false, juce::sendNotificationSync);
-            safeThis->selectedCorrectionTime = 1;
-            if (auto* parameter = safeThis->processor.parameters.getParameter("stabilizerTime"))
-                parameter->setValueNotifyingHost(parameter->convertTo0to1(1.0f));
             safeThis->globalBypass = false;
             if (auto* parameter = safeThis->processor.parameters.getParameter("pitchReference"))
                 parameter->setValueNotifyingHost(parameter->convertTo0to1(440.0f));
@@ -2014,7 +2010,6 @@ void MetaTuneInspiredAudioProcessorEditor::openHeaderMenu()
             safeThis->showDetectedNotes = true;
             safeThis->pitchReferenceHz = 440.0f;
             safeThis->selectedPresetName = "No preset selected";
-            safeThis->stabilizer.setEnabled(!safeThis->lowLatency.getToggleState());
             safeThis->repaint();
         }
     });
@@ -2074,9 +2069,6 @@ void MetaTuneInspiredAudioProcessorEditor::loadPresetFromFile()
                     safeThis->selectedNoteIndex = juce::jlimit(0, 11, safeThis->root.getSelectedItemIndex());
                     if (safeThis->scale.getSelectedItemIndex() != 0)
                         safeThis->lastNonChromaticScaleMode = safeThis->scale.getSelectedItemIndex();
-                    if (safeThis->lowLatency.getToggleState() && safeThis->stabilizer.getToggleState())
-                        safeThis->stabilizer.setToggleState(false, juce::sendNotificationSync);
-                    safeThis->stabilizer.setEnabled(!safeThis->lowLatency.getToggleState());
                     safeThis->snapLive.setEnabled(safeThis->lowLatency.getToggleState());
                     safeThis->repaint();
                 }
@@ -2361,16 +2353,6 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
         if (x >= 503.0f && x < 529.0f) { majorHold = !majorHold; repaint(); return; }
         if (x >= 529.0f && x < 581.0f) { setScaleMode(2); return; }
         if (x >= 581.0f && x < 608.0f) { minorHold = !minorHold; repaint(); return; }
-        if (x >= 691.0f && x < 895.0f)
-        {
-            if (x < 740.0f) selectedCorrectionTime = 0;
-            else if (x < 789.0f) selectedCorrectionTime = 1;
-            else if (x < 839.0f) selectedCorrectionTime = 2;
-            else selectedCorrectionTime = 3;
-            if (auto* parameter = processor.parameters.getParameter("stabilizerTime"))
-                parameter->setValueNotifyingHost(parameter->convertTo0to1((float)selectedCorrectionTime));
-            repaint(); return;
-        }
     }
 
     // Tone-volume bar controls the real reference-tone audition level in the processor.
@@ -2408,11 +2390,9 @@ void MetaTuneInspiredAudioProcessorEditor::resized()
     amountLabel.setBounds(px(1097), py(575), px(220), py(25));
     scale.setBounds(px(165), py(686), px(176), py(35));
     root.setBounds(px(350), py(686), px(100), py(35));
-    // Four time buttons + three independent toggles; non-overlapping bounds
-    // at every supported resizable scale (down to the compact 683x540).
-    snapLive.setBounds(px(904), py(686), px(144), py(35));
-    stabilizer.setBounds(px(1049), py(686), px(150), py(35));
-    lowLatency.setBounds(px(1201), py(686), px(150), py(35));
+    // Only two toggles, both inside the design canvas at every resize.
+    snapLive.setBounds(px(983), py(686), px(174), py(35));
+    lowLatency.setBounds(px(1160), py(686), px(180), py(35));
     noteReadout.setBounds(px(360), py(365), px(230), py(70));
     // The status line was behind the moveable Doubler dot at y~620.
     status.setBounds(px(32), py(642), px(600), py(24));
