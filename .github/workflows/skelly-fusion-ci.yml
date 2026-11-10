@@ -45,13 +45,28 @@ jobs:
         run: git clone --depth 1 --branch 8.0.9 https://github.com/juce-framework/JUCE.git JUCE
       - name: Configure with tests
         shell: pwsh
-        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DJUCE_PATH="$env:GITHUB_WORKSPACE/JUCE" -DSKELLTUNE_BUILD_TESTS=ON
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DJUCE_PATH="$env:GITHUB_WORKSPACE/JUCE" -DSKELLTUNE_BUILD_TESTS=ON -DSKELLTUNE_BUILD_WINDOWS_HOST_SMOKE=ON
       - name: Build VST3 and regression tests
         shell: pwsh
-        run: cmake --build build --config Release --target MetaTuneInspired_VST3 RealtimeAutotune_fusion_guard LyraOriginalDSPTests --parallel 4
+        run: cmake --build build --config Release --target MetaTuneInspired_VST3 RealtimeAutotune_fusion_guard LyraOriginalDSPTests SkellyVST3Smoke --parallel 4
       - name: Run DSP regression tests
         shell: pwsh
         run: ctest --test-dir build -C Release --output-on-failure
+      - name: Load VST3 in a real JUCE host and render UI
+        shell: pwsh
+        run: |
+          $bundle = Get-ChildItem -Path build -Directory -Recurse -Filter '*.vst3' | Select-Object -First 1
+          $smoke = Get-ChildItem -Path build -File -Recurse -Filter 'Skelly VST3 Smoke.exe' | Select-Object -First 1
+          if (-not $bundle -or -not $smoke) { throw 'Missing compiled VST3 or host smoke executable' }
+          & $smoke.FullName $bundle.FullName
+          if ($LASTEXITCODE -ne 0) { throw "Native host/visual smoke failed with exit code $LASTEXITCODE" }
+      - name: Upload UI snapshots for visual QA
+        uses: actions/upload-artifact@v4
+        with:
+          name: MetaTune-Negative-Retune-UI-Snapshots
+          path: ui_shots/*.png
+          if-no-files-found: error
+          retention-days: 14
       - name: Package the validated VST3 bundle
         shell: pwsh
         run: |
