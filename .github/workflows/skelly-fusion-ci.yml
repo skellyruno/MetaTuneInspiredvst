@@ -8,6 +8,7 @@ on:
       - feature/meta-negative-orb-ultra-3p5
       - feature/complete-negative-retune-overload-animation
       - feature/metatune-lyra-controls-note-transitions
+      - feature/skell-live-performance-mode
   pull_request:
     branches:
       - main
