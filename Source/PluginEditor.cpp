@@ -689,12 +689,12 @@ public:
             const float markAngle = startAngle + (endAngle - startAngle) * speedZeroPos;
             const float radiusOuter = tickRadius + 8.0f;
             const juce::Point<float> dir(std::cos(markAngle), std::sin(markAngle));
-            const juce::Point<float> side(-dir.y, dir.x);
+            const juce::Point<float> tangent(-dir.y, dir.x);
             const juce::Point<float> tip(cx + dir.x * radiusOuter,
                                           cy + dir.y * radiusOuter);
             juce::Path marker;
-            marker.addTriangle(tip, tip + dir * 7.0f + side * 3.0f,
-                               tip + dir * 7.0f - side * 3.0f);
+            marker.addTriangle(tip, tip + dir * 7.0f + tangent * 3.0f,
+                               tip + dir * 7.0f - tangent * 3.0f);
             g.setColour(overload > 0.001f ? overloadHeat.brighter(0.8f)
                                           : juce::Colour(0xffd3cbd8));
             g.fillPath(marker);
