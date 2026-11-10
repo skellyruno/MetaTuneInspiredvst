@@ -60,6 +60,9 @@ private:
     // Matches LyraTune's negative-ms orb effect: a violet-to-hot-pink
     // middle-ring bloom, smoothly animated on the GUI timer only.
     float negativeRetuneGlow = 0.0f;
+    bool wasSpeedNegative = false;
+    float speedOverloadPhase = 0.0f;
+    float speedOverloadShock = 0.0f;
 
     // Bracket custom-painted macro drags as proper host automation gestures.
     // Slider-child drags are handled by JUCE's SliderAttachment callbacks.
