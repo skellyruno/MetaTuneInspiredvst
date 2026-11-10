@@ -129,6 +129,7 @@ public:
     float getCorrectionSemitones() const noexcept { return correction; }
     float getConfidence() const noexcept { return confidence; }
     int latencySamples() const noexcept { return engine.latencySamples(); }
+    bool isSkellLiveEnabled() const noexcept { return engine.correction().skellLiveEnabled(); }
 
     Diagnostics getDiagnostics() const noexcept {
         Diagnostics d {};
