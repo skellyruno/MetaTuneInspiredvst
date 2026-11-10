@@ -86,6 +86,22 @@ if(SKELLTUNE_BUILD_TESTS)
     "${CMAKE_CURRENT_SOURCE_DIR}/Source/LyraDSP")
   target_compile_features(LyraOriginalDSPTests PRIVATE cxx_std_20)
   add_test(NAME LyraOriginalDSPTests COMMAND LyraOriginalDSPTests)
+
+  # Actual MetaTune settings adapter, not merely Lyra's internal Params.
+  # Run against the same shifter/controller objects as the VST3 audio path.
+  add_executable(MetaTuneLyraAdapterSmoke
+    tests/LyraDSP/metatune_adapter_smoke.cpp
+    Source/LyraDSP/Pitch/TargetSelector.cpp
+    Source/LyraDSP/Pitch/YinDetector.cpp
+    Source/LyraDSP/Pitch/PitchShifter.cpp
+    Source/LyraDSP/Pitch/CorrectionEngine.cpp
+    Source/LyraDSP/TunerChain.cpp
+    Source/LyraDSP/Doubler.cpp
+    Source/LyraDSP/FormantAccent.cpp)
+  target_include_directories(MetaTuneLyraAdapterSmoke PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/Source")
+  target_compile_features(MetaTuneLyraAdapterSmoke PRIVATE cxx_std_17)
+  add_test(NAME MetaTuneLyraAdapterSmoke COMMAND MetaTuneLyraAdapterSmoke)
 endif()
 
 # This target is compiled and executed only by the Windows GitHub Actions job.
