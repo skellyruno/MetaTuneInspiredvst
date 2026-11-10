@@ -1807,27 +1807,19 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.drawText("Minor", 529, 687, 52, 33, juce::Justification::centred);
     g.drawText("H", 581, 687, 27, 33, juce::Justification::centred);
 
-    // Allocate a dedicated 210px zone for the four stabilizer-time choices.
-    // Previous mode pills occupied the Snap Live toggle and overlapped its text.
+    // No hidden Note Stabilizer timings: two real toggles and one clear
+    // performance-mode descriptor, all inside the existing selector row.
     g.setColour(juce::Colour(0xff09090a)); g.fillRoundedRectangle(685,684,657,39,19.0f);
     g.setColour(juce::Colour(0xff35343b)); g.drawRoundedRectangle(685,684,657,39,19.0f,1.0f);
-    g.setColour(juce::Colour(0xff18171c)); g.fillRoundedRectangle(691,687,204,32,15.0f);
-    const float modeCenters[] = { 716.0f, 765.0f, 815.0f, 865.0f };
-    const float modeWidths[] = { 47.0f, 49.0f, 49.0f, 49.0f };
-    const char* modeNames[] = { "None", "Short", "Mid", "Long" };
-    for (int i = 0; i < 4; ++i)
-    {
-        if (selectedCorrectionTime == i)
-        {
-            g.setColour(juce::Colour(0xffd58acb).withAlpha(0.28f));
-            g.fillRoundedRectangle(modeCenters[i] - modeWidths[i] * 0.5f, 687.0f,
-                                   modeWidths[i], 32.0f, 15.0f);
-        }
-        g.setColour(i == selectedCorrectionTime ? juce::Colour(0xffffbfec) : muted);
-        g.setFont(uiFont(13.0f, juce::Font::bold));
-        g.drawText(modeNames[i], (int)(modeCenters[i] - modeWidths[i] * 0.5f), 687,
-                   (int)modeWidths[i], 32, juce::Justification::centred);
-    }
+    g.setColour(juce::Colour(0xff18171c)); g.fillRoundedRectangle(691,687,284,32,15.0f);
+    g.setColour(snapLive.getToggleState() && lowLatency.getToggleState()
+                    ? juce::Colour(0xffd9a2e8) : juce::Colour(0xffb0a9b9));
+    g.setFont(uiFont(14.0f, juce::Font::bold));
+    g.drawText("LIVE PERFORMANCE", 705, 687, 256, 18, juce::Justification::centredLeft);
+    g.setColour(juce::Colour(0xff77747f));
+    g.setFont(uiFont(10.0f, juce::Font::plain));
+    g.drawText("FAST TRACKING  /  OCTAVE GUARD", 705, 702, 256, 15,
+               juce::Justification::centredLeft);
 
     // Heatmaps
     g.setColour(juce::Colour(0xff1d1d20)); g.fillRect(0,734,1366,53);
