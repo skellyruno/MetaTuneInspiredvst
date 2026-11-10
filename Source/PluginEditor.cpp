@@ -890,7 +890,7 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     presetLabel.setText("No preset selected", juce::dontSendNotification);
     presetLabel.setJustificationType(juce::Justification::centredLeft);
 
-    juce::Component* components[] = { &speed, &amount, &sustain, &scale, &root, &stabilizer, &lowLatency, &snapLive,
+    juce::Component* components[] = { &speed, &amount, &sustain, &scale, &root, &lowLatency, &snapLive,
                                       &noteReadout, &status };
     for (auto* c : components) addAndMakeVisible(c);
 
@@ -903,7 +903,7 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
         combo->setColour(juce::ComboBox::outlineColourId, juce::Colour(0xff77777e));
         combo->setColour(juce::ComboBox::arrowColourId, text);
     }
-    for (auto* toggle : { &stabilizer, &lowLatency, &snapLive })
+    for (auto* toggle : { &lowLatency, &snapLive })
     {
         toggle->setColour(juce::ToggleButton::textColourId, text);
         toggle->setColour(juce::ToggleButton::tickColourId, cyan);
@@ -925,17 +925,14 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     sustain.onValueChange = [this]() { repaint(); };
     scaleAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor.parameters,"scale",scale);
     rootAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor.parameters,"root",root);
-    stabAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(processor.parameters,"stabilizer",stabilizer);
     latencyAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(processor.parameters,"lowLatency",lowLatency);
     snapLiveAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(processor.parameters,"snapLive",snapLive);
-    // Note Stabilizer and Low Latency are independently selectable in MetaTune.
-    // Live also changes the host-reported PDC; Normal uses a larger grain budget.
+    // Legacy Note Stabilizer fields remain serialized for old presets, but
+    // only two functional performance/latency toggles are visible now.
     lowLatency.setTooltip("Ultra Live: about 3.4 ms host latency for voices above 170 Hz. Lower notes remain audible at natural pitch for safety. Off: full-range 70 Hz LyraTune Quality (~9.5 ms @48k) with 2 ms detector lookahead.");
-    stabilizer.setEnabled(true);
-    snapLive.setTooltip("LyraTune Snap Live: tighter note-selection hysteresis using the same linked-stereo shifter. Live latency is unchanged. For the most aggressive snap, raise Speed into the negative-ms range.");
+    snapLive.setTooltip("Skell Live: faster note acquisition, movement-aware pitch lock, and octave glitch protection for melodic runs and rap. Same ~3.4 ms high-register Live latency, including negative retune.");
     snapLive.setEnabled(lowLatency.getToggleState());
     lowLatency.onClick = [this]() { snapLive.setEnabled(lowLatency.getToggleState()); repaint(); };
-    stabilizer.onClick = [this]() { repaint(); };
     selectedNoteIndex = juce::jlimit(0, 11, root.getSelectedItemIndex() < 0 ? 4 : root.getSelectedItemIndex());
     if (auto* rawWidth = processor.parameters.getRawParameterValue("doublerWidth"))
         doublerWidth = juce::jlimit(0.0f, 1.0f, rawWidth->load(std::memory_order_relaxed) / 100.0f);
@@ -943,8 +940,6 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
         doublerMix = juce::jlimit(0.0f, 1.0f, rawMix->load(std::memory_order_relaxed) / 100.0f);
     if (auto* rawBypass = processor.parameters.getRawParameterValue("globalBypass"))
         globalBypass = rawBypass->load(std::memory_order_relaxed) > 0.5f;
-    if (auto* stabilizerTime = processor.parameters.getRawParameterValue("stabilizerTime"))
-        selectedCorrectionTime = juce::jlimit(0, 3, (int) std::lround(stabilizerTime->load()));
     lastNonChromaticScaleMode = scale.getSelectedItemIndex() == 2 ? 2 : 1;
     slotA = processor.parameters.copyState();
     slotB = slotA.createCopy();
@@ -994,7 +989,6 @@ MetaTuneInspiredAudioProcessorEditor::~MetaTuneInspiredAudioProcessorEditor()
     speed.setLookAndFeel(nullptr);
     amount.setLookAndFeel(nullptr);
     sustain.setLookAndFeel(nullptr);
-    stabilizer.setLookAndFeel(nullptr);
     lowLatency.setLookAndFeel(nullptr);
     snapLive.setLookAndFeel(nullptr);
     scale.setLookAndFeel(nullptr);
