@@ -87,7 +87,8 @@ void TunerChain::process (float* const* ch, int numCh, int total) noexcept
             // Sanitize the original source before it enters ANY filter or
             // delay ring. YIN alone rejecting NaNs cannot protect the shifter.
             for (int i = 0; i < n; ++i)
-                if (!std::isfinite(io[c][i]) || std::abs(io[c][i]) > 32.0f)
+                if (!std::isfinite(io[c][i]) || std::abs(io[c][i]) > 32.0f
+                    || std::abs(io[c][i]) < 1.0e-25f)
                     io[c][i] = 0.0f;
             std::copy (io[c], io[c] + n, dry[c]);
         }
