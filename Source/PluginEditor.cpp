@@ -1582,6 +1582,30 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
         g.setColour(juce::Colour(0xffffe6f9).withAlpha(bloom * 0.78f));
         g.strokePath(movingGlint, juce::PathStrokeType(2.1f,
                               juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+        // Lyra's second visual cue: an arc from detected pitch toward the
+        // *actually audible* corrected pitch. This reads the true output
+        // ratio, so low notes passed naturally show no false correction arc.
+        const float confidence = processor.getPitchConfidence();
+        const float correctionCents = processor.getCorrectionCents();
+        if (confidence > 0.55f && std::isfinite(correctionCents)
+            && std::abs(correctionCents) > 1.0f)
+        {
+            const float inputPitch = processor.getDetectedMidiNote();
+            const float startAngle = inputPitch
+                * (juce::MathConstants<float>::twoPi / 12.0f);
+            const float arcLength = juce::jlimit(-juce::MathConstants<float>::pi,
+                                                  juce::MathConstants<float>::pi,
+                                correctionCents
+                                * (juce::MathConstants<float>::twoPi / 1200.0f));
+            juce::Path correctionArc;
+            correctionArc.addCentredArc(470.0f, 365.0f, 149.0f, 149.0f, 0.0f,
+                                       startAngle, startAngle + arcLength, true);
+            g.setColour(juce::Colour(0xffffc2e8).withAlpha(
+                juce::jlimit(0.0f, 0.90f, bloom * confidence)));
+            g.strokePath(correctionArc, juce::PathStrokeType(3.0f,
+                              juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        }
     }
 
     // Equatorial micro-sparks launch from the glass core and drift outward into
