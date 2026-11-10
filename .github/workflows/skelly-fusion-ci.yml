@@ -51,3 +51,17 @@ jobs:
       - name: Run DSP regression tests
         shell: pwsh
         run: ctest --test-dir build -C Release --output-on-failure
+      - name: Package the validated VST3 bundle
+        shell: pwsh
+        run: |
+          $bundle = Get-ChildItem -Path build -Directory -Recurse -Filter '*.vst3' | Select-Object -First 1
+          if (-not $bundle) { throw 'MetaTune VST3 bundle is missing' }
+          Compress-Archive -Path $bundle.FullName -DestinationPath MetaTune_LyraTune_VST3.zip -Force
+          if (-not (Test-Path MetaTune_LyraTune_VST3.zip)) { throw 'VST3 package creation failed' }
+      - name: Publish test VST3 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MetaTune-LyraTune-VST3-Windows-x64
+          path: MetaTune_LyraTune_VST3.zip
+          if-no-files-found: error
+          retention-days: 14
