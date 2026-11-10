@@ -57,6 +57,9 @@ private:
     float toneVolume = 0.65f;
     float pitchReferenceHz = 440.0f;
     float orbRotationRadians = 0.0f;
+    // Matches LyraTune's negative-ms orb effect: a violet-to-hot-pink
+    // middle-ring bloom, smoothly animated on the GUI timer only.
+    float negativeRetuneGlow = 0.0f;
 
     // Bracket custom-painted macro drags as proper host automation gestures.
     // Slider-child drags are handled by JUCE's SliderAttachment callbacks.
