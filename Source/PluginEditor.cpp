@@ -2404,7 +2404,7 @@ void MetaTuneInspiredAudioProcessorEditor::resized()
 }
 void MetaTuneInspiredAudioProcessorEditor::timerCallback()
 {
-    // Snap Live only exists inside Live; keep its enabled state in step with host automation too.
+    // Skell Live shares the short-delay engine; disable it only in Quality mode.
     if (snapLive.isEnabled() != lowLatency.getToggleState())
         snapLive.setEnabled(lowLatency.getToggleState());
     // One-shot startup sequence: fast spinning plasma and an illumination sweep
@@ -2488,8 +2488,6 @@ void MetaTuneInspiredAudioProcessorEditor::timerCallback()
         doublerMix = juce::jlimit(0.0f, 1.0f, rawMix->load(std::memory_order_relaxed) / 100.0f);
     if (auto* rawBypass = processor.parameters.getRawParameterValue("globalBypass"))
         globalBypass = rawBypass->load(std::memory_order_relaxed) > 0.5f;
-    if (auto* stabilizerTime = processor.parameters.getRawParameterValue("stabilizerTime"))
-        selectedCorrectionTime = juce::jlimit(0, 3, (int) std::lround(stabilizerTime->load()));
     const float hz = processor.getDetectedHz();
     const float confidence = processor.getPitchConfidence();
 
