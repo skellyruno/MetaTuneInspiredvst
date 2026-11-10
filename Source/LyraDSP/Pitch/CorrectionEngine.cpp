@@ -40,6 +40,7 @@ void CorrectionEngine::reset() noexcept
     glideValid = false;
     octaveCandidateMidi = 0.0;
     octaveCandidateHops = 0;
+    motionDirection = motionRunHops = 0;
     correctionLimitCurrent = p.maxCorrectionSemitones;
 }
 
@@ -63,7 +64,10 @@ void CorrectionEngine::setParams (const Params& np) noexcept
         || q.consonantReleaseMs != p.consonantReleaseMs;
     // A mode change cannot carry a half-confirmed octave hypothesis.
     if (q.skellLive != p.skellLive)
+    {
         octaveCandidateHops = 0;
+        motionDirection = motionRunHops = 0;
+    }
     p = q;
     selector.setMask (p.mask);
     if (coeffs)
@@ -128,6 +132,7 @@ void CorrectionEngine::onEstimate (const PitchEstimate& e, int samplesBeforeRati
     {
         unvoicedTime += dt;
         octaveCandidateHops = 0;
+        motionDirection = motionRunHops = 0;
         prevMidi = vel = velSmooth = 0;
         steadyHops = 0;
         restartVibrato();
@@ -174,6 +179,19 @@ void CorrectionEngine::onEstimate (const PitchEstimate& e, int samplesBeforeRati
         vel = continuous ? std::clamp (step / dt, -kMaxVelocity, kMaxVelocity) : 0.0;
         velSmooth = continuous ? (steadyHops == 0 ? vel : velSmooth + 0.25 * (vel - velSmooth)) : 0.0; // ~8 ms average
         steadyHops = continuous ? steadyHops + 1 : 0;
+        // A fast melodic run keeps moving in the SAME direction for at
+        // least two YIN hops. Alternating vibrato and jitter do not count
+        // as a reliable note-change trajectory.
+        const int direction = continuous && std::abs(vel) > 5.0
+            ? (vel > 0.0 ? 1 : -1) : 0;
+        if (p.skellLive && direction != 0)
+        {
+            motionRunHops = direction == motionDirection
+                ? std::min(motionRunHops + 1, 32) : 1;
+            motionDirection = direction;
+        }
+        else
+            motionDirection = motionRunHops = 0;
         prevMidi = inMidi;
         lead = winSec > 0 ? std::clamp (0.5 * (winSec + 1.0 / e.frequency) + 1e-4 - delaySec, 0.0, kMaxLeadSeconds) : 0.0;
         if (! continuous)
@@ -190,10 +208,14 @@ void CorrectionEngine::onEstimate (const PitchEstimate& e, int samplesBeforeRati
         double noteForSelection = inMidi;
         if (p.skellLive && !vibOn && p.speedMs >= 0.0)
         {
-            const double movement = std::abs(velSmooth);
-            holdCents = movement > 8.0 ? std::min(baseHyst, 3.0)
-                                       : std::max(baseHyst, 11.0);
-            if (continuous && e.confidence > 0.80f && movement > 5.0)
+            const bool movingWithEvidence = continuous && motionRunHops >= 2
+                && e.confidence > 0.80f && std::abs(velSmooth) > 5.0;
+            // Stronger-than-normal 18c lock on steady notes; open to 3c
+            // during real monotonic movement. Skell Live also instantly
+            // handles abrupt non-octave jumps (no note-confirmation hold).
+            holdCents = movingWithEvidence ? std::min(baseHyst, 3.0)
+                                           : std::max(baseHyst, 18.0);
+            if (movingWithEvidence)
                 noteForSelection += std::clamp(velSmooth * 0.0025, -0.16, 0.16);
         }
         const double h = vibOn && p.hysteresisCents > 0
