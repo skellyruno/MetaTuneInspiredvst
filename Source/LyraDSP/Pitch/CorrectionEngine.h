@@ -114,7 +114,8 @@ public:
     // Diagnostics (audio-thread values; copy out through a queue for the UI).
     double inputMidi() const noexcept { return inMidi; }      // 0 when unvoiced
     int targetNote() const noexcept { return target; }        // TargetSelector::kNoTarget when none
-    int pendingNote() const noexcept { return candidate; }    // stabilizer candidate, or kNoTarget
+    int pendingNote() const noexcept { return candidate; }    // note-confirm candidate, or kNoTarget
+    bool skellLiveEnabled() const noexcept { return p.skellLive; } // controller-mode telemetry
     double noteAgeSeconds() const noexcept { return noteAge; }
     double correctionSemitones() const noexcept { return c; }
     double vibratoDepthCents() const noexcept { return vibOn ? 100.0 * vibDepth : 0.0; } // 0 = none
