@@ -108,7 +108,11 @@ private:
     autotune::SnapLiveShifter lowVoiceTap[kMaxChannels];
     float lowVoiceSamples[kMaxChannels][kSubBlock] {};
     float lowVoiceRatio[kSubBlock] {}, lowVoiceBlend[kSubBlock] {};
-    float lowVoiceMix = 0.0f, lowVoiceTarget = 0.0f, lowVoiceSlew = 0.01f;
+    float lowVoiceMix = 0.0f, lowVoiceTarget = 0.0f;
+    // Fast low-note acquisition, smooth release over brief detector gaps.
+    float lowVoiceAttackCoeff = 0.01f, lowVoiceReleaseCoeff = 0.01f;
+    float lowVoiceLastPeriod = 0.0f, lowVoiceLastFreq = 0.0f;
+    int lowVoiceHoldRemaining = 0, lowVoiceGraceSamples = 0;
     bool lowVoiceEnabled = false;
 #endif
     // The pitch ratio, not the audio output, is crossfaded toward unity in

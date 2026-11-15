@@ -21,7 +21,9 @@ void TunerChain::prepare (double sampleRate, double lowestMinFreq)
     for (auto& tap : lowVoiceTap)
         tap.prepare(sr, nominalLiveDelay);
     lowVoiceTap[1].setFollower(true);
-    lowVoiceSlew = float(1.0 - std::exp(-1.0/(0.014*sr)));
+    lowVoiceAttackCoeff = float(1.0 - std::exp(-1.0/(0.008*sr)));
+    lowVoiceReleaseCoeff = float(1.0 - std::exp(-1.0/(0.022*sr)));
+    lowVoiceGraceSamples = int(std::lround(sr*0.010));
 #endif
     // Sized for the largest latency (lowest range + HQ); the active delays follow the settings.
     dryDelay.prepare (kMaxChannels, shifter.latencySamples() + lookahead, int (0.005 * sr));
@@ -55,6 +57,8 @@ void TunerChain::reset() noexcept
 #if defined(SKELLTUNE_LOW_VOICE_LAB) && SKELLTUNE_LOW_VOICE_LAB
     for (auto& tap:lowVoiceTap) tap.reset();
     lowVoiceMix = lowVoiceTarget = 0.0f;
+    lowVoiceLastPeriod = lowVoiceLastFreq = 0.0f;
+    lowVoiceHoldRemaining = 0;
 #endif
 }
 
@@ -145,17 +149,32 @@ void TunerChain::process (float* const* ch, int numCh, int total) noexcept
             engine.onEstimate (e, i);
             shifter.setPeriod (e.voiced ? sr / e.frequency : 0.0);
 #if defined(SKELLTUNE_LOW_VOICE_LAB) && SKELLTUNE_LOW_VOICE_LAB
-            // Preserve the detector and Skell Live controller exactly as-is.
-            // Crossfade over 145..170 Hz: full low-voice research renderer
-            // below 145, original Lyra shifter above 170.
-            const float period = e.voiced && e.frequency > 0
-                ? float(sr / e.frequency) : 0.0f;
-            for (auto& tap:lowVoiceTap) tap.setPeriod(period);
-            const float desired = lowVoiceEnabled && e.voiced
-                && e.confidence >= 0.70f
-                    ? float(std::clamp((170.0 - double(e.frequency))/25.0,0.0,1.0))
-                    : 0.0f;
-            lowVoiceTarget = desired;
+            // Old LAB hard-gated this path at .70 confidence even though
+            // Skell Live accepts voiced notes at .65. Low/breathy vowels then
+            // toggled between phase-different audio renderers each hop.
+            // Use matched entry threshold and hysteretic 10ms grace for
+            // dropouts; do not modify the proven production detector.
+            const bool lowRange = e.voiced && e.frequency >= minFreq
+                && e.frequency < 175.0f;
+            const bool reliable = lowRange && e.confidence >=
+                (lowVoiceHoldRemaining > 0 ? 0.58f : 0.65f);
+            if (reliable)
+            {
+                lowVoiceLastFreq = e.frequency;
+                lowVoiceLastPeriod = float(sr / e.frequency);
+                lowVoiceHoldRemaining = lowVoiceGraceSamples;
+            }
+            else
+                lowVoiceHoldRemaining = std::max(0,
+                    lowVoiceHoldRemaining - yin.hopSamples());
+            const bool held = lowVoiceHoldRemaining > 0
+                && lowVoiceLastPeriod > 0.0f;
+            for(auto& tap:lowVoiceTap)
+                tap.setPeriod(held ? lowVoiceLastPeriod : 0.0f);
+            const float crossoverFreq = reliable ? e.frequency : lowVoiceLastFreq;
+            lowVoiceTarget = lowVoiceEnabled && held
+                ? float(std::clamp((170.0-double(crossoverFreq))/25.0,0.0,1.0))
+                : 0.0f;
 #endif
             // 3.5ms cannot span a complete 70Hz cycle. In Ultra Live only,
             // taper the requested ratio toward unity from 170 to 155 Hz.
@@ -197,7 +216,9 @@ void TunerChain::process (float* const* ch, int numCh, int total) noexcept
             lowVoiceRatio[i] = std::clamp(requested,
                 float(1.0/PitchShifter::kMaxRatio),
                 float(PitchShifter::kMaxRatio));
-            lowVoiceMix += (lowVoiceTarget - lowVoiceMix)*lowVoiceSlew;
+            const float slew = lowVoiceTarget > lowVoiceMix
+                ? lowVoiceAttackCoeff : lowVoiceReleaseCoeff;
+            lowVoiceMix += (lowVoiceTarget-lowVoiceMix)*slew;
             lowVoiceMix = std::clamp(lowVoiceMix,0.0f,1.0f);
             lowVoiceBlend[i] = lowVoiceMix;
 #endif
@@ -223,7 +244,10 @@ void TunerChain::process (float* const* ch, int numCh, int total) noexcept
         // warm even in high-register or Quality mode.
         for (int i=0;i<n;++i)
         {
-            const bool renderLow = lowVoiceEnabled && (lowVoiceTarget>0.001f || lowVoiceBlend[i]>0.001f);
+            // Finish fade-out on mode automation rather than instantly
+            // returning the low tap to unity/dry mid-cycle.
+            const bool renderLow = ultraLive
+                && (lowVoiceTarget>0.001f || lowVoiceBlend[i]>0.001f);
             lowVoiceTap[0].setRenderingEnabled(renderLow);
             lowVoiceTap[1].setRenderingEnabled(renderLow);
             for (auto& tap:lowVoiceTap) tap.setRatio(lowVoiceRatio[i]);
