@@ -25,7 +25,9 @@ concurrency:
 
 jobs:
   dsp-guard:
-    runs-on: ubuntu-latest
+    # Match the Linux runtime used to analyse user-provided private vocals;
+    # no recording is uploaded as part of this CI workflow.
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
       - name: Compile deterministic fusion detector tests
@@ -56,6 +58,25 @@ jobs:
             Source/LyraDSP/FormantAccent.cpp \
             -o metatune_adapter_smoke
           ./metatune_adapter_smoke
+      - name: Build portable low-voice vocal A/B renderer (private WAVs not included)
+        run: |
+          c++ -std=c++17 -O2 -Wall -Wextra -DSKELLTUNE_LOW_VOICE_LAB=1 -ISource/LyraDSP tools/lowvoice_offline_render.cpp \
+            Source/LyraDSP/Pitch/TargetSelector.cpp \
+            Source/LyraDSP/Pitch/YinDetector.cpp \
+            Source/LyraDSP/Pitch/PitchShifter.cpp \
+            Source/LyraDSP/Pitch/CorrectionEngine.cpp \
+            Source/LyraDSP/TunerChain.cpp \
+            Source/LyraDSP/Doubler.cpp \
+            Source/LyraDSP/FormantAccent.cpp \
+            -o lowvoice_offline_render
+          ./lowvoice_offline_render || test "$?" -eq 2
+      - name: Upload private-vocal local testing utility (no audio)
+        uses: actions/upload-artifact@v4
+        with:
+          name: MetaTune-LowVoice-Offline-Runner-Linux
+          path: lowvoice_offline_render
+          if-no-files-found: error
+          retention-days: 14
 
   windows-vst3:
     runs-on: windows-2022
