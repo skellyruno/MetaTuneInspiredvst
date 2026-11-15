@@ -1749,7 +1749,11 @@ TEST (lowvoice_lab_nominal_latency_and_source_age_are_honestly_measured)
         constexpr int N=128;
         float samples[N] {};
         double maxStep=0;
-        for(int b=0;b<380;++b)
+        // Compare equivalent *wall-clock audio duration* across sample
+        // rates, not a fixed block count (which accidentally halved the
+        // 96kHz test and hid period-splice events).
+        const int blocks=int(std::ceil(1.25*sr/N));
+        for(int b=0;b<blocks;++b)
         {
             for(int i=0;i<N;++i)
                 samples[i]=(float)(0.26*std::sin(2*kPi*94.0*(b*N+i)/sr));
