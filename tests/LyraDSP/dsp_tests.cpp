@@ -1681,4 +1681,130 @@ TEST (ultra_live_switching_does_not_allocate_or_corrupt_stereo)
     }
 }
 
+
+#if defined(SKELLTUNE_LOW_VOICE_LAB) && SKELLTUNE_LOW_VOICE_LAB
+TEST (lowvoice_lab_corrects_four_deep_vocal_fundamentals)
+{
+    // For years the stable 3.4ms Live renderer intentionally left these
+    // voices NATURAL. The lab must make measured correction, not just report
+    // a changed controller ratio. Never silently change the production mode.
+    for(double sr: {44100.0,48000.0,96000.0})
+        for(const auto pair: {std::pair<double,double>{94.0,92.4986},
+                              {106.0,103.8262},{118.5,116.5409},
+                              {144.0,146.8324}})
+        {
+            const auto input=tone(sr,pair.first,0.90,true);
+            TunerChain::Settings settings;
+            settings.ultraLive=true;
+            settings.hq=false;
+            settings.minFreq=70.0;
+            settings.experimentalLowVoice=true;
+            settings.correction.speedMs=-3.0;
+            settings.correction.stabilizerMs=0.0;
+            settings.correction.amount=1.0;
+            const auto out=runChain(input,settings,sr,128);
+            const double f=medianPitch(out,sr,100);
+            CHECK(f>0.0);
+            if (f>0.0)
+            {
+                const double cents=1200.0*std::log2(f/pair.second);
+                const double raw=1200.0*std::log2(pair.first/pair.second);
+                std::printf("  LAB %.0f Hz: source=%.2f target=%.2f corrected=%.2f error=%+.2f c raw=%+.2f c\n",
+                            sr,pair.first,pair.second,f,cents,raw);
+                CHECK(std::abs(cents)<20.0);
+                CHECK(std::abs(cents)<0.65*std::abs(raw));
+            }
+            double maxStep=0.0,peak=0.0;
+            for(size_t i=1;i<out.size();++i)
+            {
+                CHECK(std::isfinite(out[i]));
+                peak=std::max(peak,std::abs((double)out[i]));
+                if(i>size_t(sr*0.18))
+                    maxStep=std::max(maxStep,std::abs((double)out[i]-(double)out[i-1]));
+            }
+            CHECK(peak<1.1);
+            CHECK(maxStep<0.30);
+        }
+}
+
+TEST (lowvoice_lab_nominal_latency_and_source_age_are_honestly_measured)
+{
+    for(double sr: {44100.0,48000.0,96000.0})
+    {
+        TunerChain::Settings s;
+        s.minFreq=70.0; s.ultraLive=true; s.experimentalLowVoice=true;
+        s.correction.speedMs=-3.0; s.correction.amount=0.0;
+        TunerChain chain; chain.prepare(sr,70.0); chain.setSettings(s); chain.reset();
+        const int delay=chain.latencySamples();
+        CHECK(delay==TunerChain::latencyFor(sr,70.0,false,true));
+        CHECK(delay<=int(std::ceil(sr*0.0035)));
+        auto input=tone(sr,94.0,0.45,true);
+        const auto output=runChain(input,s,sr,128);
+        double dryMax=0;
+        for(size_t i=size_t(delay+sr*0.20);i<output.size();++i)
+            dryMax=std::max(dryMax,std::abs((double)output[i]-(double)input[i-delay]));
+        CHECK(dryMax<0.002); // dry/zero Amount remains sample aligned
+        s.correction.amount=1.0;
+        chain.setSettings(s); chain.reset();
+        constexpr int N=128;
+        float samples[N] {};
+        double maxStep=0;
+        for(int b=0;b<380;++b)
+        {
+            for(int i=0;i<N;++i)
+                samples[i]=(float)(0.26*std::sin(2*kPi*94.0*(b*N+i)/sr));
+            float* ch[]{samples};
+            chain.process(ch,1,N);
+            if(b>80)
+                for(int i=1;i<N;++i)
+                    maxStep=std::max(maxStep,std::abs((double)samples[i]-samples[i-1]));
+        }
+        CHECK(chain.lowVoiceLabSplices()>0);
+        const double minimum=chain.lowVoiceLabMinSourceAge();
+        const double maximum=chain.lowVoiceLabMaxSourceAge();
+        std::printf("  LAB %.0f Hz reported=%d samples (%.3fms) voiced source age [%.0f, %.0f] samples; splices=%d\n",
+                    sr,delay,1000.0*delay/sr,minimum,maximum,
+                    chain.lowVoiceLabSplices());
+        CHECK(std::isfinite(minimum) && minimum>=3.0);
+        CHECK(std::isfinite(maximum) && maximum>minimum);
+        CHECK(maxStep<0.30);
+    }
+}
+
+TEST (lowvoice_lab_rt_stereo_switch_and_no_allocations)
+{
+    TunerChain chain; chain.prepare(48000,70.0);
+    TunerChain::Settings s;
+    s.minFreq=70.0;s.ultraLive=true;s.experimentalLowVoice=true;
+    s.correction.speedMs=-3.0;s.correction.stabilizerMs=0;
+    chain.setSettings(s);chain.reset();
+    constexpr int N=64;
+    float l[N]{},r[N]{};
+    const long start=gAllocs.load();
+    double maxAnti=0;
+    for(int b=0;b<820;++b)
+    {
+        if(b==260){s.experimentalLowVoice=false;chain.setSettings(s);}
+        if(b==340){s.experimentalLowVoice=true;chain.setSettings(s);}
+        for(int i=0;i<N;++i)
+        {
+            const double f=b<410?94.0:(b<610?190.0:108.0);
+            const double t=(b*N+i)/48000.0;
+            l[i]=(float)(0.27*std::sin(2*kPi*f*t));
+            r[i]=-l[i];
+        }
+        if(b==150)l[12]=std::numeric_limits<float>::quiet_NaN();
+        float* ch[]{l,r};chain.process(ch,2,N);
+        for(int i=0;i<N;++i)
+        {
+            CHECK(std::isfinite(l[i])&&std::isfinite(r[i]));
+            if(b>90&&b<140)maxAnti=std::max(maxAnti,std::abs((double)l[i]+r[i]));
+            CHECK(std::abs(l[i])<1.1 && std::abs(r[i])<1.1);
+        }
+    }
+    CHECK(gAllocs.load()==start);
+    CHECK(maxAnti<0.010);
+}
+#endif
+
 int main() { return th::runAll(); }
