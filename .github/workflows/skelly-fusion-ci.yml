@@ -22,7 +22,9 @@ permissions:
 # Drop only superseded PR validations. Never cancel main/release/manual jobs.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # Supersede experimental PR/push validation only. Never cancel main,
+  # release, production or manual workflow jobs.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/experiment/')) }}
 
 jobs:
   dsp-guard:
@@ -117,12 +119,13 @@ jobs:
           $bundle = Get-ChildItem -Path build -Directory -Recurse -Filter '*.vst3' | Select-Object -First 1
           if (-not $bundle) { throw 'MetaTune VST3 bundle is missing' }
           if (-not ($bundle.Name -match 'LowVoice 2.5 LAB')) { throw 'Research build must have its own plugin identity' }
-          Compress-Archive -Path $bundle.FullName -DestinationPath MetaTune_LowVoice_2p5_LAB_VST3.zip -Force
-          if (-not (Test-Path MetaTune_LowVoice_LAB_VST3.zip)) { throw 'VST3 lab package creation failed' }
+          $output = 'MetaTune_LowVoice_2p5_LAB_VST3.zip'
+          Compress-Archive -Path $bundle.FullName -DestinationPath $output -Force
+          if (-not (Test-Path $output)) { throw 'VST3 2.5ms LAB package creation failed' }
       - name: Publish test VST3 artifact
         uses: actions/upload-artifact@v4
         with:
           name: MetaTune-LowVoice-2p5-LAB-Windows-x64
-          path: MetaTune_LowVoice_LAB_VST3.zip
+          path: MetaTune_LowVoice_2p5_LAB_VST3.zip
           if-no-files-found: error
           retention-days: 14
