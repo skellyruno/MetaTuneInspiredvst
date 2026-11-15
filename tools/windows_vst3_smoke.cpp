@@ -111,10 +111,20 @@ int main(int argc,char**argv)
             juce::MessageManager::getInstance()->runDispatchLoopUntil(150);
             int visibleToggles=0;
             bool hasSkellLive=false;
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+            bool hasABSelector=false;
+#endif
             for(int childIndex=0; childIndex<editor->getNumChildComponents(); ++childIndex)
             {
                 auto* child = editor->getChildComponent(childIndex);
                 if(!child || !child->isVisible()) continue;
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+                if(auto* combo=dynamic_cast<juce::ComboBox*>(child))
+                    if(combo->getNumItems()==3 && combo->getItemText(0)=="Current"
+                       && combo->getItemText(1)=="LowVoice 3.4"
+                       && combo->getItemText(2)=="LowVoice 2.5")
+                        hasABSelector=true;
+#endif
                 if(auto* toggle=dynamic_cast<juce::ToggleButton*>(child))
                 {
                     ++visibleToggles;
@@ -138,6 +148,13 @@ int main(int argc,char**argv)
                 std::fprintf(stderr,"Expected only Skell Live + Low Latency switches\n");
                 return 30;
             }
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+            if(!hasABSelector)
+            {
+                std::fprintf(stderr,"Three-way A/B selector missing at %dx%d\n",size.x,size.y);
+                return 37;
+            }
+#endif
             auto snapshot = rasterizeEditor();
             if(snapshot.isNull() || snapshot.getWidth()!=size.x
                || snapshot.getHeight()!=size.y) return 20;
@@ -158,7 +175,14 @@ int main(int argc,char**argv)
                     changed+=a.getPixelAt(x,y)!=b.getPixelAt(x,y);
             return changed;
         };
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+        // The comparison combo intentionally replaces the old LIVE PERFORMANCE
+        // text in [691,974]. Assert the ACTUAL Skell Live toggle changes
+        // visually instead of testing the now-occupied descriptor region.
+        const int skellRowPixels=pixelsChanged(neutral,skellModeShot,983,687,1157,721);
+#else
         const int skellRowPixels=pixelsChanged(neutral,skellModeShot,691,687,974,721);
+#endif
         if(skellRowPixels < 10)
         {
             std::fprintf(stderr,"Skell Live state not visible in tracking row\n");
