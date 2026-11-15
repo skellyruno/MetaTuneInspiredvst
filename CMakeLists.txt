@@ -7,13 +7,26 @@ if(NOT DEFINED JUCE_PATH)
 endif()
 add_subdirectory(${JUCE_PATH} JUCE)
 
+# Research build is a SEPARATE plugin. Never use its distinct ID or binary
+# to overwrite an approved MetaTune installation or FL Studio project.
+option(SKELLTUNE_LOW_VOICE_LAB "Build unapproved low-register research engine as separate VST3" OFF)
+set(SKELLTUNE_PLUGIN_BUNDLE_ID "audio.independentaudio.metatuneinspired")
+set(SKELLTUNE_PLUGIN_CODE MtIn)
+set(SKELLTUNE_PRODUCT_NAME "MetaTune Inspired")
+set(SKELLTUNE_PLUGIN_FORMATS VST3 Standalone)
+if(SKELLTUNE_LOW_VOICE_LAB)
+  set(SKELLTUNE_PLUGIN_BUNDLE_ID "audio.independentaudio.metatune.lowvoicelab")
+  set(SKELLTUNE_PLUGIN_CODE MtLv)
+  set(SKELLTUNE_PRODUCT_NAME "MetaTune LowVoice LAB")
+  set(SKELLTUNE_PLUGIN_FORMATS VST3)
+endif()
 juce_add_plugin(MetaTuneInspired
     COMPANY_NAME "IndependentAudio"
-    BUNDLE_ID "audio.independentaudio.metatuneinspired"
+    BUNDLE_ID "${SKELLTUNE_PLUGIN_BUNDLE_ID}"
     PLUGIN_MANUFACTURER_CODE InAu
-    PLUGIN_CODE MtIn
-    FORMATS VST3 Standalone
-    PRODUCT_NAME "MetaTune Inspired"
+    PLUGIN_CODE ${SKELLTUNE_PLUGIN_CODE}
+    FORMATS ${SKELLTUNE_PLUGIN_FORMATS}
+    PRODUCT_NAME "${SKELLTUNE_PRODUCT_NAME}"
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT FALSE
     NEEDS_MIDI_OUTPUT FALSE
@@ -43,6 +56,9 @@ target_sources(MetaTuneInspired PRIVATE
     Source/LyraDSP/FormantAccent.cpp
 )
 target_compile_features(MetaTuneInspired PRIVATE cxx_std_17)
+if(SKELLTUNE_LOW_VOICE_LAB)
+  target_compile_definitions(MetaTuneInspired PRIVATE SKELLTUNE_LOW_VOICE_LAB=1)
+endif()
 target_compile_definitions(MetaTuneInspired PUBLIC
     JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
@@ -85,6 +101,9 @@ if(SKELLTUNE_BUILD_TESTS)
   target_include_directories(LyraOriginalDSPTests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/Source/LyraDSP")
   target_compile_features(LyraOriginalDSPTests PRIVATE cxx_std_20)
+  if(SKELLTUNE_LOW_VOICE_LAB)
+    target_compile_definitions(LyraOriginalDSPTests PRIVATE SKELLTUNE_LOW_VOICE_LAB=1)
+  endif()
   add_test(NAME LyraOriginalDSPTests COMMAND LyraOriginalDSPTests)
 
   # Actual MetaTune settings adapter, not merely Lyra's internal Params.
@@ -101,6 +120,9 @@ if(SKELLTUNE_BUILD_TESTS)
   target_include_directories(MetaTuneLyraAdapterSmoke PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/Source")
   target_compile_features(MetaTuneLyraAdapterSmoke PRIVATE cxx_std_17)
+  if(SKELLTUNE_LOW_VOICE_LAB)
+    target_compile_definitions(MetaTuneLyraAdapterSmoke PRIVATE SKELLTUNE_LOW_VOICE_LAB=1)
+  endif()
   add_test(NAME MetaTuneLyraAdapterSmoke COMMAND MetaTuneLyraAdapterSmoke)
 endif()
 
