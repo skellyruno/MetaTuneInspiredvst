@@ -58,10 +58,16 @@ public:
         return (int) std::ceil (std::max (8000.0, sr) * (latency_limits::snapLiveMs * 0.001));
     }
 
-    void prepare (double sampleRate)
+    // Optional nominal tap delay lets the EXPERIMENTAL low-register branch
+    // align its dry and unity-ratio audio with Lyra Ultra Live's sample
+    // budget. It does NOT make the time-varying voiced taps fixed-latency:
+    // splice search can read older waveform history, which must be measured.
+    // Default stays fully backward compatible with the original Snap renderer.
+    void prepare (double sampleRate, int nominalTapDelaySamples = 0)
     {
         sr = std::max (8000.0, sampleRate);
-        latencyHost = hostLatencySamples (sr);
+        latencyHost = nominalTapDelaySamples > 0
+            ? nominalTapDelaySamples : hostLatencySamples (sr);
         nominalDelay = std::max (kMinDelay + 4, latencyHost);
         minDelay = (double) std::max (kMinDelay, (int) std::lround (sr * 0.0002));
         minPeriod = (float) (sr / 1500.0);
