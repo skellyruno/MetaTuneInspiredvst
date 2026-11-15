@@ -41,7 +41,14 @@ public:
     // The original Lyra shifter needs half a pitch period of causal history.
     // Ultra Live targets 3.5ms for voices >=160Hz, retaining the 70Hz detector
     // range but bypassing pitch correction below the renderer's safe floor.
+    // A shorter nominal history is only enabled in the separately named
+    // 2.5ms LAB build. Full-range low notes still depend on the causal
+    // variable-age period-splice renderer; not a fixed 2.5ms wet delay.
+#if defined(SKELLTUNE_LAB_FAST_2P5) && SKELLTUNE_LAB_FAST_2P5
+    static constexpr double kUltraLiveFloorHz = 230.0;
+#else
     static constexpr double kUltraLiveFloorHz = 160.0;
+#endif
     static_assert (kSubBlock <= Doubler::kMaxBlock);
 
     struct Settings

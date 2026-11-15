@@ -172,16 +172,27 @@ void TunerChain::process (float* const* ch, int numCh, int total) noexcept
             for(auto& tap:lowVoiceTap)
                 tap.setPeriod(held ? lowVoiceLastPeriod : 0.0f);
             const float crossoverFreq = reliable ? e.frequency : lowVoiceLastFreq;
+#if defined(SKELLTUNE_LAB_FAST_2P5) && SKELLTUNE_LAB_FAST_2P5
+            // 2.5ms Lyra read heads cannot cover 170..230Hz safely.
+            // Keep the causal low period renderer fully active through
+            // 230Hz and crossfade only where the faster Lyra history is
+            // actually sufficient. No frequency gap can silently pass dry.
+            const double lowVoiceWeight = std::clamp(
+                (kUltraLiveFloorHz + 22.0-double(crossoverFreq))/22.0,0.0,1.0);
+#else
+            const double lowVoiceWeight = std::clamp(
+                (170.0-double(crossoverFreq))/25.0,0.0,1.0);
+#endif
             lowVoiceTarget = lowVoiceEnabled && held
-                ? float(std::clamp((170.0-double(crossoverFreq))/25.0,0.0,1.0))
-                : 0.0f;
+                ? float(lowVoiceWeight) : 0.0f;
 #endif
             // 3.5ms cannot span a complete 70Hz cycle. In Ultra Live only,
             // taper the requested ratio toward unity from 170 to 155 Hz.
             // The low voice stays audible with correct PDC and natural pitch.
             fastCorrectionTarget = !ultraLive ? 1.0f :
-                (e.voiced ? float(std::clamp((double(e.frequency) - 155.0) / 15.0,
-                                             0.0, 1.0)) : 0.0f);
+                (e.voiced ? float(std::clamp(
+                    (double(e.frequency) - (kUltraLiveFloorHz - 5.0)) / 15.0,
+                    0.0, 1.0)) : 0.0f);
             doubler.setPeriod (e.voiced ? sr / e.frequency : 0.0);
             // LyraStrike: accent each note-to-note change. Pending (stabilizer) or short consonant gaps
             // keep the previous note; >= 60 ms unvoiced starts a new phrase (no accent on its first note).

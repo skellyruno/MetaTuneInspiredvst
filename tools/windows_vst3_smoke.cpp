@@ -312,7 +312,11 @@ int main(int argc,char**argv)
             const int fadeLength=std::max(1,(int)std::lround(sampleRate*0.004));
             const double margin=2.0+fadeLength*(1.0594630943592953-1.0);
             const int budget=live
+#if defined(SKELLTUNE_LAB_FAST_2P5) && SKELLTUNE_LAB_FAST_2P5
+                ? (int)std::ceil(margin+0.5*sampleRate/230.0)
+#else
                 ? (int)std::ceil(margin+0.5*sampleRate/160.0)
+#endif
                 : (int)std::ceil(margin+0.5*sampleRate/70.0)
                   +(int)std::lround(sampleRate*0.002);
             if (plugin->getLatencySamples()!=budget ||

@@ -1554,6 +1554,11 @@ TEST (ultra_live_aggressive_retune_is_audible_and_in_tune)
         s.ultraLive = true;
         s.correction.speedMs = -3.0;
         s.correction.stabilizerMs = 0.0;
+#if defined(SKELLTUNE_LAB_FAST_2P5) && SKELLTUNE_LAB_FAST_2P5
+        // 225Hz is below the 230Hz *Lyra* history floor in this
+        // configuration, but the LAB low renderer must still tune it.
+        s.experimentalLowVoice=true;
+#endif
         auto x = tone(sr, 225.0, 0.85, true); // actual 225 Hz -> corrected A3 / 220 Hz
         auto y = runChain(x, s, sr, 128);
         YinDetector detector; detector.prepare(sr, {});
@@ -1683,6 +1688,20 @@ TEST (ultra_live_switching_does_not_allocate_or_corrupt_stereo)
 
 
 #if defined(SKELLTUNE_LOW_VOICE_LAB) && SKELLTUNE_LOW_VOICE_LAB
+TEST (lowvoice_lab_fast_budget_is_truthful_and_safe)
+{
+#if defined(SKELLTUNE_LAB_FAST_2P5) && SKELLTUNE_LAB_FAST_2P5
+    for(double sr: {44100.0,48000.0,96000.0})
+    {
+        const int budget=TunerChain::latencyFor(sr,70.0,false,true);
+        CHECK(budget>0);
+        CHECK(budget<=int(std::ceil(0.0025*sr)));
+        std::printf("  Fast LAB %.0fHz nominal dry/PDC=%d samples = %.3fms\n",
+                    sr,budget,1000.0*budget/sr);
+    }
+#endif
+}
+
 TEST (lowvoice_lab_corrects_four_deep_vocal_fundamentals)
 {
     // For years the stable 3.4ms Live renderer intentionally left these
