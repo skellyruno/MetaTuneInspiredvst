@@ -9,6 +9,7 @@ on:
       - feature/complete-negative-retune-overload-animation
       - feature/metatune-lyra-controls-note-transitions
       - feature/skell-live-performance-mode
+      - experiment/lowvoice-hybrid-3p4ms
   pull_request:
     branches:
       - main
@@ -16,6 +17,11 @@ on:
 
 permissions:
   contents: read
+
+# Drop only superseded PR validations. Never cancel main/release/manual jobs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   dsp-guard:
@@ -28,7 +34,7 @@ jobs:
           ./fusion_guard_test
       - name: Run uploaded LyraTune engine regression suite
         run: |
-          c++ -std=c++20 -O2 -ISource/LyraDSP tests/LyraDSP/dsp_tests.cpp \
+          c++ -std=c++20 -O2 -DSKELLTUNE_LOW_VOICE_LAB=1 -ISource/LyraDSP tests/LyraDSP/dsp_tests.cpp \
             Source/LyraDSP/Pitch/TargetSelector.cpp \
             Source/LyraDSP/Pitch/YinDetector.cpp \
             Source/LyraDSP/Pitch/PitchShifter.cpp \
@@ -40,7 +46,7 @@ jobs:
           ./lyra_original_tests
       - name: Test MetaTune automation adapter against real Lyra audio
         run: |
-          c++ -std=c++17 -O2 -Wall -Wextra -ISource tests/LyraDSP/metatune_adapter_smoke.cpp \
+          c++ -std=c++17 -O2 -Wall -Wextra -DSKELLTUNE_LOW_VOICE_LAB=1 -ISource tests/LyraDSP/metatune_adapter_smoke.cpp \
             Source/LyraDSP/Pitch/TargetSelector.cpp \
             Source/LyraDSP/Pitch/YinDetector.cpp \
             Source/LyraDSP/Pitch/PitchShifter.cpp \
@@ -60,7 +66,7 @@ jobs:
         run: git clone --depth 1 --branch 8.0.9 https://github.com/juce-framework/JUCE.git JUCE
       - name: Configure with tests
         shell: pwsh
-        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DJUCE_PATH="$env:GITHUB_WORKSPACE/JUCE" -DSKELLTUNE_BUILD_TESTS=ON -DSKELLTUNE_BUILD_WINDOWS_HOST_SMOKE=ON
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DJUCE_PATH="$env:GITHUB_WORKSPACE/JUCE" -DSKELLTUNE_BUILD_TESTS=ON -DSKELLTUNE_BUILD_WINDOWS_HOST_SMOKE=ON -DSKELLTUNE_LOW_VOICE_LAB=ON
       - name: Build VST3 and regression tests
         shell: pwsh
         run: cmake --build build --config Release --target MetaTuneInspired_VST3 RealtimeAutotune_fusion_guard LyraOriginalDSPTests MetaTuneLyraAdapterSmoke SkellyVST3Smoke --parallel 4
@@ -88,12 +94,13 @@ jobs:
         run: |
           $bundle = Get-ChildItem -Path build -Directory -Recurse -Filter '*.vst3' | Select-Object -First 1
           if (-not $bundle) { throw 'MetaTune VST3 bundle is missing' }
-          Compress-Archive -Path $bundle.FullName -DestinationPath MetaTune_LyraTune_VST3.zip -Force
-          if (-not (Test-Path MetaTune_LyraTune_VST3.zip)) { throw 'VST3 package creation failed' }
+          if (-not ($bundle.Name -match 'LowVoice LAB')) { throw 'Research build must have its own plugin identity' }
+          Compress-Archive -Path $bundle.FullName -DestinationPath MetaTune_LowVoice_LAB_VST3.zip -Force
+          if (-not (Test-Path MetaTune_LowVoice_LAB_VST3.zip)) { throw 'VST3 lab package creation failed' }
       - name: Publish test VST3 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MetaTune-LyraTune-VST3-Windows-x64
-          path: MetaTune_LyraTune_VST3.zip
+          name: MetaTune-LowVoice-LAB-Windows-x64
+          path: MetaTune_LowVoice_LAB_VST3.zip
           if-no-files-found: error
           retention-days: 14
