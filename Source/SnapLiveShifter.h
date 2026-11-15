@@ -132,6 +132,11 @@ public:
     {
         if (enabled == rendering) return;
         rendering = enabled;
+        // Each re-entry must crossfade from the aligned dry tap. Previously
+        // renderFade was exhausted after the first enable, so a brief low-
+        // voice dropout or register switch could expose a sudden wet jump.
+        // This is constant-time and allocation-free on the audio thread.
+        renderFade = 0;
         if (! enabled)
         {
             liveTap = (double) (write - 1) - (double) nominalDelay;
