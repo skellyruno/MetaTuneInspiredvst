@@ -11,6 +11,7 @@ on:
       - feature/skell-live-performance-mode
       - experiment/lowvoice-hybrid-3p4ms
       - experiment/lowvoice-2p5ms
+      - experiment/metatune-3way-ab-vst3-20261115
   pull_request:
     branches:
       - main
