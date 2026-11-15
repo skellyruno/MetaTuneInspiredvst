@@ -154,8 +154,17 @@ void TunerChain::process (float* const* ch, int numCh, int total) noexcept
             // toggled between phase-different audio renderers each hop.
             // Use matched entry threshold and hysteretic 10ms grace for
             // dropouts; do not modify the proven production detector.
+#if defined(SKELLTUNE_LAB_FAST_2P5) && SKELLTUNE_LAB_FAST_2P5
+            // In the fast prototype Lyra becomes safe at 230Hz; the low
+            // period-splice branch MUST remain eligible through 252Hz or
+            // we leave an audible natural-pitch gap at 175..230Hz.
+            constexpr double lowVoiceEligibilityTopHz =
+                kUltraLiveFloorHz + 22.0;
+#else
+            constexpr double lowVoiceEligibilityTopHz = 175.0;
+#endif
             const bool lowRange = e.voiced && e.frequency >= minFreq
-                && e.frequency < 175.0f;
+                && e.frequency < lowVoiceEligibilityTopHz;
             const bool reliable = lowRange && e.confidence >=
                 (lowVoiceHoldRemaining > 0 ? 0.58f : 0.65f);
             if (reliable)

@@ -1702,6 +1702,32 @@ TEST (lowvoice_lab_fast_budget_is_truthful_and_safe)
 #endif
 }
 
+TEST (lowvoice_lab_2p5_mode_crossover_no_natural_pitch_gap)
+{
+#if defined(SKELLTUNE_LAB_FAST_2P5) && SKELLTUNE_LAB_FAST_2P5
+    for(double sr: {44100.0,48000.0,96000.0})
+        for(const auto sample: {std::pair<double,double>{205.0,207.652},
+                                {225.0,220.0},{241.0,246.942},
+                                {255.0,261.626}})
+        {
+            TunerChain::Settings s;
+            s.minFreq=70.0;s.ultraLive=true;s.experimentalLowVoice=true;
+            s.correction.speedMs=-3.0;
+            s.correction.stabilizerMs=0.0;
+            const auto input=tone(sr,sample.first,0.9,true);
+            const auto output=runChain(input,s,sr,128);
+            const double actual=medianPitch(output,sr,100);
+            const double error=1200.0*std::log2(actual/sample.second);
+            const double raw=1200.0*std::log2(sample.first/sample.second);
+            std::printf("  2.5ms crossover %.0fHz src %.1f target %.1f got %.2f error %+.1fc\n",
+                        sr,sample.first,sample.second,actual,error);
+            CHECK(actual>0.0 && std::isfinite(error));
+            CHECK(std::abs(error)<22.0);
+            CHECK(std::abs(error)<0.70*std::abs(raw));
+        }
+#endif
+}
+
 TEST (lowvoice_lab_corrects_four_deep_vocal_fundamentals)
 {
     // For years the stable 3.4ms Live renderer intentionally left these
