@@ -100,7 +100,7 @@ bool writeWav(const std::string& path,const Audio& a)
 } // namespace
 int main(int argc,char** argv)
 {
-    if(argc!=5) {
+    if(argc!=5 && argc!=6) {
         std::fprintf(stderr,"Usage: lowvoice_offline_render input.wav output.wav Eminor|Bmajor lab|classic|quality\n");
         return 2;
     }
@@ -132,18 +132,43 @@ int main(int argc,char** argv)
     s.correction.glideMs=0.0;
     chain.setSettings(s);
     chain.reset();
+    // Optional PRIVATE pitch trace; neither the WAVs nor their telemetry
+    // ever appear in GitHub source or its CI build artifact.
+    lyra::TelemetryQueue telemetry;
+    std::ofstream trace;
+    if(argc==6)
+    {
+        trace.open(argv[5]);
+        if(!trace) return 7;
+        trace<<"time_s,input_midi,output_midi,confidence,rms,target,pending\n";
+        chain.setTelemetryQueue(&telemetry);
+    }
     const int block=128;
     const size_t frames=a.samples.size()/a.channels;
     float channels[2][block]{};
     float peak=0.0f, maxStep=0.0f, prev=0.0f;
     const auto begin=std::chrono::steady_clock::now();
+    std::vector<double> blockCpu;
+    blockCpu.reserve((frames+block-1)/block);
     for(size_t start=0;start<frames;start+=block) {
         const int n=int(std::min(size_t(block),frames-start));
         for(int i=0;i<n;++i)
             for(int c=0;c<a.channels;++c)
                 channels[c][i]=a.samples[(start+i)*a.channels+c];
         float* ch[]{channels[0],channels[1]};
+        const auto blockBegin=std::chrono::steady_clock::now();
         chain.process(ch,a.channels,n);
+        const auto blockEnd=std::chrono::steady_clock::now();
+        blockCpu.push_back(std::chrono::duration<double>(blockEnd-blockBegin).count()
+                           / (double(n)/a.rate));
+        if(trace)
+        {
+            lyra::Telemetry event;
+            while(telemetry.pop(event))
+                trace<<((double(start)+n)/a.rate)<<","<<event.inputMidi<<","
+                     <<event.outputMidi<<","<<event.confidence<<","
+                     <<event.rms<<","<<event.target<<","<<event.pending<<"\n";
+        }
         for(int i=0;i<n;++i)
             for(int c=0;c<a.channels;++c) {
                 const float v=channels[c][i];
@@ -163,6 +188,14 @@ int main(int argc,char** argv)
     const double cpu=std::chrono::duration<double>(end-begin).count() /
                      (double(frames)/a.rate);
     if(!writeWav(argv[2],a)) return 6;
+    std::sort(blockCpu.begin(),blockCpu.end());
+    const auto percentile=[&](double fraction)->double {
+        if(blockCpu.empty())return 0.0;
+        return blockCpu[std::min(blockCpu.size()-1,
+            size_t(fraction*double(blockCpu.size()-1)))];
+    };
+    std::printf("block_cpu_fraction_p95=%.4f p99=%.4f max=%.4f (Linux runner, not user's hardware)\n",
+                percentile(0.95),percentile(0.99),percentile(1.0));
     std::printf("mode=%s input=%s duration=%.3fs sr=%uHz channels=%u\n",
         mode.c_str(),argv[1],double(frames)/a.rate,a.rate,a.channels);
     std::printf("nominal_PDC=%d samples / %.3fms, measured_process_fraction=%.4f, peak=%.5f, max_step=%.5f\n",

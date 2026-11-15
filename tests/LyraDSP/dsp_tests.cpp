@@ -1775,6 +1775,57 @@ TEST (lowvoice_lab_nominal_latency_and_source_age_are_honestly_measured)
     }
 }
 
+TEST (lowvoice_lab_deep_voiced_dropouts_and_stereo_transients)
+{
+    for(double sr: {44100.0,48000.0,96000.0})
+    {
+        TunerChain chain; chain.prepare(sr,70.0);
+        TunerChain::Settings s;
+        s.ultraLive=true; s.experimentalLowVoice=true;
+        s.correction.speedMs=-3.0; s.correction.amount=1.0;
+        s.correction.stabilizerMs=0.0;
+        s.correction.skellLive=true; s.correction.minConfidence=0.65f;
+        chain.setSettings(s); chain.reset();
+        constexpr int N=64;
+        float l[N]{},r[N]{};
+        float previous=0.0f;
+        double biggestJump=0.0,peak=0.0,maxStereo=0.0;
+        const auto allocs=gAllocs.load();
+        const int blocks=int(sr*1.4/N);
+        for(int b=0;b<blocks;++b)
+        {
+            for(int i=0;i<N;++i)
+            {
+                const double clock=double(b*N+i)/sr;
+                const bool consonant=std::fmod(clock,0.21)>0.170
+                    && std::fmod(clock,0.21)<0.177;
+                const double freq=clock<0.7?105.5:94.0;
+                const double vocal=0.24*std::sin(2*kPi*freq*clock)
+                    +0.09*std::sin(4*kPi*freq*clock);
+                l[i]=float(consonant?0.006*std::sin(2*kPi*1030*clock):vocal);
+                r[i]=-l[i];
+            }
+            float* ch[]{l,r};
+            chain.process(ch,2,N);
+            for(int i=0;i<N;++i)
+            {
+                CHECK(std::isfinite(l[i]) && std::isfinite(r[i]));
+                if(b>100)
+                    biggestJump=std::max(biggestJump,
+                        std::abs(double(l[i]-previous)));
+                peak=std::max(peak,std::abs(double(l[i])));
+                if(b>100)
+                    maxStereo=std::max(maxStereo,std::abs(double(l[i]+r[i])));
+                previous=l[i];
+            }
+        }
+        CHECK(gAllocs.load()==allocs);
+        CHECK(peak<0.9);
+        CHECK(biggestJump<0.35);
+        CHECK(maxStereo<0.01);
+    }
+}
+
 TEST (lowvoice_lab_rt_stereo_switch_and_no_allocations)
 {
     TunerChain chain; chain.prepare(48000,70.0);
