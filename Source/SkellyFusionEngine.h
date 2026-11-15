@@ -88,6 +88,11 @@ public:
         translated.minFreq = floorHz;
         translated.hq = !s.lowLatency;
         translated.ultraLive = s.lowLatency;
+#if defined(SKELLTUNE_LOW_VOICE_LAB) && SKELLTUNE_LOW_VOICE_LAB
+        // Separate experiment binary only. The released MetaTune/Skell Live
+        // sound path is byte-for-byte unchanged when the lab flag is off.
+        translated.experimentalLowVoice = s.lowLatency;
+#endif
         translated.bypass = s.bypass || translated.correction.amount <= 1.0e-6;
         // Preserve MetaTune's existing doubler as the ONLY doubler; avoid
         // running two independent double/chorus processors by accident.
