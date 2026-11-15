@@ -99,6 +99,9 @@ void TunerChain::setSettings (const Settings& s) noexcept
     if (!lowVoiceEnabled)
         lowVoiceTarget = 0.0f;
 #endif
+#if !defined(SKELLTUNE_LOW_VOICE_LAB) || !SKELLTUNE_LOW_VOICE_LAB
+    const bool floorChanged = false;
+#endif
     if (s.minFreq != minFreq || s.hq != hq || s.ultraLive != ultraLive || floorChanged)
     {
         if (s.minFreq != minFreq)
