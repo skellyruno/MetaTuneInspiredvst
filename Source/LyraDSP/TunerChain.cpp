@@ -62,7 +62,10 @@ void TunerChain::setSettings (const Settings& s) noexcept
 {
     engine.setParams (s.correction);
 #if defined(SKELLTUNE_LOW_VOICE_LAB) && SKELLTUNE_LOW_VOICE_LAB
-    lowVoiceEnabled = s.experimentalLowVoice && s.ultraLive && !s.hq;
+    // With Amount zero the only correct output is a sample-exact dry delay.
+    // Do not enable a second waveform tap just to reconstruct unity pitch.
+    lowVoiceEnabled = s.experimentalLowVoice && s.ultraLive && !s.hq
+        && s.correction.amount > 1.0e-6;
     if (!lowVoiceEnabled)
         lowVoiceTarget = 0.0f;
 #endif
