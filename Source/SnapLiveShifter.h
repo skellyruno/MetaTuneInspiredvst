@@ -115,6 +115,22 @@ public:
         renderFade = 0;
     }
 
+    // Used only by the separate 3-way comparison VST3. The host PDC is
+    // notified on the message thread; keep live taps aligned to that budget
+    // without reallocating ring history in the audio callback.
+    void setNominalDelaySamples (int samples) noexcept
+    {
+        if (ring.empty()) return;
+        const int requested = std::clamp(samples, kMinDelay + 4, (int)mask - 32);
+        if (requested == nominalDelay) return;
+        latencyHost = nominalDelay = requested;
+        liveTap = double(write - 1) - double(nominalDelay);
+        spliceTap = liveTap;
+        fadeLength = fadePosition = 0;
+        pendingEvent = {};
+        renderFade = 0;
+    }
+
     void setRatio (float newRatio) noexcept
     {
         ratio = std::clamp (std::isfinite (newRatio) ? newRatio : 1.0f, 0.5f, 2.0f);
