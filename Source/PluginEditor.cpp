@@ -893,9 +893,20 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     juce::Component* components[] = { &speed, &amount, &sustain, &scale, &root, &lowLatency, &snapLive,
                                       &noteReadout, &status };
     for (auto* c : components) addAndMakeVisible(c);
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+    addAndMakeVisible(abEngine);
+    abEngine.addItem("Current", 1);
+    abEngine.addItem("LowVoice 3.4", 2);
+    abEngine.addItem("LowVoice 2.5", 3);
+    abEngine.setTooltip("COMPARE DSP: Current Skell Live (3.4ms, high-register only), LowVoice 3.4 (deep voice), or LowVoice 2.5 (fast crossover). Nominal host PDC changes with mode; low-register voiced source age is variable. Turn on Skell Live for matching tracking.");
+#endif
 
     scale.addItem("Chromatic", 1); scale.addItem("Major", 2); scale.addItem("Minor", 3);
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+    for (auto* combo : { &scale, &root, &abEngine })
+#else
     for (auto* combo : { &scale, &root })
+#endif
     {
         combo->setLookAndFeel(&metaTuneKnobLookAndFeel);
         combo->setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff242429));
@@ -927,6 +938,9 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     rootAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor.parameters,"root",root);
     latencyAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(processor.parameters,"lowLatency",lowLatency);
     snapLiveAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(processor.parameters,"snapLive",snapLive);
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+    abEngineAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor.parameters,"abEngine",abEngine);
+#endif
     // Legacy Note Stabilizer fields remain serialized for old presets, but
     // only two functional performance/latency toggles are visible now.
     lowLatency.setTooltip("Ultra Live: about 3.4 ms host latency for voices above 170 Hz. Lower notes remain audible at natural pitch for safety. Off: full-range 70 Hz LyraTune Quality (~9.5 ms @48k) with 2 ms detector lookahead.");
@@ -987,6 +1001,9 @@ MetaTuneInspiredAudioProcessorEditor::~MetaTuneInspiredAudioProcessorEditor()
         activeGestureParamB = nullptr;
     }
     speed.setLookAndFeel(nullptr);
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+    abEngine.setLookAndFeel(nullptr);
+#endif
     amount.setLookAndFeel(nullptr);
     sustain.setLookAndFeel(nullptr);
     lowLatency.setLookAndFeel(nullptr);
@@ -1815,11 +1832,18 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(snapLive.getToggleState() && lowLatency.getToggleState()
                     ? juce::Colour(0xffd9a2e8) : juce::Colour(0xffb0a9b9));
     g.setFont(uiFont(14.0f, juce::Font::bold));
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+    // Dedicated A/B selector overlays this panel without rearranging the
+    // approved piano, orb or right-side controls.
+#else
     g.drawText("LIVE PERFORMANCE", 705, 688, 256, 15, juce::Justification::centredLeft);
+#endif
     g.setColour(juce::Colour(0xff77747f));
     g.setFont(uiFont(10.0f, juce::Font::plain));
+#if !defined(SKELLTUNE_3WAY_AB_LAB) || !SKELLTUNE_3WAY_AB_LAB
     g.drawText("FAST TRACKING  /  OCTAVE GUARD", 705, 704, 256, 13,
                juce::Justification::centredLeft);
+#endif
 
     // Heatmaps
     g.setColour(juce::Colour(0xff1d1d20)); g.fillRect(0,734,1366,53);
@@ -2390,6 +2414,9 @@ void MetaTuneInspiredAudioProcessorEditor::resized()
     amountLabel.setBounds(px(1097), py(575), px(220), py(25));
     scale.setBounds(px(165), py(686), px(176), py(35));
     root.setBounds(px(350), py(686), px(100), py(35));
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+    abEngine.setBounds(px(693), py(686), px(279), py(35));
+#endif
     // Only two toggles, both inside the design canvas at every resize.
     snapLive.setBounds(px(983), py(686), px(174), py(35));
     lowLatency.setBounds(px(1160), py(686), px(180), py(35));
