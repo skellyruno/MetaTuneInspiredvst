@@ -6,6 +6,9 @@
 #include "Pitch/CorrectionEngine.h"
 #include "Pitch/PitchShifter.h"
 #include "Pitch/YinDetector.h"
+#if defined(SKELLTUNE_LOW_VOICE_LAB) && SKELLTUNE_LOW_VOICE_LAB
+#include "../SnapLiveShifter.h" // Existing causal period-splicing research renderer.
+#endif
 
 namespace lyra
 {
@@ -47,6 +50,7 @@ public:
         double minFreq = 70.0; // range floor: sets detector frame and shifter latency
         bool hq = false;       // 2 ms detector lookahead (+2 ms latency)
         bool ultraLive = false; // ~3.4ms Live; F0 <155Hz remains neutral
+        bool experimentalLowVoice = false; // OFF in production; lab-only opt-in low-register renderer
         bool bypass = false;
         Doubler::Params doubler;
         bool strike = false;   // LyraStrike formant accent on note changes
@@ -65,6 +69,11 @@ public:
     // bass is corrected when the output deliberately preserves natural pitch.
     float appliedPitchRatio() const noexcept
     { return 1.0f + wet * (lastAppliedRatio - 1.0f); }
+#if defined(SKELLTUNE_LOW_VOICE_LAB) && SKELLTUNE_LOW_VOICE_LAB
+    int lowVoiceLabSplices() const noexcept { return lowVoiceTap[0].getSpliceCount(); }
+    double lowVoiceLabMinSourceAge() const noexcept { return lowVoiceTap[0].getMinObservedDelay(); }
+    double lowVoiceLabMaxSourceAge() const noexcept { return lowVoiceTap[0].getMaxObservedDelay(); }
+#endif
     static int lookaheadFor (double sampleRate) noexcept { return int (std::lround (kLookaheadSeconds * sampleRate)); }
     static int latencyFor (double sampleRate, double minFreq, bool hq = false,
                            bool ultraLive = false) noexcept
@@ -91,6 +100,21 @@ private:
     int strikeLastNote = -1, strikeSilentHops = 0; // previous note for LyraStrike's direction
     int lookahead = 0;
     bool hq = false, ultraLive = false;
+#if defined(SKELLTUNE_LOW_VOICE_LAB) && SKELLTUNE_LOW_VOICE_LAB
+    // Sidechain renderer is off by default. Its nominal tap matches the
+    // original live PDC, but voiced period splices have VARIABLE source age.
+    // Never advertise this as a verified 3.4ms effective group delay until
+    // impulse, phase and real-voice testing demonstrate it.
+    autotune::SnapLiveShifter lowVoiceTap[kMaxChannels];
+    float lowVoiceSamples[kMaxChannels][kSubBlock] {};
+    float lowVoiceRatio[kSubBlock] {}, lowVoiceBlend[kSubBlock] {};
+    float lowVoiceMix = 0.0f, lowVoiceTarget = 0.0f;
+    // Fast low-note acquisition, smooth release over brief detector gaps.
+    float lowVoiceAttackCoeff = 0.01f, lowVoiceReleaseCoeff = 0.01f;
+    float lowVoiceLastPeriod = 0.0f, lowVoiceLastFreq = 0.0f;
+    int lowVoiceHoldRemaining = 0, lowVoiceGraceSamples = 0;
+    bool lowVoiceEnabled = false;
+#endif
     // The pitch ratio, not the audio output, is crossfaded toward unity in
     // the low register. This leaves low notes audible without invalid splices.
     float fastCorrectionMix = 1.0f, fastCorrectionTarget = 1.0f, fastMixCoeff = 0.01f;

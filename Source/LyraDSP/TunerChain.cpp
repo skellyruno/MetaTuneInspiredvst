@@ -14,6 +14,17 @@ void TunerChain::prepare (double sampleRate, double lowestMinFreq)
     engine.prepare (sr, yin.hopSamples() / sr);
     shifter.prepare (sr, kMaxChannels, lowestMinFreq);
     lookahead = lookaheadFor (sr);
+#if defined(SKELLTUNE_LOW_VOICE_LAB) && SKELLTUNE_LOW_VOICE_LAB
+    // Pre-allocate both period-splicing channels OUTSIDE the audio callback.
+    // The original Lyra high-register renderer remains unchanged.
+    const int nominalLiveDelay = PitchShifter::latencyFor(sr, kUltraLiveFloorHz);
+    for (auto& tap : lowVoiceTap)
+        tap.prepare(sr, nominalLiveDelay);
+    lowVoiceTap[1].setFollower(true);
+    lowVoiceAttackCoeff = float(1.0 - std::exp(-1.0/(0.008*sr)));
+    lowVoiceReleaseCoeff = float(1.0 - std::exp(-1.0/(0.022*sr)));
+    lowVoiceGraceSamples = int(std::lround(sr*0.010));
+#endif
     // Sized for the largest latency (lowest range + HQ); the active delays follow the settings.
     dryDelay.prepare (kMaxChannels, shifter.latencySamples() + lookahead, int (0.005 * sr));
     aheadDelay.prepare (kMaxChannels, lookahead, int (0.005 * sr));
@@ -43,11 +54,25 @@ void TunerChain::reset() noexcept
     wet = wetTarget;
     fastCorrectionMix = fastCorrectionTarget = ultraLive ? 0.0f : 1.0f;
     lastAppliedRatio = 1.0f;
+#if defined(SKELLTUNE_LOW_VOICE_LAB) && SKELLTUNE_LOW_VOICE_LAB
+    for (auto& tap:lowVoiceTap) tap.reset();
+    lowVoiceMix = lowVoiceTarget = 0.0f;
+    lowVoiceLastPeriod = lowVoiceLastFreq = 0.0f;
+    lowVoiceHoldRemaining = 0;
+#endif
 }
 
 void TunerChain::setSettings (const Settings& s) noexcept
 {
     engine.setParams (s.correction);
+#if defined(SKELLTUNE_LOW_VOICE_LAB) && SKELLTUNE_LOW_VOICE_LAB
+    // With Amount zero the only correct output is a sample-exact dry delay.
+    // Do not enable a second waveform tap just to reconstruct unity pitch.
+    lowVoiceEnabled = s.experimentalLowVoice && s.ultraLive && !s.hq
+        && s.correction.amount > 1.0e-6;
+    if (!lowVoiceEnabled)
+        lowVoiceTarget = 0.0f;
+#endif
     if (s.minFreq != minFreq || s.hq != hq || s.ultraLive != ultraLive)
     {
         if (s.minFreq != minFreq)
@@ -123,6 +148,34 @@ void TunerChain::process (float* const* ch, int numCh, int total) noexcept
         yin.process (mono, n, [this] (int i, const PitchEstimate& e) {
             engine.onEstimate (e, i);
             shifter.setPeriod (e.voiced ? sr / e.frequency : 0.0);
+#if defined(SKELLTUNE_LOW_VOICE_LAB) && SKELLTUNE_LOW_VOICE_LAB
+            // Old LAB hard-gated this path at .70 confidence even though
+            // Skell Live accepts voiced notes at .65. Low/breathy vowels then
+            // toggled between phase-different audio renderers each hop.
+            // Use matched entry threshold and hysteretic 10ms grace for
+            // dropouts; do not modify the proven production detector.
+            const bool lowRange = e.voiced && e.frequency >= minFreq
+                && e.frequency < 175.0f;
+            const bool reliable = lowRange && e.confidence >=
+                (lowVoiceHoldRemaining > 0 ? 0.58f : 0.65f);
+            if (reliable)
+            {
+                lowVoiceLastFreq = e.frequency;
+                lowVoiceLastPeriod = float(sr / e.frequency);
+                lowVoiceHoldRemaining = lowVoiceGraceSamples;
+            }
+            else
+                lowVoiceHoldRemaining = std::max(0,
+                    lowVoiceHoldRemaining - yin.hopSamples());
+            const bool held = lowVoiceHoldRemaining > 0
+                && lowVoiceLastPeriod > 0.0f;
+            for(auto& tap:lowVoiceTap)
+                tap.setPeriod(held ? lowVoiceLastPeriod : 0.0f);
+            const float crossoverFreq = reliable ? e.frequency : lowVoiceLastFreq;
+            lowVoiceTarget = lowVoiceEnabled && held
+                ? float(std::clamp((170.0-double(crossoverFreq))/25.0,0.0,1.0))
+                : 0.0f;
+#endif
             // 3.5ms cannot span a complete 70Hz cycle. In Ultra Live only,
             // taper the requested ratio toward unity from 170 to 155 Hz.
             // The low voice stays audible with correct PDC and natural pitch.
@@ -159,6 +212,16 @@ void TunerChain::process (float* const* ch, int numCh, int total) noexcept
         {
             fastCorrectionMix += (fastCorrectionTarget - fastCorrectionMix) * fastMixCoeff;
             const float requested = engine.nextRatio();
+#if defined(SKELLTUNE_LOW_VOICE_LAB) && SKELLTUNE_LOW_VOICE_LAB
+            lowVoiceRatio[i] = std::clamp(requested,
+                float(1.0/PitchShifter::kMaxRatio),
+                float(PitchShifter::kMaxRatio));
+            const float slew = lowVoiceTarget > lowVoiceMix
+                ? lowVoiceAttackCoeff : lowVoiceReleaseCoeff;
+            lowVoiceMix += (lowVoiceTarget-lowVoiceMix)*slew;
+            lowVoiceMix = std::clamp(lowVoiceMix,0.0f,1.0f);
+            lowVoiceBlend[i] = lowVoiceMix;
+#endif
             // The shifter can only render ratios in [1/1.5, 1.5].
             // Match its physical limit *before* publishing the output ratio:
             // a large Glide jump must not make the meter claim an octave
@@ -166,11 +229,45 @@ void TunerChain::process (float* const* ch, int numCh, int total) noexcept
             ratio[i] = std::clamp(1.0f + fastCorrectionMix * (requested - 1.0f),
                                   float(1.0 / PitchShifter::kMaxRatio),
                                   float(PitchShifter::kMaxRatio));
+#if defined(SKELLTUNE_LOW_VOICE_LAB) && SKELLTUNE_LOW_VOICE_LAB
+            // Meter is an approximation in transition because two
+            // waveforms are mixed; fully low = the actual low-shifter ratio.
+            lastAppliedRatio = ratio[i] + lowVoiceBlend[i]*(lowVoiceRatio[i]-ratio[i]);
+#else
             lastAppliedRatio = ratio[i];
+#endif
         }
 
+#if defined(SKELLTUNE_LOW_VOICE_LAB) && SKELLTUNE_LOW_VOICE_LAB
+        // Two independent audio paths are fed the SAME source, and both
+        // low taps share exactly one splice clock. Each tap's ring stays
+        // warm even in high-register or Quality mode.
+        for (int i=0;i<n;++i)
+        {
+            // Finish fade-out on mode automation rather than instantly
+            // returning the low tap to unity/dry mid-cycle.
+            const bool renderLow = ultraLive
+                && (lowVoiceTarget>0.001f || lowVoiceBlend[i]>0.001f);
+            lowVoiceTap[0].setRenderingEnabled(renderLow);
+            lowVoiceTap[1].setRenderingEnabled(renderLow);
+            for (auto& tap:lowVoiceTap) tap.setRatio(lowVoiceRatio[i]);
+            lowVoiceSamples[0][i]=lowVoiceTap[0].processSample(io[0][i]);
+            if(numCh>1)
+            {
+                lowVoiceTap[1].applyEvent(lowVoiceTap[0].getLastEvent());
+                lowVoiceSamples[1][i]=lowVoiceTap[1].processSample(io[1][i]);
+            }
+        }
+#endif
         aheadDelay.process (io, numCh, n); // HQ lookahead (0 samples when off)
         shifter.process (io, numCh, n, ratio);
+#if defined(SKELLTUNE_LOW_VOICE_LAB) && SKELLTUNE_LOW_VOICE_LAB
+        // Lab-only adaptive crossfade. It may reveal comb filtering if the
+        // low tap deviates from its nominal delay: quantify before release.
+        for (int i=0;i<n;++i)
+            for (int c=0;c<numCh;++c)
+                io[c][i] += lowVoiceBlend[i]*(lowVoiceSamples[c][i]-io[c][i]);
+#endif
         strike.process (io, numCh, n); // before the doubler: the doubled voices carry the accent too
         doubler.process (io, numCh, n);
         dryDelay.process (dryPtr, numCh, n);
