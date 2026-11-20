@@ -22,6 +22,7 @@ public:
     void paint(juce::Graphics&) override;
     void resized() override;
     void refresh();
+    void focusSearch();
 
     int getVisiblePresetCount() const noexcept;
     bool loadPresetAtRow(int row);
