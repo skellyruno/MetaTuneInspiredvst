@@ -2032,7 +2032,7 @@ void MetaTuneInspiredAudioProcessorEditor::openPresetBrowser()
     presetBrowser->refresh();
     presetBrowser->setVisible(true);
     presetBrowser->toFront(true);
-    presetBrowser->grabKeyboardFocus();
+    presetBrowser->focusSearch();
 }
 
 void MetaTuneInspiredAudioProcessorEditor::savePresetToFile()
