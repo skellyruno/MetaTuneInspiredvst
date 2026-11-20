@@ -224,7 +224,7 @@ void MetaTunePresetBrowser::resized()
     juce::TextButton* buttons[] = { &loadButton, &saveButton, &importButton, &folderButton, &closeButton };
     for (int i = 0; i < 5; ++i)
     {
-        buttons[i]->setFont(browserFont(juce::jmax(8.5f, 10.5f * scale), juce::Font::bold));
+        // JUCE TextButton uses the active LookAndFeel font; it has no setFont API.
         buttons[i]->setBounds(x, footerY, buttonW, footerH);
         x += buttonW + gap;
     }
@@ -404,7 +404,7 @@ void MetaTunePresetBrowser::listBoxItemClicked(int row, const juce::MouseEvent& 
         toggleFavoriteAtRow(row);
         return;
     }
-    presetList.selectRow(row, juce::sendNotificationSync);
+    presetList.selectRow(row, false);
 }
 
 void MetaTunePresetBrowser::listBoxItemDoubleClicked(
@@ -518,7 +518,7 @@ void MetaTunePresetBrowser::selectFile(const juce::File& file)
     {
         if (visiblePresets[(size_t)i] == file)
         {
-            presetList.selectRow(i, juce::sendNotificationSync);
+            presetList.selectRow(i, false);
             return;
         }
     }
