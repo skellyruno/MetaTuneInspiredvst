@@ -19,6 +19,9 @@ MetaTuneInspiredAudioProcessor::MetaTuneInspiredAudioProcessor()
         customDegreeParameters[(size_t)i] = parameters.getRawParameterValue("customDegree" + juce::String(i));
     rootParameter = parameters.getRawParameterValue("root");
     lowLatencyParameter = parameters.getRawParameterValue("lowLatency");
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+    abEngineParameter = parameters.getRawParameterValue("abEngine");
+#endif
     snapLiveParameter = parameters.getRawParameterValue("snapLive");
     fixedHorizonParameter = parameters.getRawParameterValue("fixedHorizonVoiced");
     pitchReferenceParameter = parameters.getRawParameterValue("pitchReference");
@@ -59,9 +62,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout MetaTuneInspiredAudioProcess
     p.add(std::make_unique<AudioParameterChoice>("stabilizerTime", "Legacy Stabilizer Time (Inactive)",
                                                   StringArray { "None", "Short", "Mid", "Long" }, 1));
     p.add(std::make_unique<AudioParameterBool>("lowLatency", "Low Latency", true));
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+    p.add(std::make_unique<AudioParameterChoice>("abEngine", "A-B Engine",
+        StringArray { "Current Skell Live", "LowVoice 3.4", "LowVoice 2.5" }, 0));
+#endif
     // Rename the host-facing label, but preserve "snapLive" as the stable
     // automation ID for existing projects and presets.
-    p.add(std::make_unique<AudioParameterBool>("snapLive", "Skell Live", false));
+    p.add(std::make_unique<AudioParameterBool>("snapLive", "Legacy Live Mode (hidden)", false));
     p.add(std::make_unique<AudioParameterBool>("fixedHorizonVoiced", "Legacy Fixed Mode (Disabled: >10ms)", false));
     p.add(std::make_unique<AudioParameterChoice>("scale", "Scale",
         StringArray{"Chromatic", "Major", "Minor", "Harmonic Minor", "Major Pentatonic",
@@ -98,7 +105,12 @@ void MetaTuneInspiredAudioProcessor::prepareToPlay(double sr, int maxBlock)
     // Genuine read-head budget: ~3.4ms Ultra Live for voices >=160Hz,
     // full-range 70Hz HQ ~9.5ms. A 70Hz cycle cannot fit in 3.5ms
     // without a different synthesis algorithm, so bass uses Quality mode.
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+    liveLatencySamples = lyra::PitchShifter::latencyFor(currentSampleRate, 160.0);
+    abFastLatencySamples = lyra::PitchShifter::latencyFor(currentSampleRate, 230.0);
+#else
     liveLatencySamples = lyra::TunerChain::latencyFor(currentSampleRate, 70.0, false, true);
+#endif
     normalLatencySamples = lyra::TunerChain::latencyFor(currentSampleRate, 70.0, true, false);
     // Snap Live remains a Lyra controller setting, sharing Ultra Live PDC.
     snapLiveLatencySamples = liveLatencySamples;
@@ -114,8 +126,13 @@ void MetaTuneInspiredAudioProcessor::prepareToPlay(double sr, int maxBlock)
     // may retain it, but it cannot activate the 80ms renderer.
     const bool initialSnap = initialLive && snapLiveParameter != nullptr
         && snapLiveParameter->load(std::memory_order_relaxed) > 0.5f;
-    const int initialBudget = initialSnap ? snapLiveLatencySamples
-                                          : (initialLive ? liveLatencySamples : normalLatencySamples);
+    int initialBudget = initialSnap ? snapLiveLatencySamples
+                                    : (initialLive ? liveLatencySamples : normalLatencySamples);
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+    if (initialLive && abEngineParameter != nullptr
+        && std::lround(abEngineParameter->load(std::memory_order_relaxed)) == 2)
+        initialBudget = abFastLatencySamples;
+#endif
     latencyPrepared.store(false, std::memory_order_release);
     setLatencySamples(initialBudget);
     publishedLatencySamples.store(initialBudget, std::memory_order_release);
@@ -178,8 +195,13 @@ void MetaTuneInspiredAudioProcessor::timerCallback()
 #endif
     const bool snap = live && snapLiveParameter != nullptr
         && snapLiveParameter->load(std::memory_order_relaxed) > 0.5f;
-    const int requestedLatency = snap ? snapLiveLatencySamples
-                                      : (live ? liveLatencySamples : normalLatencySamples);
+    int requestedLatency = snap ? snapLiveLatencySamples
+                                : (live ? liveLatencySamples : normalLatencySamples);
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+    if (live && abEngineParameter != nullptr
+        && std::lround(abEngineParameter->load(std::memory_order_relaxed)) == 2)
+        requestedLatency = abFastLatencySamples;
+#endif
     if (requestedLatency != publishedLatencySamples.load(std::memory_order_acquire))
     {
         // Not on the realtime callback. The DAW receives the new PDC before
@@ -259,7 +281,11 @@ void MetaTuneInspiredAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
     // PDC history or call JUCE's host notifications from the audio thread.
     {
         const int published = publishedLatencySamples.load(std::memory_order_acquire);
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+        settings.lowLatency = published == liveLatencySamples || published == abFastLatencySamples;
+#else
         settings.lowLatency = published == liveLatencySamples;
+#endif
         settings.snapLive = settings.lowLatency && snapLiveParameter != nullptr
             && snapLiveParameter->load(std::memory_order_relaxed) > 0.5f;
     }
@@ -276,6 +302,19 @@ void MetaTuneInspiredAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
     // Keep the DSP history warm during host bypass. The final bypass crossfade
     // happens after host PDC, between time-aligned paths, not with raw input.
     settings.bypass = false;
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+    // The host receives PDC before audio switches to 2.5ms mode. If the
+    // UI selector has changed but the timer has not yet published latency,
+    // keep the old render budget rather than moving wet audio ahead of host PDC.
+    int variant = abEngineParameter != nullptr
+        ? juce::jlimit(0, 2, (int)std::lround(abEngineParameter->load(std::memory_order_relaxed))) : 0;
+    if (!settings.lowLatency) variant = 0;
+    else if (publishedLatencySamples.load(std::memory_order_acquire) == abFastLatencySamples && variant != 2)
+        variant = 2;
+    else if (publishedLatencySamples.load(std::memory_order_acquire) == liveLatencySamples && variant == 2)
+        variant = 0;
+    realtimeAutotune.setABMode(variant);
+#endif
     realtimeAutotune.setSettings(settings); // already on the audio thread; no lock or cross-thread hand-off needed
 
     // Input metering is pre-tune. The engine follows the stronger channel for pitch

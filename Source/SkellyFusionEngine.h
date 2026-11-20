@@ -32,6 +32,11 @@ public:
         correction = 0.0f;
     }
 
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+    // Audio-thread-only lab selector. All production automation/state IDs
+    // remain untouched; the dedicated comparison VST3 owns this new mode.
+    void setABMode(int mode) noexcept { abMode = std::clamp(mode, 0, 2); }
+#endif
     void setSustain(float normalized) noexcept {
         sustain = std::isfinite(normalized) ? std::clamp(normalized, -1.0f, 1.0f) : 0.0f;
     }
@@ -91,7 +96,12 @@ public:
 #if defined(SKELLTUNE_LOW_VOICE_LAB) && SKELLTUNE_LOW_VOICE_LAB
         // Separate experiment binary only. The released MetaTune/Skell Live
         // sound path is byte-for-byte unchanged when the lab flag is off.
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+        translated.abVariant = abMode;
+        translated.experimentalLowVoice = s.lowLatency && abMode != 0;
+#else
         translated.experimentalLowVoice = s.lowLatency;
+#endif
 #endif
         translated.bypass = s.bypass || translated.correction.amount <= 1.0e-6;
         // Preserve MetaTune's existing doubler as the ONLY doubler; avoid
@@ -153,6 +163,9 @@ private:
     lyra::TunerChain engine;
     double sr = 48000.0, floorHz = 70.0;
     float sustain = 0.0f;
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+    int abMode = 0;
+#endif
     float detected = -1.0f, confidence = 0.0f, correction = 0.0f;
     int target = -1;
 };

@@ -1554,6 +1554,11 @@ TEST (ultra_live_aggressive_retune_is_audible_and_in_tune)
         s.ultraLive = true;
         s.correction.speedMs = -3.0;
         s.correction.stabilizerMs = 0.0;
+#if defined(SKELLTUNE_LAB_FAST_2P5) && SKELLTUNE_LAB_FAST_2P5
+        // 225Hz is below the 230Hz *Lyra* history floor in this
+        // configuration, but the LAB low renderer must still tune it.
+        s.experimentalLowVoice=true;
+#endif
         auto x = tone(sr, 225.0, 0.85, true); // actual 225 Hz -> corrected A3 / 220 Hz
         auto y = runChain(x, s, sr, 128);
         YinDetector detector; detector.prepare(sr, {});
@@ -1683,6 +1688,46 @@ TEST (ultra_live_switching_does_not_allocate_or_corrupt_stereo)
 
 
 #if defined(SKELLTUNE_LOW_VOICE_LAB) && SKELLTUNE_LOW_VOICE_LAB
+TEST (lowvoice_lab_fast_budget_is_truthful_and_safe)
+{
+#if defined(SKELLTUNE_LAB_FAST_2P5) && SKELLTUNE_LAB_FAST_2P5
+    for(double sr: {44100.0,48000.0,96000.0})
+    {
+        const int budget=TunerChain::latencyFor(sr,70.0,false,true);
+        CHECK(budget>0);
+        CHECK(budget<=int(std::ceil(0.0025*sr)));
+        std::printf("  Fast LAB %.0fHz nominal dry/PDC=%d samples = %.3fms\n",
+                    sr,budget,1000.0*budget/sr);
+    }
+#endif
+}
+
+TEST (lowvoice_lab_2p5_mode_crossover_no_natural_pitch_gap)
+{
+#if defined(SKELLTUNE_LAB_FAST_2P5) && SKELLTUNE_LAB_FAST_2P5
+    for(double sr: {44100.0,48000.0,96000.0})
+        for(const auto sample: {std::pair<double,double>{205.0,207.652},
+                                {225.0,220.0},{241.0,246.942},
+                                {255.0,261.626}})
+        {
+            TunerChain::Settings s;
+            s.minFreq=70.0;s.ultraLive=true;s.experimentalLowVoice=true;
+            s.correction.speedMs=-3.0;
+            s.correction.stabilizerMs=0.0;
+            const auto input=tone(sr,sample.first,0.9,true);
+            const auto output=runChain(input,s,sr,128);
+            const double actual=medianPitch(output,sr,100);
+            const double error=1200.0*std::log2(actual/sample.second);
+            const double raw=1200.0*std::log2(sample.first/sample.second);
+            std::printf("  2.5ms crossover %.0fHz src %.1f target %.1f got %.2f error %+.1fc\n",
+                        sr,sample.first,sample.second,actual,error);
+            CHECK(actual>0.0 && std::isfinite(error));
+            CHECK(std::abs(error)<22.0);
+            CHECK(std::abs(error)<0.70*std::abs(raw));
+        }
+#endif
+}
+
 TEST (lowvoice_lab_corrects_four_deep_vocal_fundamentals)
 {
     // For years the stable 3.4ms Live renderer intentionally left these
@@ -1859,6 +1904,43 @@ TEST (lowvoice_lab_rt_stereo_switch_and_no_allocations)
     }
     CHECK(gAllocs.load()==start);
     CHECK(maxAnti<0.010);
+}
+#endif
+
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+TEST (threeway_ab_current_lowvoice34_lowvoice25_are_distinct_real_audio_modes)
+{
+    for(double sr: {44100.0, 48000.0, 96000.0})
+        for(int mode: {0,1,2})
+        {
+            TunerChain::Settings s;
+            s.ultraLive=true;
+            s.minFreq=70.0;
+            s.experimentalLowVoice=mode>0;
+            s.abVariant=mode;
+            s.correction.amount=1.0;
+            s.correction.speedMs=-3.0;
+            s.correction.stabilizerMs=0.0;
+            TunerChain chain;
+            chain.prepare(sr,70.0);
+            chain.setSettings(s);
+            const int budget=PitchShifter::latencyFor(sr,mode==2?230.0:160.0);
+            CHECK(chain.latencySamples()==budget);
+            const auto in=tone(sr,106.0,0.90,true);
+            const auto out=runChain(in,s,sr,128);
+            const double pitched=medianPitch(out,sr,100);
+            const double cents=pitched>0?1200.0*std::log2(pitched/103.8262):1.0e9;
+            CHECK(pitched>0&&std::isfinite(pitched));
+            // The legacy Skell Live 3.4ms path deliberately preserves low
+            // notes at natural pitch. Both LAB modes must actually correct.
+            if(mode==0)
+                CHECK(std::abs(cents-1200.0*std::log2(106.0/103.8262))<10.0);
+            else
+                CHECK(std::abs(cents)<20.0);
+            for(float v:out)CHECK(std::isfinite(v));
+            std::printf("  three-way %.0fHz mode=%d PDC=%d pitch=%+.2f cents\n",
+                        sr,mode,budget,cents);
+        }
 }
 #endif
 

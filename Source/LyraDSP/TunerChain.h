@@ -41,7 +41,14 @@ public:
     // The original Lyra shifter needs half a pitch period of causal history.
     // Ultra Live targets 3.5ms for voices >=160Hz, retaining the 70Hz detector
     // range but bypassing pitch correction below the renderer's safe floor.
+    // A shorter nominal history is only enabled in the separately named
+    // 2.5ms LAB build. Full-range low notes still depend on the causal
+    // variable-age period-splice renderer; not a fixed 2.5ms wet delay.
+#if defined(SKELLTUNE_LAB_FAST_2P5) && SKELLTUNE_LAB_FAST_2P5
+    static constexpr double kUltraLiveFloorHz = 230.0;
+#else
     static constexpr double kUltraLiveFloorHz = 160.0;
+#endif
     static_assert (kSubBlock <= Doubler::kMaxBlock);
 
     struct Settings
@@ -51,6 +58,9 @@ public:
         bool hq = false;       // 2 ms detector lookahead (+2 ms latency)
         bool ultraLive = false; // ~3.4ms Live; F0 <155Hz remains neutral
         bool experimentalLowVoice = false; // OFF in production; lab-only opt-in low-register renderer
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+        int abVariant = 2; // old 2.5 LAB stand-alone tests use this default; APVTS sends 0/1/2 explicitly
+#endif
         bool bypass = false;
         Doubler::Params doubler;
         bool strike = false;   // LyraStrike formant accent on note changes
@@ -114,6 +124,10 @@ private:
     float lowVoiceLastPeriod = 0.0f, lowVoiceLastFreq = 0.0f;
     int lowVoiceHoldRemaining = 0, lowVoiceGraceSamples = 0;
     bool lowVoiceEnabled = false;
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+    int abVariant = 0;
+    double activeLiveFloorHz = 160.0; // current and 3.4 LAB; FAST 2.5 uses 230Hz
+#endif
 #endif
     // The pitch ratio, not the audio output, is crossfaded toward unity in
     // the low register. This leaves low notes audible without invalid splices.

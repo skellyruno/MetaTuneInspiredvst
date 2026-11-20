@@ -17,7 +17,13 @@ void TunerChain::prepare (double sampleRate, double lowestMinFreq)
 #if defined(SKELLTUNE_LOW_VOICE_LAB) && SKELLTUNE_LOW_VOICE_LAB
     // Pre-allocate both period-splicing channels OUTSIDE the audio callback.
     // The original Lyra high-register renderer remains unchanged.
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+    const int nominalLiveDelay = PitchShifter::latencyFor(sr, 160.0);
+    abVariant = 0;
+    activeLiveFloorHz = 160.0;
+#else
     const int nominalLiveDelay = PitchShifter::latencyFor(sr, kUltraLiveFloorHz);
+#endif
     for (auto& tap : lowVoiceTap)
         tap.prepare(sr, nominalLiveDelay);
     lowVoiceTap[1].setFollower(true);
@@ -68,12 +74,35 @@ void TunerChain::setSettings (const Settings& s) noexcept
 #if defined(SKELLTUNE_LOW_VOICE_LAB) && SKELLTUNE_LOW_VOICE_LAB
     // With Amount zero the only correct output is a sample-exact dry delay.
     // Do not enable a second waveform tap just to reconstruct unity pitch.
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+    const int newVariant = std::clamp(s.abVariant, 0, 2);
+    const double newFloorHz = newVariant == 2 ? 230.0 : 160.0;
+    const bool floorChanged = newFloorHz != activeLiveFloorHz;
+    if (newVariant != abVariant)
+    {
+        abVariant = newVariant;
+        // Retime both linked taps without allocating. The next active render
+        // re-enters through a dry-to-wet fade; old period evidence is reset.
+        const int nextNominal = PitchShifter::latencyFor(sr, newFloorHz);
+        for (auto& tap:lowVoiceTap) tap.setNominalDelaySamples(nextNominal);
+        lowVoiceHoldRemaining = 0;
+        lowVoiceLastPeriod = lowVoiceLastFreq = 0.0f;
+        lowVoiceTarget = 0.0f;
+    }
+    activeLiveFloorHz = newFloorHz;
+    lowVoiceEnabled = (abVariant != 0) && s.experimentalLowVoice && s.ultraLive && !s.hq
+#else
+    const bool floorChanged = false;
     lowVoiceEnabled = s.experimentalLowVoice && s.ultraLive && !s.hq
+#endif
         && s.correction.amount > 1.0e-6;
     if (!lowVoiceEnabled)
         lowVoiceTarget = 0.0f;
 #endif
-    if (s.minFreq != minFreq || s.hq != hq || s.ultraLive != ultraLive)
+#if !defined(SKELLTUNE_LOW_VOICE_LAB) || !SKELLTUNE_LOW_VOICE_LAB
+    const bool floorChanged = false;
+#endif
+    if (s.minFreq != minFreq || s.hq != hq || s.ultraLive != ultraLive || floorChanged)
     {
         if (s.minFreq != minFreq)
         {
@@ -83,7 +112,11 @@ void TunerChain::setSettings (const Settings& s) noexcept
         }
         hq = s.hq;
         ultraLive = s.ultraLive;
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+        shifter.setMinFreq(ultraLive ? std::max(minFreq, activeLiveFloorHz) : minFreq);
+#else
         shifter.setMinFreq(ultraLive ? std::max(minFreq, kUltraLiveFloorHz) : minFreq);
+#endif
         if (!ultraLive) fastCorrectionTarget = 1.0f;
         aheadDelay.setDelay (hq ? lookahead : 0); // crossfaded inside FixedDelay: no click
         dryDelay.setDelay (latencySamples());
@@ -154,8 +187,19 @@ void TunerChain::process (float* const* ch, int numCh, int total) noexcept
             // toggled between phase-different audio renderers each hop.
             // Use matched entry threshold and hysteretic 10ms grace for
             // dropouts; do not modify the proven production detector.
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+            const double lowVoiceEligibilityTopHz = abVariant == 2 ? 252.0 : 175.0;
+#elif defined(SKELLTUNE_LAB_FAST_2P5) && SKELLTUNE_LAB_FAST_2P5
+            // In the fast prototype Lyra becomes safe at 230Hz; the low
+            // period-splice branch MUST remain eligible through 252Hz or
+            // we leave an audible natural-pitch gap at 175..230Hz.
+            constexpr double lowVoiceEligibilityTopHz =
+                kUltraLiveFloorHz + 22.0;
+#else
+            constexpr double lowVoiceEligibilityTopHz = 175.0;
+#endif
             const bool lowRange = e.voiced && e.frequency >= minFreq
-                && e.frequency < 175.0f;
+                && e.frequency < lowVoiceEligibilityTopHz;
             const bool reliable = lowRange && e.confidence >=
                 (lowVoiceHoldRemaining > 0 ? 0.58f : 0.65f);
             if (reliable)
@@ -172,16 +216,35 @@ void TunerChain::process (float* const* ch, int numCh, int total) noexcept
             for(auto& tap:lowVoiceTap)
                 tap.setPeriod(held ? lowVoiceLastPeriod : 0.0f);
             const float crossoverFreq = reliable ? e.frequency : lowVoiceLastFreq;
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+            const double lowVoiceWeight = abVariant == 2
+                ? std::clamp((252.0 - double(crossoverFreq)) / 22.0, 0.0, 1.0)
+                : std::clamp((170.0 - double(crossoverFreq)) / 25.0, 0.0, 1.0);
+#elif defined(SKELLTUNE_LAB_FAST_2P5) && SKELLTUNE_LAB_FAST_2P5
+            // 2.5ms Lyra read heads cannot cover 170..230Hz safely.
+            // Keep the causal low period renderer fully active through
+            // 230Hz and crossfade only where the faster Lyra history is
+            // actually sufficient. No frequency gap can silently pass dry.
+            const double lowVoiceWeight = std::clamp(
+                (kUltraLiveFloorHz + 22.0-double(crossoverFreq))/22.0,0.0,1.0);
+#else
+            const double lowVoiceWeight = std::clamp(
+                (170.0-double(crossoverFreq))/25.0,0.0,1.0);
+#endif
             lowVoiceTarget = lowVoiceEnabled && held
-                ? float(std::clamp((170.0-double(crossoverFreq))/25.0,0.0,1.0))
-                : 0.0f;
+                ? float(lowVoiceWeight) : 0.0f;
 #endif
             // 3.5ms cannot span a complete 70Hz cycle. In Ultra Live only,
             // taper the requested ratio toward unity from 170 to 155 Hz.
             // The low voice stays audible with correct PDC and natural pitch.
             fastCorrectionTarget = !ultraLive ? 1.0f :
-                (e.voiced ? float(std::clamp((double(e.frequency) - 155.0) / 15.0,
-                                             0.0, 1.0)) : 0.0f);
+                (e.voiced ? float(std::clamp(
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+                    (double(e.frequency) - (activeLiveFloorHz - 5.0)) / 15.0,
+#else
+                    (double(e.frequency) - (kUltraLiveFloorHz - 5.0)) / 15.0,
+#endif
+                    0.0, 1.0)) : 0.0f);
             doubler.setPeriod (e.voiced ? sr / e.frequency : 0.0);
             // LyraStrike: accent each note-to-note change. Pending (stabilizer) or short consonant gaps
             // keep the previous note; >= 60 ms unvoiced starts a new phrase (no accent on its first note).

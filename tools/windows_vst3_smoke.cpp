@@ -82,12 +82,13 @@ int main(int argc,char**argv)
         // The renamed host parameter must retain the exact saved ID from
         // old FL Studio projects and must not accidentally remove the old
         // stabilizer entries from the state parameter tree.
-        auto* skellParam=uiProcessor.parameters.getParameter("snapLive");
-        if(!skellParam || skellParam->getName(128)!="Skell Live"
+        // Keep the stable snapLive ID for old projects, but retire its visible control.
+        auto* legacyLiveParam=uiProcessor.parameters.getParameter("snapLive");
+        if(!legacyLiveParam || legacyLiveParam->getName(128)!="Legacy Live Mode (hidden)"
            || uiProcessor.parameters.getParameter("stabilizer")==nullptr
            || uiProcessor.parameters.getParameter("stabilizerTime")==nullptr)
         {
-            std::fprintf(stderr, "Skell Live ID/name or legacy preset compatibility missing\n");
+            std::fprintf(stderr, "Legacy live parameter/state compatibility missing\\n");
             return 28;
         }
         editor->setVisible(true);
@@ -111,14 +112,26 @@ int main(int argc,char**argv)
             juce::MessageManager::getInstance()->runDispatchLoopUntil(150);
             int visibleToggles=0;
             bool hasSkellLive=false;
+            bool hasLowLatency=false;
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+            bool hasABSelector=false;
+#endif
             for(int childIndex=0; childIndex<editor->getNumChildComponents(); ++childIndex)
             {
                 auto* child = editor->getChildComponent(childIndex);
                 if(!child || !child->isVisible()) continue;
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+                if(auto* combo=dynamic_cast<juce::ComboBox*>(child))
+                    if(combo->getNumItems()==3 && combo->getItemText(0)=="Current"
+                       && combo->getItemText(1)=="LowVoice 3.4"
+                       && combo->getItemText(2)=="LowVoice 2.5")
+                        hasABSelector=true;
+#endif
                 if(auto* toggle=dynamic_cast<juce::ToggleButton*>(child))
                 {
                     ++visibleToggles;
                     hasSkellLive |= toggle->getButtonText().equalsIgnoreCase("Skell Live");
+                    hasLowLatency |= toggle->getButtonText().equalsIgnoreCase("Low Latency");
                     if(toggle->getButtonText().containsIgnoreCase("Stabilizer"))
                     {
                         std::fprintf(stderr,"Removed Note Stabilizer still visible\n");
@@ -133,9 +146,9 @@ int main(int argc,char**argv)
                     return 19;
                 }
             }
-            if(visibleToggles!=2 || !hasSkellLive)
+            if(visibleToggles!=1 || !hasLowLatency || hasSkellLive)
             {
-                std::fprintf(stderr,"Expected only Skell Live + Low Latency switches\n");
+                std::fprintf(stderr,"Expected only Low Latency; Skell Live must not be visible\\n");
                 return 30;
             }
             auto snapshot = rasterizeEditor();
@@ -144,27 +157,20 @@ int main(int argc,char**argv)
             if(size.x==1366) neutral = snapshot;
         }
 
-        // Skell Live must visibly change the existing performance row and
-        // must not alter its window size or spawn an old stabilizer button.
-        skellParam->setValueNotifyingHost(1.0f);
+        // Legacy automation remains writable, but must never reveal a GUI control.
+        legacyLiveParam->setValueNotifyingHost(1.0f);
         juce::MessageManager::getInstance()->runDispatchLoopUntil(140);
-        auto skellModeShot=rasterizeEditor();
-        auto pixelsChanged=[](const juce::Image& a,const juce::Image& b,
-                              int x0,int y0,int x1,int y1)->int
+        bool legacyControlVisible=false;
+        for(int childIndex=0; childIndex<editor->getNumChildComponents(); ++childIndex)
+            if(auto* toggle=dynamic_cast<juce::ToggleButton*>(editor->getChildComponent(childIndex)))
+                legacyControlVisible |= toggle->isVisible()
+                    && toggle->getButtonText().equalsIgnoreCase("Skell Live");
+        if(legacyControlVisible)
         {
-            int changed=0;
-            for(int y=y0;y<y1;y+=2)
-                for(int x=x0;x<x1;x+=2)
-                    changed+=a.getPixelAt(x,y)!=b.getPixelAt(x,y);
-            return changed;
-        };
-        const int skellRowPixels=pixelsChanged(neutral,skellModeShot,691,687,974,721);
-        if(skellRowPixels < 10)
-        {
-            std::fprintf(stderr,"Skell Live state not visible in tracking row\n");
+            std::fprintf(stderr,"Retired Skell Live control reappeared from legacy automation\\n");
             return 31;
         }
-        skellParam->setValueNotifyingHost(0.0f);
+        legacyLiveParam->setValueNotifyingHost(0.0f);
         juce::MessageManager::getInstance()->runDispatchLoopUntil(100);
 
         // The user-requested LyraTune visual: the middle ring must visibly
@@ -212,7 +218,7 @@ int main(int argc,char**argv)
             return stream != nullptr && png.writeImageToStream(img,*stream);
         };
         if(!saveImage(neutral,"MetaTune_normal.png")
-           || !saveImage(skellModeShot,"MetaTune_Skell_Live.png")
+           || !saveImage(neutral,"MetaTune_LowLatency_Only.png")
            || !saveImage(overloadShock,"MetaTune_negative_speed_shockwave.png")
            || !saveImage(negative,"MetaTune_negative_retune.png")) return 25;
         const auto normalCentre=neutral.getPixelAt(470,365);
@@ -312,7 +318,13 @@ int main(int argc,char**argv)
             const int fadeLength=std::max(1,(int)std::lround(sampleRate*0.004));
             const double margin=2.0+fadeLength*(1.0594630943592953-1.0);
             const int budget=live
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
                 ? (int)std::ceil(margin+0.5*sampleRate/160.0)
+#elif defined(SKELLTUNE_LAB_FAST_2P5) && SKELLTUNE_LAB_FAST_2P5
+                ? (int)std::ceil(margin+0.5*sampleRate/230.0)
+#else
+                ? (int)std::ceil(margin+0.5*sampleRate/160.0)
+#endif
                 : (int)std::ceil(margin+0.5*sampleRate/70.0)
                   +(int)std::lround(sampleRate*0.002);
             if (plugin->getLatencySamples()!=budget ||
@@ -356,6 +368,56 @@ int main(int argc,char**argv)
             std::printf("PASS native VST3 %.0f Hz Live=%d PDC=%d bypass-impulse=%d\n",
                         sampleRate,(int)live,budget,firstHit);
         }
+
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+        // All three paths must scan and process inside ONE actual Windows
+        // VST3, including runtime PDC and bypass impulses after switching.
+        juce::AudioProcessorParameter* abParam = nullptr;
+        for (auto* parameter:plugin->getParameters())
+            if (parameter->getName(128).equalsIgnoreCase("A-B Engine"))
+                abParam = parameter;
+        if (!abParam) { std::fprintf(stderr, "A-B selector missing\n"); return 31; }
+        liveParam->setValueNotifyingHost(1.f);
+        for (int mode: {0,1,2,1,0,2})
+        {
+            abParam->setValueNotifyingHost((float)mode / 2.0f);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil(250);
+            const double margin = 2.0 + std::max(1, (int)std::lround(sampleRate*0.004))
+                                           * (1.0594630943592953 - 1.0);
+            const int expected = (int)std::ceil(margin + 0.5*sampleRate/(mode==2 ? 230.0 : 160.0));
+            if (plugin->getLatencySamples()!=expected)
+            {
+                std::fprintf(stderr, "A-B mode %d @ %.0fHz: PDC expected %d got %d\n",
+                             mode,sampleRate,expected,plugin->getLatencySamples());
+                return 32;
+            }
+            if (!runAudio(90))return 33;
+            bypassParam->setValueNotifyingHost(1.f);
+            if (!runAudio(90))return 34;
+            juce::AudioBuffer<float> testBuffer(2,256);
+            juce::MidiBuffer testMidi;
+            int firstHit=-1;
+            for (int blockStart=0; blockStart<expected+1024; blockStart+=256)
+            {
+                testBuffer.clear();
+                if(blockStart==0)for(int c=0;c<2;++c)testBuffer.setSample(c,0,1.f);
+                plugin->processBlock(testBuffer,testMidi);
+                for(int i=0;i<256;++i)
+                {
+                    const float v=testBuffer.getSample(0,i);
+                    if(!std::isfinite(v))return 35;
+                    if(std::abs(v)>0.6f&&firstHit<0)firstHit=blockStart+i;
+                }
+            }
+            if(firstHit!=expected)
+            {
+                std::fprintf(stderr, "A-B mode %d: PDC %d impulse %d\n",mode,expected,firstHit);
+                return 36;
+            }
+            bypassParam->setValueNotifyingHost(0.f);
+            std::printf("PASS three-way VST3 %.0f Hz mode=%d PDC=%d\n",sampleRate,mode,expected);
+        }
+#endif
         legacyParam->setValueNotifyingHost(0.f);
         plugin->releaseResources();
     }
