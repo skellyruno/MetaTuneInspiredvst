@@ -218,7 +218,7 @@ int main(int argc,char**argv)
             return stream != nullptr && png.writeImageToStream(img,*stream);
         };
         if(!saveImage(neutral,"MetaTune_normal.png")
-           || !saveImage(skellModeShot,"MetaTune_Skell_Live.png")
+           || !saveImage(neutral,"MetaTune_LowLatency_Only.png")
            || !saveImage(overloadShock,"MetaTune_negative_speed_shockwave.png")
            || !saveImage(negative,"MetaTune_negative_retune.png")) return 25;
         const auto normalCentre=neutral.getPixelAt(470,365);
