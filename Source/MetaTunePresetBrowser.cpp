@@ -6,7 +6,6 @@
 
 namespace
 {
-    const juce::Colour browserBg(0xff101012);
     const juce::Colour browserPanel(0xff202024);
     const juce::Colour browserPanelInner(0xff17171b);
     const juce::Colour browserAccent(0xffa36bff);
