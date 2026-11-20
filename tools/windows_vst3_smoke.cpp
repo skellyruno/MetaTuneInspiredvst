@@ -128,13 +128,16 @@ int main(int argc,char**argv)
             testBrowser.setSearchQuery("Smoke");
             if (testBrowser.getVisiblePresetCount() != 1) return 38;
             testBrowser.toggleFavoriteAtRow(0);
+            testBrowser.refresh(); // Reload Favorites.txt to prove the star survives a browser reopen.
             testBrowser.setCategoryFilter(2);
             if (testBrowser.getVisiblePresetCount() != 1) return 39;
+            testBrowser.setCategoryFilter(3);
+            if (testBrowser.getVisiblePresetCount() != 1) return 40;
             testBrowser.setCategoryFilter(1);
-            if (!testBrowser.loadPresetAtRow(0)) return 40;
+            if (!testBrowser.loadPresetAtRow(0)) return 41;
             const auto* restoredAmount = uiProcessor.parameters.getRawParameterValue("amount");
             if (restoredAmount == nullptr || std::abs(restoredAmount->load() - 37.0f) > 0.2f)
-                return 41;
+                return 42;
         }
         testRoot.deleteRecursively();
 
