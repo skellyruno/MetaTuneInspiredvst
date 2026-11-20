@@ -74,6 +74,10 @@ private:
     std::array<std::atomic<float>*, 12> customDegreeParameters {};
     std::atomic<float>* rootParameter = nullptr;
     std::atomic<float>* lowLatencyParameter = nullptr;
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+    std::atomic<float>* abEngineParameter = nullptr;
+    int abFastLatencySamples = 0;
+#endif
     std::atomic<float>* snapLiveParameter = nullptr; // Legacy ID: now Skell Live performance controller
     std::atomic<float>* fixedHorizonParameter = nullptr;
     std::atomic<float>* pitchReferenceParameter = nullptr;

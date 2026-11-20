@@ -30,6 +30,10 @@ private:
     MetaTuneInspiredAudioProcessor& processor;
     juce::Slider speed, amount, sustain;
     juce::ComboBox scale, root;
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+    juce::ComboBox abEngine;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> abEngineAttach;
+#endif
     juce::ToggleButton lowLatency { "Low Latency" }, snapLive { "Skell Live" }; // snapLive: stable APVTS ID
     juce::Label speedLabel, amountLabel, noteReadout, status, presetLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> speedAttach, amountAttach, sustainAttach;

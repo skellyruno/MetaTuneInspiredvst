@@ -1907,4 +1907,41 @@ TEST (lowvoice_lab_rt_stereo_switch_and_no_allocations)
 }
 #endif
 
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+TEST (threeway_ab_current_lowvoice34_lowvoice25_are_distinct_real_audio_modes)
+{
+    for(double sr: {44100.0, 48000.0, 96000.0})
+        for(int mode: {0,1,2})
+        {
+            TunerChain::Settings s;
+            s.ultraLive=true;
+            s.minFreq=70.0;
+            s.experimentalLowVoice=mode>0;
+            s.abVariant=mode;
+            s.correction.amount=1.0;
+            s.correction.speedMs=-3.0;
+            s.correction.stabilizerMs=0.0;
+            TunerChain chain;
+            chain.prepare(sr,70.0);
+            chain.setSettings(s);
+            const int budget=PitchShifter::latencyFor(sr,mode==2?230.0:160.0);
+            CHECK(chain.latencySamples()==budget);
+            const auto in=tone(sr,106.0,0.90,true);
+            const auto out=runChain(in,s,sr,128);
+            const double pitched=medianPitch(out,sr,100);
+            const double cents=pitched>0?1200.0*std::log2(pitched/103.8262):1.0e9;
+            CHECK(pitched>0&&std::isfinite(pitched));
+            // The legacy Skell Live 3.4ms path deliberately preserves low
+            // notes at natural pitch. Both LAB modes must actually correct.
+            if(mode==0)
+                CHECK(std::abs(cents-1200.0*std::log2(106.0/103.8262))<10.0);
+            else
+                CHECK(std::abs(cents)<20.0);
+            for(float v:out)CHECK(std::isfinite(v));
+            std::printf("  three-way %.0fHz mode=%d PDC=%d pitch=%+.2f cents\n",
+                        sr,mode,budget,cents);
+        }
+}
+#endif
+
 int main() { return th::runAll(); }

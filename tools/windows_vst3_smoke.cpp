@@ -111,10 +111,20 @@ int main(int argc,char**argv)
             juce::MessageManager::getInstance()->runDispatchLoopUntil(150);
             int visibleToggles=0;
             bool hasSkellLive=false;
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+            bool hasABSelector=false;
+#endif
             for(int childIndex=0; childIndex<editor->getNumChildComponents(); ++childIndex)
             {
                 auto* child = editor->getChildComponent(childIndex);
                 if(!child || !child->isVisible()) continue;
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+                if(auto* combo=dynamic_cast<juce::ComboBox*>(child))
+                    if(combo->getNumItems()==3 && combo->getItemText(0)=="Current"
+                       && combo->getItemText(1)=="LowVoice 3.4"
+                       && combo->getItemText(2)=="LowVoice 2.5")
+                        hasABSelector=true;
+#endif
                 if(auto* toggle=dynamic_cast<juce::ToggleButton*>(child))
                 {
                     ++visibleToggles;
@@ -138,6 +148,13 @@ int main(int argc,char**argv)
                 std::fprintf(stderr,"Expected only Skell Live + Low Latency switches\n");
                 return 30;
             }
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+            if(!hasABSelector)
+            {
+                std::fprintf(stderr,"Three-way A/B selector missing at %dx%d\n",size.x,size.y);
+                return 37;
+            }
+#endif
             auto snapshot = rasterizeEditor();
             if(snapshot.isNull() || snapshot.getWidth()!=size.x
                || snapshot.getHeight()!=size.y) return 20;
@@ -158,7 +175,14 @@ int main(int argc,char**argv)
                     changed+=a.getPixelAt(x,y)!=b.getPixelAt(x,y);
             return changed;
         };
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+        // The comparison combo intentionally replaces the old LIVE PERFORMANCE
+        // text in [691,974]. Assert the ACTUAL Skell Live toggle changes
+        // visually instead of testing the now-occupied descriptor region.
+        const int skellRowPixels=pixelsChanged(neutral,skellModeShot,983,687,1157,721);
+#else
         const int skellRowPixels=pixelsChanged(neutral,skellModeShot,691,687,974,721);
+#endif
         if(skellRowPixels < 10)
         {
             std::fprintf(stderr,"Skell Live state not visible in tracking row\n");
@@ -312,7 +336,9 @@ int main(int argc,char**argv)
             const int fadeLength=std::max(1,(int)std::lround(sampleRate*0.004));
             const double margin=2.0+fadeLength*(1.0594630943592953-1.0);
             const int budget=live
-#if defined(SKELLTUNE_LAB_FAST_2P5) && SKELLTUNE_LAB_FAST_2P5
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+                ? (int)std::ceil(margin+0.5*sampleRate/160.0)
+#elif defined(SKELLTUNE_LAB_FAST_2P5) && SKELLTUNE_LAB_FAST_2P5
                 ? (int)std::ceil(margin+0.5*sampleRate/230.0)
 #else
                 ? (int)std::ceil(margin+0.5*sampleRate/160.0)
@@ -360,6 +386,56 @@ int main(int argc,char**argv)
             std::printf("PASS native VST3 %.0f Hz Live=%d PDC=%d bypass-impulse=%d\n",
                         sampleRate,(int)live,budget,firstHit);
         }
+
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+        // All three paths must scan and process inside ONE actual Windows
+        // VST3, including runtime PDC and bypass impulses after switching.
+        juce::AudioProcessorParameter* abParam = nullptr;
+        for (auto* parameter:plugin->getParameters())
+            if (parameter->getName(128).equalsIgnoreCase("A-B Engine"))
+                abParam = parameter;
+        if (!abParam) { std::fprintf(stderr, "A-B selector missing\n"); return 31; }
+        liveParam->setValueNotifyingHost(1.f);
+        for (int mode: {0,1,2,1,0,2})
+        {
+            abParam->setValueNotifyingHost((float)mode / 2.0f);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil(250);
+            const double margin = 2.0 + std::max(1, (int)std::lround(sampleRate*0.004))
+                                           * (1.0594630943592953 - 1.0);
+            const int expected = (int)std::ceil(margin + 0.5*sampleRate/(mode==2 ? 230.0 : 160.0));
+            if (plugin->getLatencySamples()!=expected)
+            {
+                std::fprintf(stderr, "A-B mode %d @ %.0fHz: PDC expected %d got %d\n",
+                             mode,sampleRate,expected,plugin->getLatencySamples());
+                return 32;
+            }
+            if (!runAudio(90))return 33;
+            bypassParam->setValueNotifyingHost(1.f);
+            if (!runAudio(90))return 34;
+            juce::AudioBuffer<float> testBuffer(2,256);
+            juce::MidiBuffer testMidi;
+            int firstHit=-1;
+            for (int blockStart=0; blockStart<expected+1024; blockStart+=256)
+            {
+                testBuffer.clear();
+                if(blockStart==0)for(int c=0;c<2;++c)testBuffer.setSample(c,0,1.f);
+                plugin->processBlock(testBuffer,testMidi);
+                for(int i=0;i<256;++i)
+                {
+                    const float v=testBuffer.getSample(0,i);
+                    if(!std::isfinite(v))return 35;
+                    if(std::abs(v)>0.6f&&firstHit<0)firstHit=blockStart+i;
+                }
+            }
+            if(firstHit!=expected)
+            {
+                std::fprintf(stderr, "A-B mode %d: PDC %d impulse %d\n",mode,expected,firstHit);
+                return 36;
+            }
+            bypassParam->setValueNotifyingHost(0.f);
+            std::printf("PASS three-way VST3 %.0f Hz mode=%d PDC=%d\n",sampleRate,mode,expected);
+        }
+#endif
         legacyParam->setValueNotifyingHost(0.f);
         plugin->releaseResources();
     }

@@ -58,6 +58,9 @@ public:
         bool hq = false;       // 2 ms detector lookahead (+2 ms latency)
         bool ultraLive = false; // ~3.4ms Live; F0 <155Hz remains neutral
         bool experimentalLowVoice = false; // OFF in production; lab-only opt-in low-register renderer
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+        int abVariant = 2; // old 2.5 LAB stand-alone tests use this default; APVTS sends 0/1/2 explicitly
+#endif
         bool bypass = false;
         Doubler::Params doubler;
         bool strike = false;   // LyraStrike formant accent on note changes
@@ -121,6 +124,10 @@ private:
     float lowVoiceLastPeriod = 0.0f, lowVoiceLastFreq = 0.0f;
     int lowVoiceHoldRemaining = 0, lowVoiceGraceSamples = 0;
     bool lowVoiceEnabled = false;
+#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
+    int abVariant = 0;
+    double activeLiveFloorHz = 160.0; // current and 3.4 LAB; FAST 2.5 uses 230Hz
+#endif
 #endif
     // The pitch ratio, not the audio output, is crossfaded toward unity in
     // the low register. This leaves low notes audible without invalid splices.
