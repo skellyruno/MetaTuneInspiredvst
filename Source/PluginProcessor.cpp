@@ -68,7 +68,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout MetaTuneInspiredAudioProcess
 #endif
     // Rename the host-facing label, but preserve "snapLive" as the stable
     // automation ID for existing projects and presets.
-    p.add(std::make_unique<AudioParameterBool>("snapLive", "Skell Live", false));
+    p.add(std::make_unique<AudioParameterBool>("snapLive", "Legacy Live Mode (hidden)", false));
     p.add(std::make_unique<AudioParameterBool>("fixedHorizonVoiced", "Legacy Fixed Mode (Disabled: >10ms)", false));
     p.add(std::make_unique<AudioParameterChoice>("scale", "Scale",
         StringArray{"Chromatic", "Major", "Minor", "Harmonic Minor", "Major Pentatonic",
