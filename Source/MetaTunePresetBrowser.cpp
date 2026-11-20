@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace
 {
@@ -217,24 +218,22 @@ void MetaTunePresetBrowser::resized()
     presetList.setBounds(innerX, listY, innerW, juce::jmax(80, footerY - listY - 12));
 
     const int gap = juce::jmax(6, juce::roundToInt(8.0f * scale));
-    const int buttonW = (innerW - gap * 4) / 5;
-    const int widths[] = {
-        juce::jmin(buttonW, juce::roundToInt(104.0f * scale)),
-        juce::jmin(buttonW, juce::roundToInt(114.0f * scale)),
-        juce::jmin(buttonW, juce::roundToInt(100.0f * scale)),
-        juce::jmin(buttonW, juce::roundToInt(108.0f * scale)),
-        juce::jmin(buttonW, juce::roundToInt(82.0f * scale))
-    };
-    const juce::String unused{};
-    juce::ignoreUnused(unused);
-    int x = innerX;
+    const int footerWidth = juce::jmin(innerW,
+        juce::jmax(520, juce::roundToInt(760.0f * scale)));
+    const int buttonW = (footerWidth - gap * 4) / 5;
+    int x = panel.getCentreX() - footerWidth / 2;
     juce::TextButton* buttons[] = { &loadButton, &saveButton, &importButton, &folderButton, &closeButton };
     for (int i = 0; i < 5; ++i)
     {
         buttons[i]->setFont(browserFont(juce::jmax(8.5f, 10.5f * scale), juce::Font::bold));
-        buttons[i]->setBounds(x, footerY, widths[i], footerH);
-        x += widths[i] + gap;
+        buttons[i]->setBounds(x, footerY, buttonW, footerH);
+        x += buttonW + gap;
     }
+}
+
+void MetaTunePresetBrowser::focusSearch()
+{
+    searchEditor.grabKeyboardFocus();
 }
 
 void MetaTunePresetBrowser::refresh()
@@ -550,7 +549,8 @@ void MetaTunePresetBrowser::saveCurrentPreset()
             if (file != juce::File{})
             {
                 if (!file.getFileExtension().equalsIgnoreCase(".mti"))
-                    file = file.withFileExtension(".mti");
+                    file = file.getParentDirectory().getChildFile(
+                        file.getFileNameWithoutExtension() + ".mti");
 
                 file.getParentDirectory().createDirectory();
                 juce::MemoryBlock state;
