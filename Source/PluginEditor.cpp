@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include "MetaTunePresetBrowser.h"
 #include <memory>
 
 namespace {
@@ -964,6 +965,20 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
         particle.seed = (float)i * 1.6180339f;
         particle.tint = i % 4;
     }
+    // The library is a native-state browser; it adds no APVTS IDs and never
+    // touches the audio callback. Its rows are populated from local .mti files.
+    presetBrowser = std::make_unique<MetaTunePresetBrowser>(processor,
+        [this](const juce::File& file)
+        {
+            selectedPresetName = file.getFileNameWithoutExtension();
+            selectedNoteIndex = juce::jlimit(0, 11, root.getSelectedItemIndex());
+            if (scale.getSelectedItemIndex() != 0)
+                lastNonChromaticScaleMode = scale.getSelectedItemIndex();
+            repaint();
+        });
+    addAndMakeVisible(presetBrowser.get());
+    presetBrowser->setVisible(false);
+
     // 60 Hz materially improves the startup light sweep, plasma flow and gyro motion.
     // The dense shell is cached; only the lightweight animated overlays are redrawn.
     startTimerHz(60);
@@ -1261,6 +1276,14 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xff141416)); g.fillRect(143,7,245,47);
     g.setColour(muted); g.setFont(uiFont(16.0f,juce::Font::italic));
     g.drawText(selectedPresetName,162,10,205,39,juce::Justification::centredLeft);
+    // A small disclosure chevron makes the preset name read as a library picker.
+    juce::Path presetChevron;
+    presetChevron.startNewSubPath(371.0f, 24.0f);
+    presetChevron.lineTo(377.0f, 30.0f);
+    presetChevron.lineTo(383.0f, 24.0f);
+    g.setColour(muted.withAlpha(0.90f));
+    g.strokePath(presetChevron, juce::PathStrokeType(1.6f,
+        juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     g.setColour(juce::Colour(0xff29292d)); g.fillRect(390,7,43,47);
     g.fillRect(435,7,72,47);
     // Small up/down selectors and a save/floppy outline replace text stand-ins.
@@ -2001,11 +2024,26 @@ void MetaTuneInspiredAudioProcessorEditor::openHeaderMenu()
     });
 }
 
+void MetaTuneInspiredAudioProcessorEditor::openPresetBrowser()
+{
+    if (presetBrowser == nullptr)
+        return;
+
+    presetBrowser->refresh();
+    presetBrowser->setVisible(true);
+    presetBrowser->toFront(true);
+    presetBrowser->grabKeyboardFocus();
+}
+
 void MetaTuneInspiredAudioProcessorEditor::savePresetToFile()
 {
     if (saveChooser != nullptr) return;
+    auto userPresetDirectory = MetaTunePresetBrowser::getUserPresetDirectory();
+    userPresetDirectory.createDirectory();
+    const auto defaultName = selectedPresetName == "No preset selected"
+        ? juce::String("New Preset") : selectedPresetName;
     saveChooser = std::make_shared<juce::FileChooser>("Save MetaTune Inspired preset",
-        juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("MetaTuneInspired.mti"), "*.mti");
+        userPresetDirectory.getChildFile(defaultName + ".mti"), "*.mti");
     auto chooser = saveChooser;
     juce::Component::SafePointer<MetaTuneInspiredAudioProcessorEditor> safeThis(this);
     chooser->launchAsync(juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles,
@@ -2023,6 +2061,8 @@ void MetaTuneInspiredAudioProcessorEditor::savePresetToFile()
                 else
                 {
                     safeThis->selectedPresetName = file.getFileNameWithoutExtension();
+                    if (safeThis->presetBrowser != nullptr)
+                        safeThis->presetBrowser->refresh();
                     safeThis->repaint();
                     juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "Preset saved",
                                                            "Preset state saved successfully.");
@@ -2147,7 +2187,7 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
     if (y >= 0.0f && y < 59.0f)
     {
         if (x >= 68.0f && x < 142.0f) { openHeaderMenu(); return; }
-        if (x >= 143.0f && x < 389.0f) { loadPresetFromFile(); return; }
+        if (x >= 143.0f && x < 389.0f) { openPresetBrowser(); return; }
         if (x >= 390.0f && x < 434.0f)
         {
             const int step = y < 30.0f ? 1 : -1;
@@ -2385,6 +2425,8 @@ void MetaTuneInspiredAudioProcessorEditor::resized()
                               juce::Font::bold));
     status.setFont(uiFont(juce::jlimit(8.0f, 15.0f, 15.0f * uiScale),
                           juce::Font::bold));
+    if (presetBrowser != nullptr)
+        presetBrowser->setBounds(getLocalBounds());
 }
 void MetaTuneInspiredAudioProcessorEditor::timerCallback()
 {
