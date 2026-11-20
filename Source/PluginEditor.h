@@ -34,11 +34,11 @@ private:
     juce::ComboBox abEngine;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> abEngineAttach;
 #endif
-    juce::ToggleButton lowLatency { "Low Latency" }, snapLive { "Skell Live" }; // snapLive: stable APVTS ID
+    juce::ToggleButton lowLatency { "Low Latency" };
     juce::Label speedLabel, amountLabel, noteReadout, status, presetLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> speedAttach, amountAttach, sustainAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> scaleAttach, rootAttach;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> latencyAttach, snapLiveAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> latencyAttach;
 
     int selectedNoteIndex = 4;
     int lastNonChromaticScaleMode = 1;

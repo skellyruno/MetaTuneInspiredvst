@@ -82,12 +82,13 @@ int main(int argc,char**argv)
         // The renamed host parameter must retain the exact saved ID from
         // old FL Studio projects and must not accidentally remove the old
         // stabilizer entries from the state parameter tree.
-        auto* skellParam=uiProcessor.parameters.getParameter("snapLive");
-        if(!skellParam || skellParam->getName(128)!="Skell Live"
+        // Keep the stable snapLive ID for old projects, but retire its visible control.
+        auto* legacyLiveParam=uiProcessor.parameters.getParameter("snapLive");
+        if(!legacyLiveParam || legacyLiveParam->getName(128)!="Legacy Live Mode (hidden)"
            || uiProcessor.parameters.getParameter("stabilizer")==nullptr
            || uiProcessor.parameters.getParameter("stabilizerTime")==nullptr)
         {
-            std::fprintf(stderr, "Skell Live ID/name or legacy preset compatibility missing\n");
+            std::fprintf(stderr, "Legacy live parameter/state compatibility missing\\n");
             return 28;
         }
         editor->setVisible(true);
@@ -111,6 +112,7 @@ int main(int argc,char**argv)
             juce::MessageManager::getInstance()->runDispatchLoopUntil(150);
             int visibleToggles=0;
             bool hasSkellLive=false;
+            bool hasLowLatency=false;
 #if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
             bool hasABSelector=false;
 #endif
@@ -129,6 +131,7 @@ int main(int argc,char**argv)
                 {
                     ++visibleToggles;
                     hasSkellLive |= toggle->getButtonText().equalsIgnoreCase("Skell Live");
+                    hasLowLatency |= toggle->getButtonText().equalsIgnoreCase("Low Latency");
                     if(toggle->getButtonText().containsIgnoreCase("Stabilizer"))
                     {
                         std::fprintf(stderr,"Removed Note Stabilizer still visible\n");
@@ -143,52 +146,31 @@ int main(int argc,char**argv)
                     return 19;
                 }
             }
-            if(visibleToggles!=2 || !hasSkellLive)
+            if(visibleToggles!=1 || !hasLowLatency || hasSkellLive)
             {
-                std::fprintf(stderr,"Expected only Skell Live + Low Latency switches\n");
+                std::fprintf(stderr,"Expected only Low Latency; Skell Live must not be visible\\n");
                 return 30;
             }
-#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
-            if(!hasABSelector)
-            {
-                std::fprintf(stderr,"Three-way A/B selector missing at %dx%d\n",size.x,size.y);
-                return 37;
-            }
-#endif
             auto snapshot = rasterizeEditor();
             if(snapshot.isNull() || snapshot.getWidth()!=size.x
                || snapshot.getHeight()!=size.y) return 20;
             if(size.x==1366) neutral = snapshot;
         }
 
-        // Skell Live must visibly change the existing performance row and
-        // must not alter its window size or spawn an old stabilizer button.
-        skellParam->setValueNotifyingHost(1.0f);
+        // Legacy automation remains writable, but must never reveal a GUI control.
+        legacyLiveParam->setValueNotifyingHost(1.0f);
         juce::MessageManager::getInstance()->runDispatchLoopUntil(140);
-        auto skellModeShot=rasterizeEditor();
-        auto pixelsChanged=[](const juce::Image& a,const juce::Image& b,
-                              int x0,int y0,int x1,int y1)->int
+        bool legacyControlVisible=false;
+        for(int childIndex=0; childIndex<editor->getNumChildComponents(); ++childIndex)
+            if(auto* toggle=dynamic_cast<juce::ToggleButton*>(editor->getChildComponent(childIndex)))
+                legacyControlVisible |= toggle->isVisible()
+                    && toggle->getButtonText().equalsIgnoreCase("Skell Live");
+        if(legacyControlVisible)
         {
-            int changed=0;
-            for(int y=y0;y<y1;y+=2)
-                for(int x=x0;x<x1;x+=2)
-                    changed+=a.getPixelAt(x,y)!=b.getPixelAt(x,y);
-            return changed;
-        };
-#if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
-        // The comparison combo intentionally replaces the old LIVE PERFORMANCE
-        // text in [691,974]. Assert the ACTUAL Skell Live toggle changes
-        // visually instead of testing the now-occupied descriptor region.
-        const int skellRowPixels=pixelsChanged(neutral,skellModeShot,983,687,1157,721);
-#else
-        const int skellRowPixels=pixelsChanged(neutral,skellModeShot,691,687,974,721);
-#endif
-        if(skellRowPixels < 10)
-        {
-            std::fprintf(stderr,"Skell Live state not visible in tracking row\n");
+            std::fprintf(stderr,"Retired Skell Live control reappeared from legacy automation\\n");
             return 31;
         }
-        skellParam->setValueNotifyingHost(0.0f);
+        legacyLiveParam->setValueNotifyingHost(0.0f);
         juce::MessageManager::getInstance()->runDispatchLoopUntil(100);
 
         // The user-requested LyraTune visual: the middle ring must visibly
@@ -236,7 +218,7 @@ int main(int argc,char**argv)
             return stream != nullptr && png.writeImageToStream(img,*stream);
         };
         if(!saveImage(neutral,"MetaTune_normal.png")
-           || !saveImage(skellModeShot,"MetaTune_Skell_Live.png")
+           || !saveImage(neutral,"MetaTune_LowLatency_Only.png")
            || !saveImage(overloadShock,"MetaTune_negative_speed_shockwave.png")
            || !saveImage(negative,"MetaTune_negative_retune.png")) return 25;
         const auto normalCentre=neutral.getPixelAt(470,365);
