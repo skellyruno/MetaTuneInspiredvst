@@ -890,7 +890,7 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     presetLabel.setText("No preset selected", juce::dontSendNotification);
     presetLabel.setJustificationType(juce::Justification::centredLeft);
 
-    juce::Component* components[] = { &speed, &amount, &sustain, &scale, &root, &lowLatency, &snapLive,
+    juce::Component* components[] = { &speed, &amount, &sustain, &scale, &root, &lowLatency,
                                       &noteReadout, &status };
     for (auto* c : components) addAndMakeVisible(c);
 
@@ -903,7 +903,7 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
         combo->setColour(juce::ComboBox::outlineColourId, juce::Colour(0xff77777e));
         combo->setColour(juce::ComboBox::arrowColourId, text);
     }
-    for (auto* toggle : { &lowLatency, &snapLive })
+    for (auto* toggle : { &lowLatency })
     {
         toggle->setColour(juce::ToggleButton::textColourId, text);
         toggle->setColour(juce::ToggleButton::tickColourId, cyan);
@@ -926,13 +926,9 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     scaleAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor.parameters,"scale",scale);
     rootAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor.parameters,"root",root);
     latencyAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(processor.parameters,"lowLatency",lowLatency);
-    snapLiveAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(processor.parameters,"snapLive",snapLive);
     // Legacy Note Stabilizer fields remain serialized for old presets, but
     // only two functional performance/latency toggles are visible now.
     lowLatency.setTooltip("Ultra Live: about 3.4 ms host latency for voices above 170 Hz. Lower notes remain audible at natural pitch for safety. Off: full-range 70 Hz LyraTune Quality (~9.5 ms @48k) with 2 ms detector lookahead.");
-    snapLive.setTooltip("Skell Live: faster note acquisition, movement-aware pitch lock, and octave glitch protection for melodic runs and rap. Same ~3.4 ms high-register Live latency, including negative retune.");
-    snapLive.setEnabled(lowLatency.getToggleState());
-    lowLatency.onClick = [this]() { snapLive.setEnabled(lowLatency.getToggleState()); repaint(); };
     selectedNoteIndex = juce::jlimit(0, 11, root.getSelectedItemIndex() < 0 ? 4 : root.getSelectedItemIndex());
     if (auto* rawWidth = processor.parameters.getRawParameterValue("doublerWidth"))
         doublerWidth = juce::jlimit(0.0f, 1.0f, rawWidth->load(std::memory_order_relaxed) / 100.0f);
@@ -990,7 +986,6 @@ MetaTuneInspiredAudioProcessorEditor::~MetaTuneInspiredAudioProcessorEditor()
     amount.setLookAndFeel(nullptr);
     sustain.setLookAndFeel(nullptr);
     lowLatency.setLookAndFeel(nullptr);
-    snapLive.setLookAndFeel(nullptr);
     scale.setLookAndFeel(nullptr);
     root.setLookAndFeel(nullptr);
 }
@@ -1807,19 +1802,9 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.drawText("Minor", 529, 687, 52, 33, juce::Justification::centred);
     g.drawText("H", 581, 687, 27, 33, juce::Justification::centred);
 
-    // No hidden Note Stabilizer timings: two real toggles and one clear
-    // performance-mode descriptor, all inside the existing selector row.
+    // Lower strip holds the engine selector and the single Low Latency toggle.
     g.setColour(juce::Colour(0xff09090a)); g.fillRoundedRectangle(685,684,657,39,19.0f);
     g.setColour(juce::Colour(0xff35343b)); g.drawRoundedRectangle(685,684,657,39,19.0f,1.0f);
-    g.setColour(juce::Colour(0xff18171c)); g.fillRoundedRectangle(691,687,284,32,15.0f);
-    g.setColour(snapLive.getToggleState() && lowLatency.getToggleState()
-                    ? juce::Colour(0xffd9a2e8) : juce::Colour(0xffb0a9b9));
-    g.setFont(uiFont(14.0f, juce::Font::bold));
-    g.drawText("LIVE PERFORMANCE", 705, 688, 256, 15, juce::Justification::centredLeft);
-    g.setColour(juce::Colour(0xff77747f));
-    g.setFont(uiFont(10.0f, juce::Font::plain));
-    g.drawText("FAST TRACKING  /  OCTAVE GUARD", 705, 704, 256, 13,
-               juce::Justification::centredLeft);
 
     // Heatmaps
     g.setColour(juce::Colour(0xff1d1d20)); g.fillRect(0,734,1366,53);
@@ -1994,7 +1979,8 @@ void MetaTuneInspiredAudioProcessorEditor::openHeaderMenu()
             safeThis->minorHold = false;
             safeThis->toneVolume = 0.65f;
             safeThis->lowLatency.setToggleState(true, juce::sendNotificationSync);
-            safeThis->snapLive.setToggleState(false, juce::sendNotificationSync);
+            if (auto* legacyLive = safeThis->processor.parameters.getParameter("snapLive"))
+                legacyLive->setValueNotifyingHost(legacyLive->convertTo0to1(0.0f));
             safeThis->globalBypass = false;
             if (auto* parameter = safeThis->processor.parameters.getParameter("pitchReference"))
                 parameter->setValueNotifyingHost(parameter->convertTo0to1(440.0f));
@@ -2069,7 +2055,6 @@ void MetaTuneInspiredAudioProcessorEditor::loadPresetFromFile()
                     safeThis->selectedNoteIndex = juce::jlimit(0, 11, safeThis->root.getSelectedItemIndex());
                     if (safeThis->scale.getSelectedItemIndex() != 0)
                         safeThis->lastNonChromaticScaleMode = safeThis->scale.getSelectedItemIndex();
-                    safeThis->snapLive.setEnabled(safeThis->lowLatency.getToggleState());
                     safeThis->repaint();
                 }
                 else
@@ -2390,9 +2375,8 @@ void MetaTuneInspiredAudioProcessorEditor::resized()
     amountLabel.setBounds(px(1097), py(575), px(220), py(25));
     scale.setBounds(px(165), py(686), px(176), py(35));
     root.setBounds(px(350), py(686), px(100), py(35));
-    // Only two toggles, both inside the design canvas at every resize.
-    snapLive.setBounds(px(983), py(686), px(174), py(35));
-    lowLatency.setBounds(px(1160), py(686), px(180), py(35));
+    // The only visible performance toggle is Low Latency.
+    lowLatency.setBounds(px(983), py(686), px(180), py(35));
     noteReadout.setBounds(px(360), py(365), px(230), py(70));
     // The status line was behind the moveable Doubler dot at y~620.
     status.setBounds(px(32), py(642), px(600), py(24));
@@ -2404,9 +2388,6 @@ void MetaTuneInspiredAudioProcessorEditor::resized()
 }
 void MetaTuneInspiredAudioProcessorEditor::timerCallback()
 {
-    // Skell Live shares the short-delay engine; disable it only in Quality mode.
-    if (snapLive.isEnabled() != lowLatency.getToggleState())
-        snapLive.setEnabled(lowLatency.getToggleState());
     // One-shot startup sequence: fast spinning plasma and an illumination sweep
     // over 1.8 seconds, then a clean hand-off to normal Speed-driven animation.
     constexpr float startupDurationMs = 1800.0f;
