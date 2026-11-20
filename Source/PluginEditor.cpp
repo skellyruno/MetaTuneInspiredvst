@@ -971,9 +971,16 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
         [this](const juce::File& file)
         {
             selectedPresetName = file.getFileNameWithoutExtension();
-            selectedNoteIndex = juce::jlimit(0, 11, root.getSelectedItemIndex());
-            if (scale.getSelectedItemIndex() != 0)
-                lastNonChromaticScaleMode = scale.getSelectedItemIndex();
+            // APVTS state replacement can notify ComboBox attachments asynchronously.
+            // Read the restored values directly so the piano/root UI is correct immediately.
+            if (const auto* rawRoot = processor.parameters.getRawParameterValue("root"))
+                selectedNoteIndex = juce::jlimit(0, 11, juce::roundToInt(rawRoot->load()));
+            if (const auto* rawScale = processor.parameters.getRawParameterValue("scale"))
+            {
+                const int restoredScale = juce::roundToInt(rawScale->load());
+                if (restoredScale != 0)
+                    lastNonChromaticScaleMode = restoredScale;
+            }
             repaint();
         });
     addAndMakeVisible(presetBrowser.get());
