@@ -977,6 +977,7 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
             repaint();
         });
     addAndMakeVisible(presetBrowser.get());
+    presetBrowser->setBounds(getLocalBounds());
     presetBrowser->setVisible(false);
 
     // 60 Hz materially improves the startup light sweep, plasma flow and gyro motion.
