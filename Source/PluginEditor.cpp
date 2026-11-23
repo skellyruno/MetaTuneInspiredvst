@@ -1142,6 +1142,9 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     }
     // 60 Hz materially improves the startup light sweep, plasma flow and gyro motion.
     // The dense shell is cached; only the lightweight animated overlays are redrawn.
+    // setSize() ran before the private shell was loaded; apply the correct
+    // asset-specific bounds immediately, not only after the host resizes us.
+    resized();
     startTimerHz(60);
 }
 MetaTuneInspiredAudioProcessorEditor::~MetaTuneInspiredAudioProcessorEditor()
