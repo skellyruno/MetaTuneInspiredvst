@@ -83,6 +83,9 @@ public:
     int lowVoiceLabSplices() const noexcept { return lowVoiceTap[0].getSpliceCount(); }
     double lowVoiceLabMinSourceAge() const noexcept { return lowVoiceTap[0].getMinObservedDelay(); }
     double lowVoiceLabMaxSourceAge() const noexcept { return lowVoiceTap[0].getMaxObservedDelay(); }
+    // Used by regression tests to catch stale low-note energy on high-register leaps.
+    float lowVoiceLabBlend() const noexcept { return lowVoiceMix; }
+    bool lowVoiceLabHighExitActive() const noexcept { return lowVoiceFastRelease; }
 #endif
     static int lookaheadFor (double sampleRate) noexcept { return int (std::lround (kLookaheadSeconds * sampleRate)); }
     static int latencyFor (double sampleRate, double minFreq, bool hq = false,
@@ -121,6 +124,9 @@ private:
     float lowVoiceMix = 0.0f, lowVoiceTarget = 0.0f;
     // Fast low-note acquisition, smooth release over brief detector gaps.
     float lowVoiceAttackCoeff = 0.01f, lowVoiceReleaseCoeff = 0.01f;
+    float lowVoiceHighExitCoeff = 0.01f;
+    int lowVoiceHighRegisterHops = 0;
+    bool lowVoiceFastRelease = false;
     float lowVoiceLastPeriod = 0.0f, lowVoiceLastFreq = 0.0f;
     int lowVoiceHoldRemaining = 0, lowVoiceGraceSamples = 0;
     bool lowVoiceEnabled = false;
