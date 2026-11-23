@@ -28,6 +28,9 @@ private:
     void loadPresetFromFile();
 
     MetaTuneInspiredAudioProcessor& processor;
+    // Loaded on the message thread once per editor, not reloaded on paint.
+    // An empty image preserves the existing public/fallback appearance.
+    juce::Image privateLicensedShell;
     juce::Slider speed, amount, sustain;
     juce::ComboBox scale, root;
 #if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
