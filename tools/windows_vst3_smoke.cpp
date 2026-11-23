@@ -146,11 +146,19 @@ int main(int argc,char**argv)
                     return 19;
                 }
             }
+#if defined(SKELLTUNE_AUTO_2P5) && SKELLTUNE_AUTO_2P5
+            if(visibleToggles!=0 || hasLowLatency || hasSkellLive)
+            {
+                std::fprintf(stderr,"Automatic 2.5ms mode must have no visible mode switches\\n");
+                return 30;
+            }
+#else
             if(visibleToggles!=1 || !hasLowLatency || hasSkellLive)
             {
                 std::fprintf(stderr,"Expected only Low Latency; Skell Live must not be visible\\n");
                 return 30;
             }
+#endif
             auto snapshot = rasterizeEditor();
             if(snapshot.isNull() || snapshot.getWidth()!=size.x
                || snapshot.getHeight()!=size.y) return 20;
@@ -317,7 +325,14 @@ int main(int argc,char**argv)
             juce::MessageManager::getInstance()->runDispatchLoopUntil(200);
             const int fadeLength=std::max(1,(int)std::lround(sampleRate*0.004));
             const double margin=2.0+fadeLength*(1.0594630943592953-1.0);
-            const int budget=live
+            // The old automation ID remains writable, but cannot change
+            // the auto 2.5ms DSP or its reported host compensation.
+#if defined(SKELLTUNE_AUTO_2P5) && SKELLTUNE_AUTO_2P5
+            const bool effectiveLive = true;
+#else
+            const bool effectiveLive = live;
+#endif
+            const int budget=effectiveLive
 #if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
                 ? (int)std::ceil(margin+0.5*sampleRate/160.0)
 #elif defined(SKELLTUNE_LAB_FAST_2P5) && SKELLTUNE_LAB_FAST_2P5

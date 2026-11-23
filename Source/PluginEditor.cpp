@@ -890,8 +890,15 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     presetLabel.setText("No preset selected", juce::dontSendNotification);
     presetLabel.setJustificationType(juce::Justification::centredLeft);
 
+#if defined(SKELLTUNE_AUTO_2P5) && SKELLTUNE_AUTO_2P5
+    // The legacy lowLatency parameter is retained for FL Studio state only.
+    // This preview has one automatic 2.5ms renderer, with no mode control.
+    juce::Component* components[] = { &speed, &amount, &sustain, &scale, &root,
+                                      &noteReadout, &status };
+#else
     juce::Component* components[] = { &speed, &amount, &sustain, &scale, &root, &lowLatency,
                                       &noteReadout, &status };
+#endif
     for (auto* c : components) addAndMakeVisible(c);
 #if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
     addAndMakeVisible(abEngine);
@@ -936,7 +943,9 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     sustain.onValueChange = [this]() { repaint(); };
     scaleAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor.parameters,"scale",scale);
     rootAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor.parameters,"root",root);
+#if !defined(SKELLTUNE_AUTO_2P5) || !SKELLTUNE_AUTO_2P5
     latencyAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(processor.parameters,"lowLatency",lowLatency);
+#endif
 
 #if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
     abEngineAttach = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor.parameters,"abEngine",abEngine);
@@ -1822,9 +1831,21 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.drawText("Minor", 529, 687, 52, 33, juce::Justification::centred);
     g.drawText("H", 581, 687, 27, 33, juce::Justification::centred);
 
-    // Lower strip: engine comparison selector and one Low Latency toggle.
+    // In automatic mode, there is no switch or selector. Keep only a small
+    // passive status chip rather than an oversized empty control housing.
+#if defined(SKELLTUNE_AUTO_2P5) && SKELLTUNE_AUTO_2P5
+    g.setColour(juce::Colour(0xff1c1a22));
+    g.fillRoundedRectangle(1222, 692, 113, 24, 12.0f);
+    g.setColour(juce::Colour(0xff494153));
+    g.drawRoundedRectangle(1222, 692, 113, 24, 12.0f, 1.0f);
+    g.setColour(purple.withAlpha(0.85f));
+    g.fillEllipse(1236, 700, 7, 7);
+    g.setColour(muted); g.setFont(uiFont(12.0f, juce::Font::bold));
+    g.drawText("AUTO", 1250, 694, 68, 19, juce::Justification::centredLeft);
+#else
     g.setColour(juce::Colour(0xff09090a)); g.fillRoundedRectangle(685,684,657,39,19.0f);
     g.setColour(juce::Colour(0xff35343b)); g.drawRoundedRectangle(685,684,657,39,19.0f,1.0f);
+#endif
 
     // Heatmaps
     g.setColour(juce::Colour(0xff1d1d20)); g.fillRect(0,734,1366,53);
@@ -1998,7 +2019,9 @@ void MetaTuneInspiredAudioProcessorEditor::openHeaderMenu()
             safeThis->majorHold = false;
             safeThis->minorHold = false;
             safeThis->toneVolume = 0.65f;
+#if !defined(SKELLTUNE_AUTO_2P5) || !SKELLTUNE_AUTO_2P5
             safeThis->lowLatency.setToggleState(true, juce::sendNotificationSync);
+#endif
             if (auto* legacyLive = safeThis->processor.parameters.getParameter("snapLive"))
                 legacyLive->setValueNotifyingHost(legacyLive->convertTo0to1(0.0f));
             safeThis->globalBypass = false;
@@ -2399,8 +2422,10 @@ void MetaTuneInspiredAudioProcessorEditor::resized()
 #if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
     abEngine.setBounds(px(693), py(686), px(279), py(35));
 #endif
+#if !defined(SKELLTUNE_AUTO_2P5) || !SKELLTUNE_AUTO_2P5
     // The only visible performance toggle is Low Latency.
     lowLatency.setBounds(px(983), py(686), px(180), py(35));
+#endif
     noteReadout.setBounds(px(360), py(365), px(230), py(70));
     // The status line was behind the moveable Doubler dot at y~620.
     status.setBounds(px(32), py(642), px(600), py(24));

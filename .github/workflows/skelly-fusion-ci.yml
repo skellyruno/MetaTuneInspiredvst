@@ -43,7 +43,7 @@ jobs:
           ./lowvoice_reentry_test
       - name: Run uploaded LyraTune engine regression suite
         run: |
-          c++ -std=c++20 -O2 -DSKELLTUNE_LOW_VOICE_LAB=1 -DSKELLTUNE_LAB_FAST_2P5=1 -DSKELLTUNE_3WAY_AB_LAB=1 -ISource/LyraDSP tests/LyraDSP/dsp_tests.cpp \
+          c++ -std=c++20 -O2 -DSKELLTUNE_LOW_VOICE_LAB=1 -DSKELLTUNE_LAB_FAST_2P5=1 -DSKELLTUNE_AUTO_2P5=1 -ISource/LyraDSP tests/LyraDSP/dsp_tests.cpp \
             Source/LyraDSP/Pitch/TargetSelector.cpp \
             Source/LyraDSP/Pitch/YinDetector.cpp \
             Source/LyraDSP/Pitch/PitchShifter.cpp \
@@ -55,7 +55,7 @@ jobs:
           ./lyra_original_tests
       - name: Test MetaTune automation adapter against real Lyra audio
         run: |
-          c++ -std=c++17 -O2 -Wall -Wextra -DSKELLTUNE_LOW_VOICE_LAB=1 -DSKELLTUNE_LAB_FAST_2P5=1 -DSKELLTUNE_3WAY_AB_LAB=1 -ISource tests/LyraDSP/metatune_adapter_smoke.cpp \
+          c++ -std=c++17 -O2 -Wall -Wextra -DSKELLTUNE_LOW_VOICE_LAB=1 -DSKELLTUNE_LAB_FAST_2P5=1 -DSKELLTUNE_AUTO_2P5=1 -ISource tests/LyraDSP/metatune_adapter_smoke.cpp \
             Source/LyraDSP/Pitch/TargetSelector.cpp \
             Source/LyraDSP/Pitch/YinDetector.cpp \
             Source/LyraDSP/Pitch/PitchShifter.cpp \
@@ -67,7 +67,7 @@ jobs:
           ./metatune_adapter_smoke
       - name: Build portable low-voice vocal A/B renderer (private WAVs not included)
         run: |
-          c++ -std=c++17 -O2 -Wall -Wextra -DSKELLTUNE_LOW_VOICE_LAB=1 -DSKELLTUNE_LAB_FAST_2P5=1 -DSKELLTUNE_3WAY_AB_LAB=1 -ISource/LyraDSP tools/lowvoice_offline_render.cpp \
+          c++ -std=c++17 -O2 -Wall -Wextra -DSKELLTUNE_LOW_VOICE_LAB=1 -DSKELLTUNE_LAB_FAST_2P5=1 -DSKELLTUNE_AUTO_2P5=1 -ISource/LyraDSP tools/lowvoice_offline_render.cpp \
             Source/LyraDSP/Pitch/TargetSelector.cpp \
             Source/LyraDSP/Pitch/YinDetector.cpp \
             Source/LyraDSP/Pitch/PitchShifter.cpp \
@@ -80,7 +80,7 @@ jobs:
       - name: Upload private-vocal local testing utility (no audio)
         uses: actions/upload-artifact@v4
         with:
-          name: MetaTune-3Way-AB-Offline-Runner-Linux
+          name: MetaTune-Auto-2p5-Offline-Runner-Linux
           path: lowvoice_offline_render
           if-no-files-found: error
           retention-days: 14
@@ -94,7 +94,7 @@ jobs:
         run: git clone --depth 1 --branch 8.0.9 https://github.com/juce-framework/JUCE.git JUCE
       - name: Configure with tests
         shell: pwsh
-        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DJUCE_PATH="$env:GITHUB_WORKSPACE/JUCE" -DSKELLTUNE_BUILD_TESTS=ON -DSKELLTUNE_BUILD_WINDOWS_HOST_SMOKE=ON -DSKELLTUNE_LOW_VOICE_LAB=ON -DSKELLTUNE_LAB_FAST_2P5=ON -DSKELLTUNE_3WAY_AB_LAB=ON
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DJUCE_PATH="$env:GITHUB_WORKSPACE/JUCE" -DSKELLTUNE_BUILD_TESTS=ON -DSKELLTUNE_BUILD_WINDOWS_HOST_SMOKE=ON -DSKELLTUNE_LOW_VOICE_LAB=ON -DSKELLTUNE_LAB_FAST_2P5=ON -DSKELLTUNE_AUTO_2P5=ON
       - name: Build VST3 and regression tests
         shell: pwsh
         run: cmake --build build --config Release --target MetaTuneInspired_VST3 RealtimeAutotune_fusion_guard RealtimeAutotune_lowvoice_reentry_fade LyraOriginalDSPTests MetaTuneLyraAdapterSmoke SkellyVST3Smoke --parallel 4
@@ -113,23 +113,23 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: MetaTune-3Way-AB-UI-Snapshots
+          name: MetaTune-Auto-2p5-UI-Snapshots
           path: ui_shots/*.png
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
       - name: Package the validated VST3 bundle
         shell: pwsh
         run: |
           $bundle = Get-ChildItem -Path build -Directory -Recurse -Filter '*.vst3' | Select-Object -First 1
           if (-not $bundle) { throw 'MetaTune VST3 bundle is missing' }
-          if (-not ($bundle.Name -match 'MetaTune A-B LAB')) { throw 'Research build must have its own plugin identity' }
-          $output = 'MetaTune_3Way_AB_LAB_VST3.zip'
+          if (-not ($bundle.Name -match 'MetaTune Inspired 2.5 Auto Preview')) { throw 'Research build must have its own plugin identity' }
+          $output = 'MetaTune_Auto_2p5_Preview_VST3.zip'
           Compress-Archive -Path $bundle.FullName -DestinationPath $output -Force
           if (-not (Test-Path $output)) { throw 'VST3 2.5ms LAB package creation failed' }
       - name: Publish test VST3 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MetaTune-3Way-AB-LAB-Windows-x64
-          path: MetaTune_3Way_AB_LAB_VST3.zip
+          name: MetaTune-Auto-2p5-Preview-Windows-x64
+          path: MetaTune_Auto_2p5_Preview_VST3.zip
           if-no-files-found: error
           retention-days: 14

@@ -1871,6 +1871,69 @@ TEST (lowvoice_lab_deep_voiced_dropouts_and_stereo_transients)
     }
 }
 
+TEST (lowvoice_lab_confident_high_note_leap_releases_stale_period)
+{
+    // A sustained higher note must retire the prior low-register period
+    // quickly, while an isolated high-octave estimate still needs two hops.
+    for (double sr : {44100.0, 48000.0, 96000.0})
+    {
+        TunerChain chain; chain.prepare(sr, 70.0);
+        TunerChain::Settings s;
+        s.minFreq = 70.0; s.ultraLive = true; s.experimentalLowVoice = true;
+        s.correction.speedMs = -3.0; s.correction.amount = 1.0;
+        chain.setSettings(s); chain.reset();
+        constexpr int N = 64;
+        float left[N] {}, right[N] {};
+        double phase = 0.0, maxStep = 0.0, maxAnti = 0.0;
+        float previous = 0.0f, lowMix = 0.0f, mixAfterExit = 1.0f;
+        int sampleAfterExit = -1;
+        bool highExitObserved = false;
+        const long beforeAllocations = gAllocs.load();
+        const int totalBlocks = int(std::ceil(1.45 * sr / N));
+        for (int b = 0; b < totalBlocks; ++b)
+        {
+            for (int i = 0; i < N; ++i)
+            {
+                const double t = (b * N + i) / sr;
+                const double hz = t < 0.7 ? 106.0 : 293.66;
+                phase += 2.0 * kPi * hz / sr;
+                left[i] = float(0.26 * std::sin(phase) + 0.07 * std::sin(2.0 * phase));
+                right[i] = -left[i];
+            }
+            float* channels[] {left, right};
+            chain.process(channels, 2, N);
+            const double t = (b + 1) * N / sr;
+            if (t > 0.58 && t < 0.68)
+                lowMix = std::max(lowMix, chain.lowVoiceLabBlend());
+            if (chain.lowVoiceLabHighExitActive() && !highExitObserved)
+            {
+                highExitObserved = true;
+                sampleAfterExit = 0;
+            }
+            if (sampleAfterExit >= 0)
+            {
+                sampleAfterExit += N;
+                if (sampleAfterExit >= int(0.012 * sr) && mixAfterExit == 1.0f)
+                    mixAfterExit = chain.lowVoiceLabBlend();
+            }
+            for (int i = 0; i < N; ++i)
+            {
+                CHECK(std::isfinite(left[i]) && std::isfinite(right[i]));
+                maxAnti = std::max(maxAnti, std::abs(double(left[i] + right[i])));
+                if (b > 120)
+                    maxStep = std::max(maxStep, std::abs(double(left[i] - previous)));
+                previous = left[i];
+            }
+        }
+        CHECK(gAllocs.load() == beforeAllocations);
+        CHECK(lowMix > 0.8f);
+        CHECK(highExitObserved);
+        CHECK(mixAfterExit < 0.35f);
+        CHECK(maxStep < 0.35);
+        CHECK(maxAnti < 0.01);
+    }
+}
+
 TEST (lowvoice_lab_rt_stereo_switch_and_no_allocations)
 {
     TunerChain chain; chain.prepare(48000,70.0);
