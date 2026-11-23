@@ -16,7 +16,8 @@ namespace {
 //   Contents/Resources/PrivateMetaTune/shell.png
 // Only the JUCE message thread performs file I/O, once on first UI paint.
 // No file I/O or allocation is added to the real-time audio callback.
-juce::Image loadPrivateLicensedShell()
+juce::Image loadPrivateLicensedRaster(const juce::String& filename,
+                                      int expectedWidth, int expectedHeight)
 {
 #if JUCE_WINDOWS && defined(SKELLTUNE_AUTO_2P5) && SKELLTUNE_AUTO_2P5
     // Use the module owning this translation unit, NOT the host EXE path.
@@ -38,7 +39,7 @@ juce::Image loadPrivateLicensedShell()
         // Standard VST3 layout and a second layout useful for standalone QA.
         const auto candidates = {
             folder.getChildFile("Contents").getChildFile("Resources")
-                  .getChildFile("PrivateMetaTune").getChildFile("shell.png"),
+                  .getChildFile("PrivateMetaTune").getChildFile(filename),
             folder.getChildFile("Resources").getChildFile("PrivateMetaTune")
                   .getChildFile("shell.png")
         };
@@ -48,7 +49,7 @@ juce::Image loadPrivateLicensedShell()
                 continue;
             auto image = juce::ImageFileFormat::loadFrom(candidate);
             // Require the known, whole-shell source, never a cropped widget.
-            if (!image.isNull() && image.getWidth() == 1700 && image.getHeight() == 1344)
+            if (!image.isNull() && image.getWidth() == expectedWidth && image.getHeight() == expectedHeight)
                 return image;
         }
         auto parent = folder.getParentDirectory();
@@ -100,6 +101,25 @@ juce::Image createOrbArtwork()
     g.setGradientFill(juce::ColourGradient(juce::Colour(0xff484052), orbCx - 54.0f, orbCy - 72.0f,
                                            juce::Colour(0xff0c0a12), orbCx + 228.0f, orbCy + 226.0f, true));
     g.fillEllipse(238.0f, 138.0f, 465.0f, 460.0f);
+
+    // Original licensed outer-sphere material, cached into this static raster
+    // rather than decoded or blended 60 times per second. An even-odd annulus
+    // prevents the dark original texture from covering the live plasma centre.
+    static const juce::Image originalSphereMaterial =
+        loadPrivateLicensedRaster("orb-sphere.png", 400, 400);
+    if (!originalSphereMaterial.isNull())
+    {
+        g.saveState();
+        juce::Path sphereShell;
+        sphereShell.setUsingNonZeroWinding(false);
+        sphereShell.addEllipse(238.0f, 138.0f, 465.0f, 460.0f);
+        sphereShell.addEllipse(276.0f, 176.0f, 389.0f, 384.0f);
+        g.reduceClipRegion(sphereShell);
+        g.setOpacity(0.38f);
+        g.drawImageWithin(originalSphereMaterial, 238, 138, 465, 460,
+                          juce::RectanglePlacement::stretchToFit);
+        g.restoreState();
+    }
 
     // Brighter frosted glass volume. The reference has a clearly visible cloudy
     // silver shell, so build several broader and stronger translucent edge layers.
@@ -1323,7 +1343,7 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     const float sx=getWidth()/1366.0f, sy=getHeight()/1080.0f;
     g.addTransform(juce::AffineTransform::scale(sx,sy));
     g.fillAll(bg);
-    static const juce::Image privateLicensedShell = loadPrivateLicensedShell();
+    static const juce::Image privateLicensedShell = loadPrivateLicensedRaster("shell.png", 1700, 1344);
     if (!privateLicensedShell.isNull())
         g.drawImageWithin(privateLicensedShell, 0, 0, 1366, 1080,
                           juce::RectanglePlacement::stretchToFit);
