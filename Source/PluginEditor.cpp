@@ -1831,14 +1831,20 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.drawText("Minor", 529, 687, 52, 33, juce::Justification::centred);
     g.drawText("H", 581, 687, 27, 33, juce::Justification::centred);
 
-    // The 2.5ms preview has no selectable engine or manual latency switch.
+    // In automatic mode, there is no switch or selector. Keep only a small
+    // passive status chip rather than an oversized empty control housing.
+#if defined(SKELLTUNE_AUTO_2P5) && SKELLTUNE_AUTO_2P5
+    g.setColour(juce::Colour(0xff1c1a22));
+    g.fillRoundedRectangle(1222, 692, 113, 24, 12.0f);
+    g.setColour(juce::Colour(0xff494153));
+    g.drawRoundedRectangle(1222, 692, 113, 24, 12.0f, 1.0f);
+    g.setColour(purple.withAlpha(0.85f));
+    g.fillEllipse(1236, 700, 7, 7);
+    g.setColour(muted); g.setFont(uiFont(12.0f, juce::Font::bold));
+    g.drawText("AUTO", 1250, 694, 68, 19, juce::Justification::centredLeft);
+#else
     g.setColour(juce::Colour(0xff09090a)); g.fillRoundedRectangle(685,684,657,39,19.0f);
     g.setColour(juce::Colour(0xff35343b)); g.drawRoundedRectangle(685,684,657,39,19.0f,1.0f);
-#if defined(SKELLTUNE_AUTO_2P5) && SKELLTUNE_AUTO_2P5
-    g.setColour(purple.withAlpha(0.70f));
-    g.fillRoundedRectangle(701,703,7,5,2.5f);
-    g.setColour(muted); g.setFont(uiFont(12.5f, juce::Font::bold));
-    g.drawText("AUTO LOW VOICE", 720, 687, 190, 32, juce::Justification::centredLeft);
 #endif
 
     // Heatmaps
