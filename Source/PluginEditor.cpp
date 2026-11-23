@@ -642,6 +642,72 @@ public:
         const juce::Colour accent = isAmount ? pink : (isSustain ? juce::Colour(0xff55545c) : purple);
         const juce::Colour overloadHeat(0xffff485e);
 
+        // Licensed mode: original physical knob wells are ALREADY present in
+        // shell.png. Render only interactive value / LED states over that
+        // physical material. Never paint a second casing or dark circular plate.
+        if ((bool)properties.getWithDefault("skellyPrivateSkin", false))
+        {
+            const float arcR = tickRadius + (isSustain ? -1.0f : 2.0f);
+            const float angle = startAngle + (endAngle - startAngle) * sliderPos;
+            const juce::Colour live = isSpeed && overload > 0.001f
+                ? pink.interpolatedWith(overloadHeat, overload * 0.85f)
+                : (isSustain ? (slider.getValue() < 0.0 ? cyan : pink) : accent);
+            if (isSpeed && (overload > 0.001f || shock > 0.001f))
+            {
+                g.setColour(overloadHeat.withAlpha(0.19f * overload + 0.28f * shock));
+                g.drawEllipse(cx - radius, cy - radius, radius * 2.0f, radius * 2.0f,
+                              3.0f + 2.0f * shock);
+            }
+            juce::Path lit;
+            if (isSustain)
+            {
+                const float zero = startAngle + (endAngle - startAngle) * 0.5f;
+                if (std::abs(angle-zero)>0.004f)
+                    lit.addCentredArc(cx, cy, arcR, arcR, 0.0f,
+                                      juce::jmin(zero,angle),juce::jmax(zero,angle),true);
+            }
+            else if (sliderPos > 0.001f)
+                lit.addCentredArc(cx, cy, arcR, arcR, 0.0f, startAngle, angle, true);
+            if (!lit.isEmpty())
+            {
+                g.setColour(live.withAlpha(0.21f));
+                g.strokePath(lit, juce::PathStrokeType(isSustain ? 8.0f : 13.0f));
+                g.setColour(live.withAlpha(0.96f));
+                g.strokePath(lit, juce::PathStrokeType(isSustain ? 2.8f : 4.0f));
+            }
+            if (!isSustain)
+            {
+                constexpr int ticks = 65;
+                for(int i=0;i<ticks;++i)
+                {
+                    const float t=(float)i/(ticks-1);
+                    if (t > sliderPos) continue;
+                    const float a=startAngle+(endAngle-startAngle)*t;
+                    const float inner=arcR-(i%5==0?8.0f:5.0f);
+                    g.setColour(live.withAlpha(i%5==0?0.99f:0.85f));
+                    g.drawLine(cx+std::cos(a)*inner,cy+std::sin(a)*inner,
+                               cx+std::cos(a)*(arcR+1.0f),
+                               cy+std::sin(a)*(arcR+1.0f),i%5==0?1.7f:1.0f);
+                }
+            }
+            const juce::String display = isSpeed
+                ? juce::String(MetaTuneInspiredAudioProcessor::speedControlToMilliseconds(
+                                   (float)slider.getValue()), 1)
+                : juce::String(slider.getValue(), 0);
+            g.setColour(juce::Colour(0xffeee6f3));
+            g.setFont(digitalFont(juce::jlimit(12.0f, 23.0f,
+                       side*(isSustain?0.16f:0.19f)), juce::Font::bold));
+            g.drawText(display,juce::Rectangle<float>(cx-radius*0.70f,
+                   cy-side*0.14f,radius*1.40f,side*0.26f),
+                   juce::Justification::centred);
+            g.setColour(juce::Colour(0xffbfb9c6));
+            g.setFont(uiFont(juce::jlimit(9.0f,14.0f,side*0.10f),juce::Font::bold));
+            g.drawText(slider.getName(),juce::Rectangle<float>(
+                cx-radius*0.75f,cy+side*0.10f,radius*1.50f,side*0.20f),
+                juce::Justification::centred);
+            return;
+        }
+
         // The original LyraTune Speed knob grows a red, pulsing halo when
         // passing below 0 ms. Keep the original MetaTune C-shaped hardware
         // housing and restrict the effect to the Speed control.
@@ -938,6 +1004,7 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     setSize(683, 540);
     setResizable(true, true);
     setResizeLimits(683, 540, 1708, 1350);
+    privateLicensedShell = loadPrivateLicensedRaster("shell.png", 1700, 1344);
     // JUCE AudioProcessorEditor is not a SettableTooltipClient; individual controls provide tooltips.
     heatmapInputNotes.fill(-1);
     heatmapOutputNotes.fill(-1);
@@ -946,6 +1013,10 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     if (auto* toneVolumeRaw = processor.parameters.getRawParameterValue("toneVolume"))
         toneVolume = juce::jlimit(0.0f, 1.0f, toneVolumeRaw->load(std::memory_order_relaxed) / 100.0f);
     speed.setName("Speed"); amount.setName("Amount"); sustain.setName("Sustain");
+    // Skin choice is per editor/slider, not global: multiple FL Studio instances
+    // can safely coexist without affecting the audio parameters or callbacks.
+    for (auto* dial : { &speed, &amount, &sustain })
+        dial->getProperties().set("skellyPrivateSkin", !privateLicensedShell.isNull());
     speed.setTooltip("Retune Speed: 200 ms to -3 ms. Below 0 ms: Lyra hard-snap, red knob overload with shockwave and jitter, and pink orb ring.");
     amount.setTooltip("Correction Amount: 0% to 100%");
     sustain.setTooltip("Sustain response changes how retuning reacts on held notes; negative values slow it down and positive values speed it up.");
@@ -1170,6 +1241,56 @@ void MetaTuneInspiredAudioProcessorEditor::drawPiano(juce::Graphics& g, juce::Re
         return false;
     };
 
+    if (!privateLicensedShell.isNull())
+    {
+        // The physical seven-white/five-black keyboard is baked into the
+        // original 1700x1344 shell. Never redraw an opaque 12-lane keyboard
+        // above it. Place highlights and note labels at real physical keys.
+        const int whitePitch[7] {0,2,4,5,7,9,11};
+        const int blackPitch[5] {1,3,6,8,10};
+        const int blackBoundary[5] {1,2,4,5,6};
+        const float w = (float)area.getWidth()/7.0f;
+        const float top = (float)area.getY();
+        for(int i=0;i<7;++i)
+        {
+            const int note=whitePitch[i];
+            const float x=(float)area.getX()+i*w;
+            const bool rootKey=note==chosenRoot, in=note==liveInputPc, out=note==liveTargetPc;
+            if(!isAllowed(note))
+            {
+                g.setColour(juce::Colours::black.withAlpha(0.19f));
+                g.fillRect(x+2.0f,top+54.0f,w-4.0f,(float)area.getHeight()-55.0f);
+            }
+            // Preserve the native key textures, shadows and divisions.
+            if(rootKey || in || out)
+            {
+                g.setColour(out?cyan.withAlpha(0.26f):purple.withAlpha(rootKey?0.18f:0.12f));
+                g.fillRect(x+3.0f,(float)area.getBottom()-39.0f,w-6.0f,35.0f);
+                g.setColour(out?cyan:(in?pink:purple));
+                g.fillRoundedRectangle(x+w*0.25f,(float)area.getBottom()-6.0f,w*0.50f,4.0f,2.0f);
+            }
+            g.setColour(juce::Colour(0xffe5dfeb).withAlpha(isAllowed(note)?0.94f:0.52f));
+            g.setFont(uiFont(13.0f,juce::Font::bold));
+            g.drawText(names[note],x,top+14.0f,w,25.0f,juce::Justification::centred);
+        }
+        for(int i=0;i<5;++i)
+        {
+            const int note=blackPitch[i];
+            const float centre=(float)area.getX()+blackBoundary[i]*w;
+            const bool rootKey=note==chosenRoot, in=note==liveInputPc, out=note==liveTargetPc;
+            if(rootKey || in || out)
+            {
+                g.setColour(out?cyan:(in?pink:purple));
+                g.drawRoundedRectangle(centre-w*0.30f,top+51.0f,w*0.60f,157.0f,7.0f,2.0f);
+            }
+            g.setColour(juce::Colour(0xffd2c7df).withAlpha(isAllowed(note)?0.92f:0.52f));
+            g.setFont(uiFont(12.0f,juce::Font::bold));
+            g.drawText(names[note],centre-w*0.25f,top+64.0f,w*0.50f,18.0f,
+                       juce::Justification::centred);
+        }
+        return;
+    }
+
     // MetaTune's keyboard is a 12-lane chromatic grid rather than a conventional
     // seven-key piano width: the header and illuminated lower lanes line up exactly.
     for (int note = 0; note < 12; ++note)
@@ -1343,14 +1464,14 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     const float sx=getWidth()/1366.0f, sy=getHeight()/1080.0f;
     g.addTransform(juce::AffineTransform::scale(sx,sy));
     g.fillAll(bg);
-    static const juce::Image privateLicensedShell = loadPrivateLicensedRaster("shell.png", 1700, 1344);
-    if (!privateLicensedShell.isNull())
+    const bool hasOriginalArtwork = !privateLicensedShell.isNull();
+    if (hasOriginalArtwork)
         g.drawImageWithin(privateLicensedShell, 0, 0, 1366, 1080,
                           juce::RectanglePlacement::stretchToFit);
 
-    // Very subtle material grain across the two large surfaces. Deterministic
-    // points avoid flicker while giving the flat panels a more finished look.
-    for (int i = 0; i < 1050; ++i)
+    // Grain is part of the original licensed material; only procedural mode
+    // needs synthetic grain. Do not obscure the original shell.
+    for (int i = 0; !hasOriginalArtwork && i < 1050; ++i)
     {
         const int px = (i * 97 + (i % 11) * 31) % 1366;
         const int py = 60 + ((i * 53 + (i % 17) * 19) % 615);
@@ -1361,19 +1482,28 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     }
 
     // Top chrome
-    g.setColour(juce::Colour(0xff303034)); g.fillRect(0,0,1366,59);
-    g.setColour(juce::Colour(0xff151517)); g.fillRect(0,58,1366,2);
+    if (!hasOriginalArtwork)
+    {
+        g.setColour(juce::Colour(0xff303034)); g.fillRect(0,0,1366,59);
+        g.setColour(juce::Colour(0xff151517)); g.fillRect(0,58,1366,2);
+    }
     g.setColour(text); g.setFont(uiFont(23.0f, juce::Font::bold));
     g.drawText("S",20,7,35,44,juce::Justification::centred);
-    g.setColour(juce::Colour(0xff202023)); g.fillRect(68,6,73,48);
-    g.setColour(juce::Colour(0xff0f0f12));
-    g.fillRect(86,20,25,2); g.fillRect(86,27,25,2); g.fillRect(86,34,25,2);
-    g.setColour(juce::Colour(0xff3e3d43)); g.drawRect(68.0f,6.0f,73.0f,48.0f,1.0f);
-    g.setColour(juce::Colour(0xff141416)); g.fillRect(143,7,245,47);
+    if (!hasOriginalArtwork)
+    {
+        g.setColour(juce::Colour(0xff202023)); g.fillRect(68,6,73,48);
+        g.setColour(juce::Colour(0xff0f0f12));
+        g.fillRect(86,20,25,2); g.fillRect(86,27,25,2); g.fillRect(86,34,25,2);
+        g.setColour(juce::Colour(0xff3e3d43)); g.drawRect(68.0f,6.0f,73.0f,48.0f,1.0f);
+        g.setColour(juce::Colour(0xff141416)); g.fillRect(143,7,245,47);
+    }
     g.setColour(muted); g.setFont(uiFont(16.0f,juce::Font::italic));
     g.drawText(selectedPresetName,162,10,205,39,juce::Justification::centredLeft);
-    g.setColour(juce::Colour(0xff29292d)); g.fillRect(390,7,43,47);
-    g.fillRect(435,7,72,47);
+    if (!hasOriginalArtwork)
+    {
+        g.setColour(juce::Colour(0xff29292d)); g.fillRect(390,7,43,47);
+        g.fillRect(435,7,72,47);
+    }
     // Small up/down selectors and a save/floppy outline replace text stand-ins.
     juce::Path upArrow; upArrow.startNewSubPath(406.0f, 29.0f); upArrow.lineTo(412.0f, 21.0f); upArrow.lineTo(418.0f, 29.0f);
     g.setColour(muted); g.strokePath(upArrow, juce::PathStrokeType(1.5f));
@@ -1381,7 +1511,10 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.strokePath(downArrow, juce::PathStrokeType(1.5f));
     g.setColour(muted); g.drawRoundedRectangle(455.0f, 14.0f, 29.0f, 31.0f, 2.5f, 1.4f);
     g.setColour(muted.withAlpha(0.8f)); g.fillRect(461,15,17,8); g.fillRect(460,34,19,8);
-    g.setColour(juce::Colour(0xff1b1a20)); g.fillRect(508,6,471,48);
+    if (!hasOriginalArtwork)
+    {
+        g.setColour(juce::Colour(0xff1b1a20)); g.fillRect(508,6,471,48);
+    }
     g.setColour(juce::Colour(0xffa36bff).withAlpha(0.22f));
     g.fillRect(508,6,471,2);
     g.setFont(uiFont(26.0f, juce::Font::bold));
@@ -1863,8 +1996,12 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
 
     g.restoreState();
 
-    // Keep the left note selector fully inside the resizable canvas.
-    g.setColour(juce::Colour(0xff18181b)); g.fillRoundedRectangle(0,150,58,430,18.0f);
+    // Note group buttons still need live selection; their source plate is
+    // pre-rendered in the private shell, so don't paint a second solid panel.
+    if (!hasOriginalArtwork)
+    {
+        g.setColour(juce::Colour(0xff18181b)); g.fillRoundedRectangle(0,150,58,430,18.0f);
+    }
     g.setColour(purple); g.setFont(uiFont(15.0f,juce::Font::bold));
     g.drawText("NOTES",5,170,48,40,juce::Justification::centred);
     g.setColour(muted); g.setFont(uiFont(19.0f,juce::Font::bold));
@@ -1897,11 +2034,17 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.fillEllipse(doublerDotX - 8.0f, doublerDotY - 8.0f, 16.0f, 16.0f);
     g.setColour(juce::Colour(0xff3c3b42)); g.drawLine(0.0f, 673.0f, 1366.0f, 673.0f, 1.0f);
 
-    // Lower selector strip
-    g.setColour(juce::Colour(0xff27272b)); g.fillRect(0,676,1366,57);
+    // The licensed shell already provides this hardware strip.
+    if (!hasOriginalArtwork)
+    {
+        g.setColour(juce::Colour(0xff27272b)); g.fillRect(0,676,1366,57);
+    }
     g.setColour(muted); g.setFont(uiFont(15.0f,juce::Font::bold));
     g.drawText("Select",30,688,95,32,juce::Justification::centredLeft);
-    g.setColour(juce::Colour(0xff18181b)); g.fillRoundedRectangle(298,686,310,35,17.0f);
+    if (!hasOriginalArtwork)
+    {
+        g.setColour(juce::Colour(0xff18181b)); g.fillRoundedRectangle(298,686,310,35,17.0f);
+    }
     // The remaining part of the row exposes working Major/Hold/Minor/Hold selectors.
     const juce::Rectangle<float> majorArea(451.0f, 687.0f, 52.0f, 33.0f);
     const juce::Rectangle<float> majorHoldArea(503.0f, 687.0f, 26.0f, 33.0f);
@@ -1933,9 +2076,12 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xff35343b)); g.drawRoundedRectangle(685,684,657,39,19.0f,1.0f);
 #endif
 
-    // Heatmaps
-    g.setColour(juce::Colour(0xff1d1d20)); g.fillRect(0,734,1366,53);
-    g.setColour(juce::Colour(0xff0b0b0d)); g.fillRect(160,738,1052,45);
+    // The asset has the original monitor panels. Keep only the live traces.
+    if (!hasOriginalArtwork)
+    {
+        g.setColour(juce::Colour(0xff1d1d20)); g.fillRect(0,734,1366,53);
+        g.setColour(juce::Colour(0xff0b0b0d)); g.fillRect(160,738,1052,45);
+    }
     g.setColour(juce::Colour(0xff303036)); g.drawLine(160.0f,760.0f,1212.0f,760.0f,1.0f);
     g.setColour(muted); g.setFont(uiFont(14.0f,juce::Font::bold));
     g.drawText("Input",32,736,105,24,juce::Justification::centredLeft);
@@ -1992,15 +2138,21 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
         g.drawText("Heatmaps hidden", 390, 744, 260, 30, juce::Justification::centred);
     }
 
-    // Tone-volume / scale control strip at the left of the keyboard.
-    g.setColour(juce::Colour(0xff171719)); g.fillRect(0,788,165,287);
+    // Original keyboard and side rail are baked into the licensed background.
+    if (!hasOriginalArtwork)
+    {
+        g.setColour(juce::Colour(0xff171719)); g.fillRect(0,788,165,287);
+    }
     g.setColour(juce::Colour(0xff38383d)); g.drawLine(0.0f,788.0f,1366.0f,788.0f,1.0f);
     g.setColour(muted); g.setFont(uiFont(15.0f,juce::Font::bold));
     g.drawText("Tone Volume",24,801,125,25,juce::Justification::centredLeft);
     g.setColour(juce::Colour(0xff070708)); g.fillRoundedRectangle(10,833,145,19,9.0f);
     g.setColour(juce::Colour(0xff713a46)); g.fillRoundedRectangle(14.0f,837.0f,137.0f * toneVolume,11.0f,5.0f);
     g.setColour(juce::Colour(0xffd0a3b9)); g.fillRect(14.0f + 137.0f * toneVolume,834.0f,3.0f,17.0f);
-    g.setColour(juce::Colour(0xff252329)); g.fillRoundedRectangle(12,875,141,169,15.0f);
+    if (!hasOriginalArtwork)
+    {
+        g.setColour(juce::Colour(0xff252329)); g.fillRoundedRectangle(12,875,141,169,15.0f);
+    }
     static const char* pitchNames[] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
     g.setColour(juce::Colour(0xffe7d9ef)); g.setFont(uiFont(50.0f,juce::Font::bold));
     g.drawText(pitchNames[juce::jlimit(0, 11, selectedNoteIndex)],12,891,141,58,juce::Justification::centred);
@@ -2013,7 +2165,10 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
 
     // Keyboard and right status rail
     drawPiano(g,{165,788,1047,287});
-    g.setColour(juce::Colour(0xff222226)); g.fillRect(1212,734,154,341);
+    if (!hasOriginalArtwork)
+    {
+        g.setColour(juce::Colour(0xff222226)); g.fillRect(1212,734,154,341);
+    }
     g.setColour(showHeatMaps ? purple : muted); g.setFont(uiFont(14.0f,juce::Font::bold));
     g.drawText("In / Out",1225,741,130,24,juce::Justification::centredLeft);
     g.drawText(showHeatMaps ? "HeatMaps ON" : "HeatMaps OFF",1225,761,130,24,juce::Justification::centredLeft);
@@ -2030,7 +2185,10 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xffbdb4ce));
     g.fillRoundedRectangle(1218.0f + 136.0f * referenceT, 987.0f, 4.0f, 19.0f, 2.0f);
     g.setColour(text); g.drawText(juce::String(pitchReferenceHz, 1) + " Hz",1220,1015,136,25,juce::Justification::centred);
-    g.setColour(juce::Colour(0xff202024)); g.fillRect(0,1050,1366,30);
+    if (!hasOriginalArtwork)
+    {
+        g.setColour(juce::Colour(0xff202024)); g.fillRect(0,1050,1366,30);
+    }
     const bool chromaticActive = scale.getSelectedItemIndex() == 0;
     if (chromaticActive)
     {
@@ -2408,6 +2566,30 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
     {
         const float keyboardX = x - 165.0f;
         const float keyboardW = 1212.0f - 165.0f;
+        if (!privateLicensedShell.isNull())
+        {
+            // Match the real seven-white/five-black keyboard in shell.png.
+            const float whiteW=keyboardW/7.0f;
+            const int whites[7] {0,2,4,5,7,9,11};
+            const int blacks[5] {1,3,6,8,10};
+            const int boundaries[5] {1,2,4,5,6};
+            int note=whites[juce::jlimit(0,6,(int)(keyboardX/whiteW))];
+            if (y >= 839.0f && y < 1035.0f)
+            {
+                for (int i=0;i<5;++i)
+                {
+                    const float center=boundaries[i]*whiteW;
+                    if (std::abs(keyboardX-center)<=whiteW*0.30f)
+                    {
+                        note=blacks[i];
+                        break;
+                    }
+                }
+            }
+            setRootNote(note);
+            processor.startTonePreview(60+note);
+            return;
+        }
         const float semitoneW = keyboardW / 12.0f;
         int note = juce::jlimit(0, 11, (int)(keyboardX / semitoneW));
         if (y >= 840.0f)
