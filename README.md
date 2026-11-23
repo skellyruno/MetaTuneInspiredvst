@@ -116,6 +116,26 @@ The engine code in `Source/LyraDSP` is copied directly from the user-supplied ar
 
 The original DSP suite is preserved in `tests/LyraDSP`. It tests negative retune, octave changes, vibrato, stereo, range switching, formant accent, CPU safety and allocation-free callbacks. Extra Skell Live tests verify genuine octave leaps versus one-frame aliases, immediate rap/melodic note acquisition, confidence handling, unchanged PDC, negative retune and removed-stabilizer backward compatibility.
 
+### Preset library
+
+The preset-name area in the header opens the new searchable local preset library.
+It scans `Documents/MetaTune Inspired Presets` recursively for native `.mti`
+processor-state files. The browser provides:
+
+* Search across preset names and their folder/category path.
+* All presets, Favorites, and User presets filters.
+* Per-preset favorite stars persisted in `Favorites.txt`.
+* One-click load and double-click recall.
+* Import of an existing `.mti` file into the User folder, with duplicate-safe names.
+* Save Current directly into the User folder and open the library folder in Explorer.
+
+The file format remains the existing JUCE APVTS XML state and no parameter,
+automation, preset-state, or DSP identifiers were added or changed. Existing
+`.mti` files remain readable. No factory presets are fabricated: an empty
+library starts empty until presets are saved or imported. The UI is drawn with
+original JUCE vector shapes and system fonts; the examined commercial-plugin
+SVGs, bitmaps, and embedded fonts are not copied into the distributable.
+
 ### Build and tests
 
 A JUCE 8 checkout and CMake 3.22+ are needed:

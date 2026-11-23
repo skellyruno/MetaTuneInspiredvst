@@ -27,6 +27,8 @@ target_sources(MetaTuneInspired PRIVATE
     Source/PluginProcessor.h
     Source/PluginEditor.cpp
     Source/PluginEditor.h
+    Source/MetaTunePresetBrowser.cpp
+    Source/MetaTunePresetBrowser.h
     Source/RealtimeAutotune.h
     Source/SkellyFusionEngine.h
     Source/FusionPeriodGuard.h

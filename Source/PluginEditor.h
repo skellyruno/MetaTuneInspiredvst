@@ -4,6 +4,8 @@
 #include <memory>
 #include <array>
 
+class MetaTunePresetBrowser;
+
 class MetaTuneInspiredAudioProcessorEditor final : public juce::AudioProcessorEditor,
                                                     private juce::Timer
 {
@@ -24,10 +26,12 @@ private:
     void setRootNote(int noteIndex);
     void setScaleMode(int modeIndex);
     void openHeaderMenu();
+    void openPresetBrowser();
     void savePresetToFile();
     void loadPresetFromFile();
 
     MetaTuneInspiredAudioProcessor& processor;
+    std::unique_ptr<MetaTunePresetBrowser> presetBrowser;
     juce::Slider speed, amount, sustain;
     juce::ComboBox scale, root;
     juce::ToggleButton lowLatency { "Low Latency" };

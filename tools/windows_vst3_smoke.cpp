@@ -4,6 +4,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_graphics/juce_graphics.h>
 #include "../Source/PluginProcessor.h"
+#include "../Source/MetaTunePresetBrowser.h"
 #include <cmath>
 #include <cstdio>
 #include <memory>
@@ -91,6 +92,73 @@ int main(int argc,char**argv)
             std::fprintf(stderr, "Legacy live parameter/state compatibility missing\\n");
             return 28;
         }
+        MetaTunePresetBrowser* embeddedBrowser = nullptr;
+        for (int childIndex = 0; childIndex < editor->getNumChildComponents(); ++childIndex)
+            if (auto* browser = dynamic_cast<MetaTunePresetBrowser*>(editor->getChildComponent(childIndex)))
+                embeddedBrowser = browser;
+        if (embeddedBrowser == nullptr || embeddedBrowser->isVisible())
+        {
+            std::fprintf(stderr, "Preset library must exist and start hidden\\n");
+            return 32;
+        }
+
+        // Exercise a real .mti file round-trip in an isolated temporary library.
+        // The file is the processor's existing APVTS XML state, not a new preset format.
+        const auto testRoot = juce::File::getSpecialLocation(juce::File::tempDirectory)
+            .getChildFile("MetaTunePresetBrowserSmoke");
+        testRoot.deleteRecursively();
+        const auto testUserDirectory = MetaTunePresetBrowser::getUserPresetDirectory(testRoot);
+        if (!testUserDirectory.createDirectory().wasOk()) return 33;
+        auto* amountParameter = uiProcessor.parameters.getParameter("amount");
+        if (amountParameter == nullptr) return 34;
+        amountParameter->setValueNotifyingHost(amountParameter->convertTo0to1(37.0f));
+        juce::MemoryBlock presetState;
+        uiProcessor.getStateInformation(presetState);
+        const auto testPreset = testUserDirectory.getChildFile("Smoke Test.mti");
+        if (presetState.isEmpty() || !testPreset.replaceWithData(presetState.getData(), presetState.getSize()))
+            return 35;
+        amountParameter->setValueNotifyingHost(amountParameter->convertTo0to1(100.0f));
+        {
+            MetaTunePresetBrowser testBrowser(uiProcessor, {}, testRoot);
+            testBrowser.setSize(1000, 790);
+            testBrowser.refresh();
+            if (testBrowser.getVisiblePresetCount() != 1) return 36;
+            testBrowser.setSearchQuery("no matching preset");
+            if (testBrowser.getVisiblePresetCount() != 0) return 37;
+            testBrowser.setSearchQuery("Smoke");
+            if (testBrowser.getVisiblePresetCount() != 1) return 38;
+            testBrowser.toggleFavoriteAtRow(0);
+            testBrowser.refresh(); // Reload Favorites.txt to prove the star survives a browser reopen.
+            testBrowser.setCategoryFilter(2);
+            if (testBrowser.getVisiblePresetCount() != 1) return 39;
+            testBrowser.setCategoryFilter(3);
+            if (testBrowser.getVisiblePresetCount() != 1) return 40;
+            testBrowser.setCategoryFilter(1);
+            if (!testBrowser.loadPresetAtRow(0)) return 41;
+            const auto* restoredAmount = uiProcessor.parameters.getRawParameterValue("amount");
+            if (restoredAmount == nullptr || std::abs(restoredAmount->load() - 37.0f) > 0.2f)
+                return 42;
+            // Regression: saving a second preset with an existing name must
+            // preserve the original bytes instead of silently replacing them.
+            const auto duplicate = MetaTunePresetBrowser::getAvailablePresetFile(
+                testUserDirectory, "Smoke Test");
+            if (duplicate == testPreset || duplicate.getFileName() != "Smoke Test (2).mti")
+                return 43;
+            juce::MemoryBlock originalBytes;
+            if (!testPreset.loadFileAsData(originalBytes)) return 44;
+            if (duplicate.exists() || !duplicate.replaceWithData(
+                    presetState.getData(), presetState.getSize())) return 45;
+            juce::MemoryBlock afterBytes;
+            if (!testPreset.loadFileAsData(afterBytes)
+                || originalBytes.toBase64Encoding() != afterBytes.toBase64Encoding())
+                return 46;
+            const auto nextDuplicate = MetaTunePresetBrowser::getAvailablePresetFile(
+                testUserDirectory, "Smoke Test");
+            if (nextDuplicate.getFileName() != "Smoke Test (3).mti")
+                return 47;
+        }
+        testRoot.deleteRecursively();
+
         editor->setVisible(true);
         juce::MessageManager::getInstance()->runDispatchLoopUntil(200);
         // Software render the original editor directly. No native peer is
@@ -104,6 +172,7 @@ int main(int argc,char**argv)
             return image;
         };
         juce::Image neutral;
+        juce::Image presetBrowserSnapshot;
         for(const auto& size : {juce::Point<int>(683,540),
                                 juce::Point<int>(1000,790),
                                 juce::Point<int>(1366,1080)})
@@ -144,7 +213,26 @@ int main(int argc,char**argv)
             auto snapshot = rasterizeEditor();
             if(snapshot.isNull() || snapshot.getWidth()!=size.x
                || snapshot.getHeight()!=size.y) return 20;
-            if(size.x==1366) neutral = snapshot;
+            if(size.x==1366)
+            {
+                neutral = snapshot;
+                embeddedBrowser->setVisible(true);
+                juce::MessageManager::getInstance()->runDispatchLoopUntil(100);
+                presetBrowserSnapshot = rasterizeEditor();
+                for (int browserChildIndex = 0;
+                     browserChildIndex < embeddedBrowser->getNumChildComponents(); ++browserChildIndex)
+                {
+                    auto* browserChild = embeddedBrowser->getChildComponent(browserChildIndex);
+                    if (browserChild == nullptr || !browserChild->isVisible()) continue;
+                    const auto browserBounds = browserChild->getBounds();
+                    if (browserBounds.getX() < 0 || browserBounds.getY() < 0
+                        || browserBounds.getRight() > embeddedBrowser->getWidth()
+                        || browserBounds.getBottom() > embeddedBrowser->getHeight())
+                        return 42;
+                }
+                embeddedBrowser->setVisible(false);
+                juce::MessageManager::getInstance()->runDispatchLoopUntil(100);
+            }
         }
 
         // Legacy automation remains writable, but must never reveal a GUI control.
@@ -208,6 +296,7 @@ int main(int argc,char**argv)
             return stream != nullptr && png.writeImageToStream(img,*stream);
         };
         if(!saveImage(neutral,"MetaTune_normal.png")
+           || !saveImage(presetBrowserSnapshot,"MetaTune_preset_browser.png")
            || !saveImage(neutral,"MetaTune_LowLatency_Only.png")
            || !saveImage(overloadShock,"MetaTune_negative_speed_shockwave.png")
            || !saveImage(negative,"MetaTune_negative_retune.png")) return 25;
