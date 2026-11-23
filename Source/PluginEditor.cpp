@@ -1,7 +1,65 @@
 #include "PluginEditor.h"
 #include <memory>
 
+#if JUCE_WINDOWS && defined(SKELLTUNE_AUTO_2P5) && SKELLTUNE_AUTO_2P5
+ #ifndef NOMINMAX
+  #define NOMINMAX
+ #endif
+ #include <windows.h>
+#endif
+
 namespace {
+
+// Optional, licensed resource. The code is safe to publish; the original
+// asset is NEVER committed to or uploaded by the public GitHub workflow.
+// The packaged Windows VST3 can contain:
+//   Contents/Resources/PrivateMetaTune/shell.png
+// Only the JUCE message thread performs file I/O, once on first UI paint.
+// No file I/O or allocation is added to the real-time audio callback.
+juce::Image loadPrivateLicensedShell()
+{
+#if JUCE_WINDOWS && defined(SKELLTUNE_AUTO_2P5) && SKELLTUNE_AUTO_2P5
+    // Use the module owning this translation unit, NOT the host EXE path.
+    static const volatile int privateSkinModuleAnchor = 0x4d543235;
+    HMODULE module = nullptr;
+    const auto anchor = reinterpret_cast<LPCWSTR>(&privateSkinModuleAnchor);
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            anchor, &module) || module == nullptr)
+        return {};
+
+    wchar_t path[32768] {};
+    const DWORD len = GetModuleFileNameW(module, path, 32768);
+    if (len == 0 || len >= 32768)
+        return {};
+    auto folder = juce::File(juce::String(path)).getParentDirectory();
+    for (int level = 0; level < 5; ++level)
+    {
+        // Standard VST3 layout and a second layout useful for standalone QA.
+        const auto candidates = {
+            folder.getChildFile("Contents").getChildFile("Resources")
+                  .getChildFile("PrivateMetaTune").getChildFile("shell.png"),
+            folder.getChildFile("Resources").getChildFile("PrivateMetaTune")
+                  .getChildFile("shell.png")
+        };
+        for (const auto& candidate : candidates)
+        {
+            if (!candidate.existsAsFile())
+                continue;
+            auto image = juce::ImageFileFormat::loadFrom(candidate);
+            // Require the known, whole-shell source, never a cropped widget.
+            if (!image.isNull() && image.getWidth() == 1700 && image.getHeight() == 1344)
+                return image;
+        }
+        auto parent = folder.getParentDirectory();
+        if (parent == folder)
+            break;
+        folder = parent;
+    }
+#endif
+    return {};
+}
+
 const juce::Colour bg(0xff101012), panel(0xff242427), panel2(0xff18181b);
 const juce::Colour purple(0xffa36bff), pink(0xffdf83c5), cyan(0xff66dfff);
 const juce::Colour text(0xffe7e5e9), muted(0xffa7a5aa);
@@ -1265,6 +1323,10 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     const float sx=getWidth()/1366.0f, sy=getHeight()/1080.0f;
     g.addTransform(juce::AffineTransform::scale(sx,sy));
     g.fillAll(bg);
+    static const juce::Image privateLicensedShell = loadPrivateLicensedShell();
+    if (!privateLicensedShell.isNull())
+        g.drawImageWithin(privateLicensedShell, 0, 0, 1366, 1080,
+                          juce::RectanglePlacement::stretchToFit);
 
     // Very subtle material grain across the two large surfaces. Deterministic
     // points avoid flicker while giving the flat panels a more finished look.
@@ -1344,16 +1406,20 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.drawText("?",1290,14,20,19,juce::Justification::centred);
 
     // Main surface and dramatic diagonal split
-    g.setColour(juce::Colour(0xff09090b)); g.fillRect(0,60,1366,615);
-    juce::Path right; right.startNewSubPath(755,60); right.lineTo(1366,60); right.lineTo(1366,675); right.lineTo(1120,675); right.closeSubPath();
-    g.setGradientFill(juce::ColourGradient(juce::Colour(0xff202023), 760.0f, 60.0f,
-                                           juce::Colour(0xff343438), 1366.0f, 675.0f, false));
-    g.fillPath(right);
-    juce::Path splitHighlight;
-    splitHighlight.startNewSubPath(755.0f, 60.0f);
-    splitHighlight.lineTo(1120.0f, 675.0f);
-    g.setColour(juce::Colour(0xff5a575f).withAlpha(0.18f));
-    g.strokePath(splitHighlight, juce::PathStrokeType(2.0f));
+    if (privateLicensedShell.isNull())
+    {
+        // Unlicensed/public builds keep the existing approved procedural UI.
+        g.setColour(juce::Colour(0xff09090b)); g.fillRect(0,60,1366,615);
+        juce::Path right; right.startNewSubPath(755,60); right.lineTo(1366,60); right.lineTo(1366,675); right.lineTo(1120,675); right.closeSubPath();
+        g.setGradientFill(juce::ColourGradient(juce::Colour(0xff202023), 760.0f, 60.0f,
+                                               juce::Colour(0xff343438), 1366.0f, 675.0f, false));
+        g.fillPath(right);
+        juce::Path splitHighlight;
+        splitHighlight.startNewSubPath(755.0f, 60.0f);
+        splitHighlight.lineTo(1120.0f, 675.0f);
+        g.setColour(juce::Colour(0xff5a575f).withAlpha(0.18f));
+        g.strokePath(splitHighlight, juce::PathStrokeType(2.0f));
+    }
     // MetaTune visualizer behavior from the design case study:
     // Amount changes outer-orb diameter, Speed rotates the inner plasma, and Doubler
     // shows two offset rings with blue haze controlled by the Doubler mix gesture.
