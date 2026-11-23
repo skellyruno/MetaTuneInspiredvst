@@ -32,6 +32,9 @@ public:
 
     static juce::File getDefaultLibraryDirectory();
     static juce::File getUserPresetDirectory(const juce::File& libraryDirectory = {});
+    // Never replace an existing user preset, even when the save dialog chooses its name.
+    static juce::File getAvailablePresetFile(const juce::File& directory,
+                                              const juce::String& requestedBaseName);
 
 private:
     int getNumRows() override;
@@ -44,6 +47,7 @@ private:
     void rebuildVisiblePresets();
     void loadFavorites();
     void saveFavorites();
+    bool isValidPresetData(const juce::MemoryBlock&) const;
     bool isFavorite(const juce::File&) const;
     juce::String relativePresetPath(const juce::File&) const;
     void saveCurrentPreset();
