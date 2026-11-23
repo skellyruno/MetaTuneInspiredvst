@@ -647,7 +647,9 @@ public:
         // physical material. Never paint a second casing or dark circular plate.
         if ((bool)properties.getWithDefault("skellyPrivateSkin", false))
         {
-            const float arcR = tickRadius + (isSustain ? -1.0f : 2.0f);
+            // Pixel-aligned to the original recesses. The old procedural LED
+            // radius was too small and appeared as a second dial inside the real one.
+            const float arcR = side * (isSpeed ? 0.47f : (isAmount ? 0.42f : 0.40f));
             const float angle = startAngle + (endAngle - startAngle) * sliderPos;
             const juce::Colour live = isSpeed && overload > 0.001f
                 ? pink.interpolatedWith(overloadHeat, overload * 0.85f)
@@ -2659,8 +2661,18 @@ void MetaTuneInspiredAudioProcessorEditor::resized()
     const auto px = [sx](float value) { return juce::roundToInt(value * sx); };
     const auto py = [sy](float value) { return juce::roundToInt(value * sy); };
     speed.setBounds(px(955), py(120), px(225), py(225));
-    sustain.setBounds(px(1180), py(205), px(140), py(140));
-    amount.setBounds(px(1090), py(395), px(225), py(225));
+    if (!privateLicensedShell.isNull())
+    {
+        // Original shell control recess centres: Speed (1066,237),
+        // Sustain (1233,284), Amount (1201,484) in the 1366x1080 canvas.
+        sustain.setBounds(px(1163), py(214), px(140), py(140));
+        amount.setBounds(px(1090), py(372), px(225), py(225));
+    }
+    else
+    {
+        sustain.setBounds(px(1180), py(205), px(140), py(140));
+        amount.setBounds(px(1090), py(395), px(225), py(225));
+    }
     speedLabel.setBounds(px(960), py(320), px(220), py(25));
     amountLabel.setBounds(px(1097), py(575), px(220), py(25));
     scale.setBounds(px(165), py(686), px(176), py(35));
