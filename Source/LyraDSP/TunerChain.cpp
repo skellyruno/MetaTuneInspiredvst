@@ -29,6 +29,9 @@ void TunerChain::prepare (double sampleRate, double lowestMinFreq)
     lowVoiceTap[1].setFollower(true);
     lowVoiceAttackCoeff = float(1.0 - std::exp(-1.0/(0.008*sr)));
     lowVoiceReleaseCoeff = float(1.0 - std::exp(-1.0/(0.022*sr)));
+    // Retire the old low-register period more quickly after two confident
+    // *high* note estimates. Brief unvoiced gaps retain the slower grace.
+    lowVoiceHighExitCoeff = float(1.0 - std::exp(-1.0/(0.006*sr)));
     lowVoiceGraceSamples = int(std::lround(sr*0.010));
 #endif
     // Sized for the largest latency (lowest range + HQ); the active delays follow the settings.
@@ -65,6 +68,8 @@ void TunerChain::reset() noexcept
     lowVoiceMix = lowVoiceTarget = 0.0f;
     lowVoiceLastPeriod = lowVoiceLastFreq = 0.0f;
     lowVoiceHoldRemaining = 0;
+    lowVoiceHighRegisterHops = 0;
+    lowVoiceFastRelease = false;
 #endif
 }
 
@@ -202,15 +207,41 @@ void TunerChain::process (float* const* ch, int numCh, int total) noexcept
                 && e.frequency < lowVoiceEligibilityTopHz;
             const bool reliable = lowRange && e.confidence >=
                 (lowVoiceHoldRemaining > 0 ? 0.58f : 0.65f);
+            // A clear, sustained jump out of the low register is NOT a
+            // transient detector dropout. Never hold a G#2 period under a
+            // new high-register vowel for the full dropout grace period.
+            // Two strong YIN hops prevent one isolated octave alias from
+            // immediately changing the renderer.
+            const bool strongHigh = e.voiced
+                && e.frequency >= lowVoiceEligibilityTopHz
+                && e.confidence >= 0.72f;
             if (reliable)
             {
+                lowVoiceHighRegisterHops = 0;
+                lowVoiceFastRelease = false;
                 lowVoiceLastFreq = e.frequency;
                 lowVoiceLastPeriod = float(sr / e.frequency);
                 lowVoiceHoldRemaining = lowVoiceGraceSamples;
             }
+            else if (strongHigh)
+            {
+                lowVoiceHighRegisterHops = std::min(2, lowVoiceHighRegisterHops + 1);
+                if (lowVoiceHighRegisterHops >= 2)
+                {
+                    lowVoiceHoldRemaining = 0;
+                    lowVoiceLastFreq = lowVoiceLastPeriod = 0.0f;
+                    lowVoiceFastRelease = true;
+                }
+                else
+                    lowVoiceHoldRemaining = std::max(0,
+                        lowVoiceHoldRemaining - yin.hopSamples());
+            }
             else
+            {
+                lowVoiceHighRegisterHops = 0;
                 lowVoiceHoldRemaining = std::max(0,
                     lowVoiceHoldRemaining - yin.hopSamples());
+            }
             const bool held = lowVoiceHoldRemaining > 0
                 && lowVoiceLastPeriod > 0.0f;
             for(auto& tap:lowVoiceTap)
@@ -280,7 +311,8 @@ void TunerChain::process (float* const* ch, int numCh, int total) noexcept
                 float(1.0/PitchShifter::kMaxRatio),
                 float(PitchShifter::kMaxRatio));
             const float slew = lowVoiceTarget > lowVoiceMix
-                ? lowVoiceAttackCoeff : lowVoiceReleaseCoeff;
+                ? lowVoiceAttackCoeff
+                : (lowVoiceFastRelease ? lowVoiceHighExitCoeff : lowVoiceReleaseCoeff);
             lowVoiceMix += (lowVoiceTarget-lowVoiceMix)*slew;
             lowVoiceMix = std::clamp(lowVoiceMix,0.0f,1.0f);
             lowVoiceBlend[i] = lowVoiceMix;
