@@ -1494,8 +1494,23 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
         g.setColour(juce::Colour(0xff303034)); g.fillRect(0,0,1366,59);
         g.setColour(juce::Colour(0xff151517)); g.fillRect(0,58,1366,2);
     }
-    g.setColour(text); g.setFont(uiFont(23.0f, juce::Font::bold));
-    g.drawText("S",20,7,35,44,juce::Justification::centred);
+    bool drewPrivateBrand = false;
+    if (hasOriginalArtwork)
+    {
+        static const juce::Image originalBrand =
+            loadPrivateLicensedRaster("brand-s.png", 100, 148);
+        if (!originalBrand.isNull())
+        {
+            g.drawImageWithin(originalBrand, 23, 8, 29, 43,
+                              juce::RectanglePlacement::centred);
+            drewPrivateBrand = true;
+        }
+    }
+    if (!drewPrivateBrand)
+    {
+        g.setColour(text); g.setFont(uiFont(23.0f, juce::Font::bold));
+        g.drawText("S",20,7,35,44,juce::Justification::centred);
+    }
     if (!hasOriginalArtwork)
     {
         g.setColour(juce::Colour(0xff202023)); g.fillRect(68,6,73,48);
@@ -1516,8 +1531,23 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(muted); g.strokePath(upArrow, juce::PathStrokeType(1.5f));
     juce::Path downArrow; downArrow.startNewSubPath(406.0f, 35.0f); downArrow.lineTo(412.0f, 43.0f); downArrow.lineTo(418.0f, 35.0f);
     g.strokePath(downArrow, juce::PathStrokeType(1.5f));
-    g.setColour(muted); g.drawRoundedRectangle(455.0f, 14.0f, 29.0f, 31.0f, 2.5f, 1.4f);
-    g.setColour(muted.withAlpha(0.8f)); g.fillRect(461,15,17,8); g.fillRect(460,34,19,8);
+    bool drewPrivateSave = false;
+    if (hasOriginalArtwork)
+    {
+        static const juce::Image originalSave =
+            loadPrivateLicensedRaster("toolbar-save.png", 440, 310);
+        if (!originalSave.isNull())
+        {
+            g.drawImageWithin(originalSave, 446, 13, 45, 32,
+                              juce::RectanglePlacement::centred);
+            drewPrivateSave = true;
+        }
+    }
+    if (!drewPrivateSave)
+    {
+        g.setColour(muted); g.drawRoundedRectangle(455.0f, 14.0f, 29.0f, 31.0f, 2.5f, 1.4f);
+        g.setColour(muted.withAlpha(0.8f)); g.fillRect(461,15,17,8); g.fillRect(460,34,19,8);
+    }
     if (!hasOriginalArtwork)
     {
         g.setColour(juce::Colour(0xff1b1a20)); g.fillRect(508,6,471,48);
@@ -1527,10 +1557,31 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.setFont(uiFont(26.0f, juce::Font::bold));
     // Fitted text prevents fallback font metrics from clipping the final letters.
     const juce::Rectangle<int> wordmarkBounds(508, 6, 471, 48);
-    g.setColour(juce::Colour(0xffb9a0ff).withAlpha(0.22f));
-    g.drawFittedText("metaTune", wordmarkBounds.translated(0, 1), juce::Justification::centred, 1, 0.90f);
-    g.setColour(juce::Colour(0xffe7ddff));
-    g.drawFittedText("metaTune", wordmarkBounds, juce::Justification::centred, 1, 0.90f);
+    bool drewOriginalWordmark = false;
+    if (hasOriginalArtwork)
+    {
+        // Original licensed vector logos, rasterised at high resolution only
+        // during private packaging. The fallback has no proprietary assets.
+        static const juce::Image originalMeta =
+            loadPrivateLicensedRaster("word-meta.png", 420, 120);
+        static const juce::Image originalTune =
+            loadPrivateLicensedRaster("word-tune.png", 400, 140);
+        if (!originalMeta.isNull() && !originalTune.isNull())
+        {
+            g.drawImageWithin(originalMeta, 658, 16, 84, 24,
+                              juce::RectanglePlacement::centred);
+            g.drawImageWithin(originalTune, 742, 14, 80, 28,
+                              juce::RectanglePlacement::centred);
+            drewOriginalWordmark = true;
+        }
+    }
+    if (!drewOriginalWordmark)
+    {
+        g.setColour(juce::Colour(0xffb9a0ff).withAlpha(0.22f));
+        g.drawFittedText("metaTune", wordmarkBounds.translated(0, 1), juce::Justification::centred, 1, 0.90f);
+        g.setColour(juce::Colour(0xffe7ddff));
+        g.drawFittedText("metaTune", wordmarkBounds, juce::Justification::centred, 1, 0.90f);
+    }
 
     // Icon-only toolbar with consistent vector strokes.
     auto drawUndoIcon = [&g](float x, bool redo)
@@ -1552,12 +1603,35 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
         }
         g.strokePath(arrow, juce::PathStrokeType(1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     };
-    g.setColour(muted); drawUndoIcon(986.0f, false); drawUndoIcon(1031.0f, true);
-    juce::Path sync;
-    sync.addCentredArc(1104.0f, 29.0f, 10.0f, 10.0f, 0.0f, 0.5f, 4.4f, true);
-    g.strokePath(sync, juce::PathStrokeType(1.5f));
-    juce::Path syncTip; syncTip.startNewSubPath(1092.0f,20.0f); syncTip.lineTo(1100.0f,19.0f); syncTip.lineTo(1098.0f,26.0f);
-    g.strokePath(syncTip, juce::PathStrokeType(1.5f));
+    bool drewOriginalToolbar = false;
+    if (hasOriginalArtwork)
+    {
+        static const juce::Image originalUndo =
+            loadPrivateLicensedRaster("toolbar-undo.png", 360, 310);
+        static const juce::Image originalRedo =
+            loadPrivateLicensedRaster("toolbar-redo.png", 360, 310);
+        static const juce::Image originalReset =
+            loadPrivateLicensedRaster("toolbar-reset.png", 340, 310);
+        if (!originalUndo.isNull() && !originalRedo.isNull() && !originalReset.isNull())
+        {
+            g.drawImageWithin(originalUndo, 991, 14, 36, 31,
+                              juce::RectanglePlacement::centred);
+            g.drawImageWithin(originalRedo, 1035, 14, 36, 31,
+                              juce::RectanglePlacement::centred);
+            g.drawImageWithin(originalReset, 1087, 14, 34, 31,
+                              juce::RectanglePlacement::centred);
+            drewOriginalToolbar = true;
+        }
+    }
+    if (!drewOriginalToolbar)
+    {
+        g.setColour(muted); drawUndoIcon(986.0f, false); drawUndoIcon(1031.0f, true);
+        juce::Path sync;
+        sync.addCentredArc(1104.0f, 29.0f, 10.0f, 10.0f, 0.0f, 0.5f, 4.4f, true);
+        g.strokePath(sync, juce::PathStrokeType(1.5f));
+        juce::Path syncTip; syncTip.startNewSubPath(1092.0f,20.0f); syncTip.lineTo(1100.0f,19.0f); syncTip.lineTo(1098.0f,26.0f);
+        g.strokePath(syncTip, juce::PathStrokeType(1.5f));
+    }
     g.setFont(uiFont(17.0f,juce::Font::bold));
     g.drawText(activeB ? "A  >  [B]" : "[A]  >  B",1130,7,115,45,juce::Justification::centred);
     g.setColour(muted); g.setFont(uiFont(15.0f));
