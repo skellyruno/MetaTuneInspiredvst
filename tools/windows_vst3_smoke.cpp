@@ -138,6 +138,24 @@ int main(int argc,char**argv)
             const auto* restoredAmount = uiProcessor.parameters.getRawParameterValue("amount");
             if (restoredAmount == nullptr || std::abs(restoredAmount->load() - 37.0f) > 0.2f)
                 return 42;
+            // Regression: saving a second preset with an existing name must
+            // preserve the original bytes instead of silently replacing them.
+            const auto duplicate = MetaTunePresetBrowser::getAvailablePresetFile(
+                testUserDirectory, "Smoke Test");
+            if (duplicate == testPreset || duplicate.getFileName() != "Smoke Test (2).mti")
+                return 43;
+            juce::MemoryBlock originalBytes;
+            if (!testPreset.loadFileAsData(originalBytes)) return 44;
+            if (duplicate.exists() || !duplicate.replaceWithData(
+                    presetState.getData(), presetState.getSize())) return 45;
+            juce::MemoryBlock afterBytes;
+            if (!testPreset.loadFileAsData(afterBytes)
+                || originalBytes.toBase64Encoding() != afterBytes.toBase64Encoding())
+                return 46;
+            const auto nextDuplicate = MetaTunePresetBrowser::getAvailablePresetFile(
+                testUserDirectory, "Smoke Test");
+            if (nextDuplicate.getFileName() != "Smoke Test (3).mti")
+                return 47;
         }
         testRoot.deleteRecursively();
 
