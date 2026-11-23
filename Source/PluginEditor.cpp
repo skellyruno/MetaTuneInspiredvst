@@ -1243,50 +1243,52 @@ void MetaTuneInspiredAudioProcessorEditor::drawPiano(juce::Graphics& g, juce::Re
 
     if (!privateLicensedShell.isNull())
     {
-        // The physical seven-white/five-black keyboard is baked into the
-        // original 1700x1344 shell. Never redraw an opaque 12-lane keyboard
-        // above it. Place highlights and note labels at real physical keys.
-        const int whitePitch[7] {0,2,4,5,7,9,11};
-        const int blackPitch[5] {1,3,6,8,10};
-        const int blackBoundary[5] {1,2,4,5,6};
-        const float w = (float)area.getWidth()/7.0f;
-        const float top = (float)area.getY();
-        for(int i=0;i<7;++i)
+        // Source image_021 and original ToneKeyboard coordinates confirm
+        // TWELVE equal chromatic lanes (C,C#,D,D#,E,F,F#,G,G#,A,A#,B),
+        // with the black keycaps already baked into shell.png.
+        // Do not paint the legacy opaque keys over the original texture.
+        for (int note = 0; note < 12; ++note)
         {
-            const int note=whitePitch[i];
-            const float x=(float)area.getX()+i*w;
-            const bool rootKey=note==chosenRoot, in=note==liveInputPc, out=note==liveTargetPc;
-            if(!isAllowed(note))
+            const float x=(float)area.getX()+note*laneW;
+            const float w=laneW-1.0f;
+            const bool allowed=isAllowed(note);
+            const bool rootKey=note==chosenRoot;
+            const bool in=note==liveInputPc;
+            const bool out=note==liveTargetPc;
+            const bool black=blackNote[note];
+            // The original reference illuminates natural keys in purple.
+            // Dark raised sharps retain their native texture, with a gentle
+            // tint only below the raised black cap.
+            if (black)
+            {
+                g.setColour(purple.withAlpha(allowed?0.10f:0.035f));
+                g.fillRect(x+1.0f,(float)keyTop+keyH*0.62f,
+                           w-2.0f,keyH*0.38f);
+            }
+            else
+            {
+                g.setColour(purple.withAlpha(allowed?0.35f:0.05f));
+                g.fillRect(x+1.0f,(float)keyTop,w-2.0f,(float)keyH);
+            }
+            if (!allowed)
             {
                 g.setColour(juce::Colours::black.withAlpha(0.19f));
-                g.fillRect(x+2.0f,top+54.0f,w-4.0f,(float)area.getHeight()-55.0f);
+                g.fillRect(x+1.0f,(float)keyTop,w-2.0f,(float)keyH);
             }
-            // Preserve the native key textures, shadows and divisions.
-            if(rootKey || in || out)
+            if (rootKey || in || out)
             {
-                g.setColour(out?cyan.withAlpha(0.26f):purple.withAlpha(rootKey?0.18f:0.12f));
-                g.fillRect(x+3.0f,(float)area.getBottom()-39.0f,w-6.0f,35.0f);
-                g.setColour(out?cyan:(in?pink:purple));
-                g.fillRoundedRectangle(x+w*0.25f,(float)area.getBottom()-6.0f,w*0.50f,4.0f,2.0f);
+                g.setColour(out?cyan.withAlpha(0.24f)
+                                 : purple.withAlpha(rootKey?0.19f:0.11f));
+                g.fillRect(x+2.0f,(float)area.getBottom()-43.0f,w-4.0f,39.0f);
+                g.setColour(out?cyan:(in?pink:juce::Colour(0xffd4a8ff)));
+                g.fillRoundedRectangle(x+laneW*0.25f,
+                           (float)area.getBottom()-6.0f,laneW*0.50f,4.0f,2.0f);
             }
-            g.setColour(juce::Colour(0xffe5dfeb).withAlpha(isAllowed(note)?0.94f:0.52f));
-            g.setFont(uiFont(13.0f,juce::Font::bold));
-            g.drawText(names[note],x,top+14.0f,w,25.0f,juce::Justification::centred);
-        }
-        for(int i=0;i<5;++i)
-        {
-            const int note=blackPitch[i];
-            const float centre=(float)area.getX()+blackBoundary[i]*w;
-            const bool rootKey=note==chosenRoot, in=note==liveInputPc, out=note==liveTargetPc;
-            if(rootKey || in || out)
-            {
-                g.setColour(out?cyan:(in?pink:purple));
-                g.drawRoundedRectangle(centre-w*0.30f,top+51.0f,w*0.60f,157.0f,7.0f,2.0f);
-            }
-            g.setColour(juce::Colour(0xffd2c7df).withAlpha(isAllowed(note)?0.92f:0.52f));
-            g.setFont(uiFont(12.0f,juce::Font::bold));
-            g.drawText(names[note],centre-w*0.25f,top+64.0f,w*0.50f,18.0f,
-                       juce::Justification::centred);
+            g.setColour(juce::Colour(0xffe5dfeb).withAlpha(allowed?0.97f:0.48f));
+            g.setFont(uiFont(juce::jlimit(10.0f,15.0f,(float)labelH*0.29f),
+                             juce::Font::bold));
+            g.drawText(names[note],x,(float)area.getY()+1.0f,w,
+                       (float)labelH-2.0f,juce::Justification::centred);
         }
         return;
     }
@@ -2566,30 +2568,6 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
     {
         const float keyboardX = x - 165.0f;
         const float keyboardW = 1212.0f - 165.0f;
-        if (!privateLicensedShell.isNull())
-        {
-            // Match the real seven-white/five-black keyboard in shell.png.
-            const float whiteW=keyboardW/7.0f;
-            const int whites[7] {0,2,4,5,7,9,11};
-            const int blacks[5] {1,3,6,8,10};
-            const int boundaries[5] {1,2,4,5,6};
-            int note=whites[juce::jlimit(0,6,(int)(keyboardX/whiteW))];
-            if (y >= 839.0f && y < 1035.0f)
-            {
-                for (int i=0;i<5;++i)
-                {
-                    const float center=boundaries[i]*whiteW;
-                    if (std::abs(keyboardX-center)<=whiteW*0.30f)
-                    {
-                        note=blacks[i];
-                        break;
-                    }
-                }
-            }
-            setRootNote(note);
-            processor.startTonePreview(60+note);
-            return;
-        }
         const float semitoneW = keyboardW / 12.0f;
         int note = juce::jlimit(0, 11, (int)(keyboardX / semitoneW));
         if (y >= 840.0f)
