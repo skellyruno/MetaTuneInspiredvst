@@ -20,7 +20,7 @@ juce::Image loadPrivateLicensedShell()
 {
 #if JUCE_WINDOWS && defined(SKELLTUNE_AUTO_2P5) && SKELLTUNE_AUTO_2P5
     // Use the module owning this translation unit, NOT the host EXE path.
-    static const volatile int privateSkinModuleAnchor = 0x4d543235;
+    static int privateSkinModuleAnchor = 0x4d543235;
     HMODULE module = nullptr;
     const auto anchor = reinterpret_cast<LPCWSTR>(&privateSkinModuleAnchor);
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
