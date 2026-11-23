@@ -135,6 +135,31 @@ juce::File MetaTunePresetBrowser::getUserPresetDirectory(const juce::File& root)
     return base.getChildFile("User");
 }
 
+juce::File MetaTunePresetBrowser::getAvailablePresetFile(
+    const juce::File& directory, const juce::String& requestedBaseName)
+{
+    const auto legalName = juce::File::createLegalFileName(requestedBaseName).trim();
+    const auto baseName = legalName.isEmpty() ? juce::String("New Preset") : legalName;
+    auto destination = directory.getChildFile(baseName + ".mti");
+    for (int suffix = 2; destination.exists(); ++suffix)
+    {
+        // A full or adversarially populated folder must not spin forever.
+        if (suffix > 10000)
+            return {};
+        destination = directory.getChildFile(baseName + " (" + juce::String(suffix) + ").mti");
+    }
+    return destination;
+}
+
+bool MetaTunePresetBrowser::isValidPresetData(const juce::MemoryBlock& state) const
+{
+    if (state.isEmpty() || state.getSize() > 32u * 1024u * 1024u)
+        return false;
+    std::unique_ptr<juce::XmlElement> xml(
+        juce::AudioProcessor::getXmlFromBinary(state.getData(), (int)state.getSize()));
+    return xml != nullptr && xml->hasTagName(processor.parameters.state.getType());
+}
+
 void MetaTunePresetBrowser::paint(juce::Graphics& g)
 {
     g.fillAll(juce::Colour(0xff050507).withAlpha(0.84f));
@@ -496,9 +521,7 @@ bool MetaTunePresetBrowser::loadPresetAtRow(int row)
         return false;
     }
 
-    std::unique_ptr<juce::XmlElement> xml(
-        juce::AudioProcessor::getXmlFromBinary(state.getData(), (int)state.getSize()));
-    if (xml == nullptr || !xml->hasTagName(processor.parameters.state.getType()))
+    if (!isValidPresetData(state))
     {
         showError("Invalid MetaTune preset",
                   "This file is not a valid MetaTune Inspired .mti preset.");
@@ -544,28 +567,37 @@ void MetaTunePresetBrowser::saveCurrentPreset()
             if (safeThis == nullptr)
                 return;
 
-            auto file = fc.getResult();
-            if (file != juce::File{})
+            const auto requested = fc.getResult();
+            if (requested != juce::File{})
             {
-                if (!file.getFileExtension().equalsIgnoreCase(".mti"))
-                    file = file.getParentDirectory().getChildFile(
-                        file.getFileNameWithoutExtension() + ".mti");
-
-                file.getParentDirectory().createDirectory();
-                juce::MemoryBlock state;
-                safeThis->processor.getStateInformation(state);
-                if (state.isEmpty()
-                    || !file.replaceWithData(state.getData(), state.getSize()))
+                const auto directory = requested.getParentDirectory();
+                const auto file = MetaTunePresetBrowser::getAvailablePresetFile(
+                    directory, requested.getFileNameWithoutExtension());
+                if (file == juce::File{} || !directory.createDirectory().wasOk())
                 {
                     safeThis->showError("Preset save failed",
-                        "The selected preset file could not be written.");
+                        "A unique preset filename could not be created.");
                 }
                 else
                 {
-                    safeThis->refresh();
-                    safeThis->selectFile(file);
-                    if (safeThis->onPresetLoaded)
-                        safeThis->onPresetLoaded(file);
+                    juce::MemoryBlock state;
+                    safeThis->processor.getStateInformation(state);
+                    // Never overwrite any existing .mti, including when the
+                    // chooser returned an existing filename or another instance
+                    // created the same name while the dialog was open.
+                    if (state.isEmpty() || file.exists()
+                        || !file.replaceWithData(state.getData(), state.getSize()))
+                    {
+                        safeThis->showError("Preset save failed",
+                            "The selected preset file could not be safely written.");
+                    }
+                    else
+                    {
+                        safeThis->refresh();
+                        safeThis->selectFile(file);
+                        if (safeThis->onPresetLoaded)
+                            safeThis->onPresetLoaded(file);
+                    }
                 }
             }
             safeThis->fileChooser.reset();
@@ -593,36 +625,41 @@ void MetaTunePresetBrowser::importPreset()
             const auto source = fc.getResult();
             if (source != juce::File{})
             {
+                juce::MemoryBlock importedState;
                 if (!source.existsAsFile()
-                    || !source.getFileExtension().equalsIgnoreCase(".mti"))
+                    || !source.getFileExtension().equalsIgnoreCase(".mti")
+                    || source.getSize() <= 0
+                    || source.getSize() > 32 * 1024 * 1024
+                    || !source.loadFileAsData(importedState)
+                    || !safeThis->isValidPresetData(importedState))
                 {
-                    safeThis->showError("Unsupported preset",
-                        "Choose a MetaTune Inspired .mti preset file.");
+                    safeThis->showError("Invalid MetaTune preset",
+                        "Choose a readable .mti file with a valid MetaTune Inspired state.");
                 }
                 else
                 {
                     const auto userDirectory =
                         MetaTunePresetBrowser::getUserPresetDirectory(safeThis->libraryDirectory);
-                    userDirectory.createDirectory();
-
-                    auto destination = userDirectory.getChildFile(source.getFileName());
-                    int suffix = 2;
-                    while (destination.existsAsFile())
-                    {
-                        destination = userDirectory.getChildFile(
-                            source.getFileNameWithoutExtension()
-                            + " (" + juce::String(suffix++) + ").mti");
-                    }
-
-                    if (!source.copyFileTo(destination))
+                    if (!userDirectory.createDirectory().wasOk())
                     {
                         safeThis->showError("Preset import failed",
-                            "The preset could not be copied into the local library.");
+                            "The local User preset folder could not be created.");
                     }
                     else
                     {
-                        safeThis->refresh();
-                        safeThis->selectFile(destination);
+                        const auto destination = MetaTunePresetBrowser::getAvailablePresetFile(
+                            userDirectory, source.getFileNameWithoutExtension());
+                        if (destination == juce::File{} || destination.exists()
+                            || !source.copyFileTo(destination))
+                        {
+                            safeThis->showError("Preset import failed",
+                                "The preset could not be safely copied into the local library.");
+                        }
+                        else
+                        {
+                            safeThis->refresh();
+                            safeThis->selectFile(destination);
+                        }
                     }
                 }
             }
