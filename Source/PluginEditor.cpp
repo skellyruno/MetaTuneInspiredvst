@@ -177,6 +177,12 @@ bool drawLicensedIcon(juce::Graphics& g,int index,juce::Rectangle<float> r,juce:
     return true;
 }
 
+// Source BrowsersAndOrbContainer: 42px padding, 190px panel, 368px height.
+// Shared rectangles for display and pointer actions.
+const juce::Rectangle<float> privateBrowserArea(67.5f,75.5f,305.0f,590.0f);
+const juce::Rectangle<float> privateScaleArea(0,729,163,310);
+juce::Rectangle<float> browserRow(int i){return {74.5f,230.0f+i*31.0f,291.0f,30.0f};}
+const char* const shortScaleNames[]={"Chromatic","Major","Minor","Harm. Min","Maj. Pent","Min. Pent","Blues","Dorian","Custom"};
 struct LicensedKey
 {
     int svg;
@@ -1442,6 +1448,13 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     {
         privateAssetGallery = std::make_unique<PrivateAssetGallery>();
         addChildComponent(*privateAssetGallery);
+        presetSearch.setName("Preset search");
+        presetSearch.setTextToShowWhenEmpty("Search presets",muted);
+        presetSearch.setColour(juce::TextEditor::backgroundColourId,juce::Colour(0xff18171c));
+        presetSearch.setColour(juce::TextEditor::textColourId,text);
+        presetSearch.setColour(juce::TextEditor::outlineColourId,juce::Colour(0xff55515a));
+        presetSearch.onTextChange=[this]{presetPage=0;refreshPrivatePresets();};
+        addChildComponent(presetSearch);
     }
 #if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
     addAndMakeVisible(abEngine);
@@ -1902,7 +1915,7 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
             return drawLicensedIcon(g,index,bounds,colour);
         };
         icon(19,header("SlateDigitalLogo",{3,8,63,48}),34.0f,hotInk);
-        icon(5,header("OpenCloseBrowser",{68,8,72,48}),28.0f,ink);
+        icon(presetBrowserOpen?4:5,header("OpenCloseBrowser",{68,8,72,48}),28.0f,presetBrowserOpen?hotInk:ink);
         const auto preset=header("CurrentPreset",{142,8,291,48});
         const auto presetText=preset.withTrimmedRight(54.0f).reduced(11.0f,3.0f);
         g.setColour(ink);g.setFont(uiFont(16.0f,juce::Font::italic));
@@ -1925,8 +1938,8 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
             g.setColour(hotInk);g.setFont(uiFont(26.0f,juce::Font::bold));
             g.drawFittedText("metaTune",mark.toNearestInt(),juce::Justification::centred,1);
         }
-        icon(28,header("Undo",{976,8,58,48}),22.0f,hasUndoState?ink:disabledInk);
-        icon(22,header("Redo",{1034,8,58,48}),22.0f,hasRedoState?ink:disabledInk);
+        icon(hasUndoState?80:28,header("Undo",{976,8,58,48}),22.0f,hasUndoState?hotInk:disabledInk);
+        icon(hasRedoState?81:22,header("Redo",{1034,8,58,48}),22.0f,hasRedoState?hotInk:disabledInk);
         icon(23,header("Reset",{1092,8,54,48}),25.0f,ink);
         const auto ar=header("AButton",{1147,8,51,48});
         const auto br=header("BButton",{1242,8,51,48});
@@ -2119,6 +2132,8 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     constexpr float orbCentreX = 470.0f, orbCentreY = 365.0f;
 
     g.saveState();
+    if(hasOriginalArtwork&&presetBrowserOpen)
+        g.addTransform(juce::AffineTransform::scale(0.76f,0.76f,orbCentreX,orbCentreY).translated(190,0));
     g.addTransform(juce::AffineTransform::scale(orbScale, orbScale,
                                                orbCentreX, orbCentreY));
 
@@ -2161,6 +2176,9 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
             purple.withAlpha(0.20f+0.14f*inputActivity),470.0f,365.0f,
             purple.withAlpha(0.0f),690.0f,365.0f,true));
         g.fillEllipse(238.0f,138.0f,465.0f,460.0f);
+        juce::ColourGradient glass(juce::Colour(0xffb3a4dd).withAlpha(0.14f),327,171,
+            juce::Colours::black.withAlpha(0.22f),602,568,false);
+        g.setGradientFill(glass);g.fillEllipse(238.0f,138.0f,465.0f,460.0f);
         g.restoreState();
     }
     else
@@ -2576,6 +2594,24 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     {
         g.setColour(juce::Colour(0xff18181b)); g.fillRoundedRectangle(0,150,58,430,18.0f);
     }
+    if(hasOriginalArtwork)
+    {
+        for(int i=0;i<=4;++i)
+        {
+            const auto r=juce::Rectangle<float>(2,147.5f+i*86.0f,55,84);
+            const bool active=processor.getNoteGroup()==i;
+            if(active){g.setColour(purple.withAlpha(0.20f));g.fillRoundedRectangle(r.reduced(2),6);}
+            g.setColour(active?purple:muted);
+            if(i==0)drawLicensedIcon(g,11,r.withSizeKeepingCentre(22,28),active?purple:muted);
+            else
+            {
+                g.setFont(uiFont(22,juce::Font::bold));g.drawText(juce::String(i),r.withTrimmedTop(9),juce::Justification::centred);
+                g.setFont(uiFont(11));g.drawText(juce::String(MetaTuneInspiredAudioProcessor::getNoteGroupCount(i)),r.withHeight(20).withTrimmedLeft(30),juce::Justification::centred);
+            }
+        }
+    }
+    else
+    {
     g.setColour(purple); g.setFont(uiFont(15.0f,juce::Font::bold));
     g.drawText("NOTES",5,170,48,40,juce::Justification::centred);
     g.setColour(muted); g.setFont(uiFont(19.0f,juce::Font::bold));
@@ -2594,6 +2630,8 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     }
     g.setColour(purple); g.setFont(uiFont(14.0f,juce::Font::bold));
     for(int i=0;i<4;++i) g.drawText(i == activeNoteGroup ? "1" : "0",30,206+i*91,24,18,juce::Justification::centred);
+
+    }
 
     // Doubler dot from the guide: drag left/right for width, up/down for wet/dry.
     const float doublerDotX = 120.0f + doublerWidth * 100.0f;
@@ -2794,7 +2832,8 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
         g.fillRoundedRectangle(pitch.getX()+2.0f+t*(pitch.getWidth()-8.0f),
             pitch.getY()+2.0f,4.0f,pitch.getHeight()-4.0f,2.0f);
         const float cents=1200.0f*std::log2(pitchReferenceHz/440.0f);
-        const auto centsText=(cents>=0?juce::String("+"):juce::String())+juce::String(cents,0)+" ct";
+        const int roundedCents=juce::roundToInt(cents);
+        const auto centsText=(roundedCents>0?juce::String("+"):juce::String())+juce::String(roundedCents)+" ct";
         g.setColour(text);g.setFont(uiFont(13.0f));
         g.drawFittedText(centsText,rect("PitchCentsEditor",{1213,1038,63,21}).toNearestInt(),
                          juce::Justification::centred,1);
@@ -2905,6 +2944,7 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.setFont(uiFont(15.0f, juce::Font::bold));
     g.drawText("Chromatic", 24, 1052, 112, 26, juce::Justification::centredLeft);
     }
+    if(hasOriginalArtwork)drawPrivateBrowsers(g);
 }
 
 
@@ -2919,6 +2959,7 @@ void MetaTuneInspiredAudioProcessorEditor::setRootNote(int noteIndex)
     }
     selectedNoteIndex = next;
     root.setSelectedItemIndex(selectedNoteIndex, juce::sendNotificationSync);
+    processor.publishGroupKeyScale();
     repaint();
 }
 
@@ -2934,9 +2975,239 @@ void MetaTuneInspiredAudioProcessorEditor::setScaleMode(int modeIndex)
         hasRedoState = false;
         scale.setSelectedItemIndex(index, juce::sendNotificationSync);
     }
+    processor.publishGroupKeyScale();
     repaint();
 }
 
+juce::File MetaTuneInspiredAudioProcessorEditor::presetDirectory() const
+{
+    return juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+        .getChildFile("MetaTuneInspired").getChildFile("Presets");
+}
+void MetaTuneInspiredAudioProcessorEditor::refreshPrivatePresets()
+{
+    juce::Array<juce::File> files;
+    const auto dir=presetDirectory();
+    if(dir.isDirectory())dir.findChildFiles(files,juce::File::findFiles,true,"*.mti");
+    // Stable alphabetic order, including bank path.
+    struct Compare { int compareElements(const juce::File& a,const juce::File& b) const
+        {return a.getFullPathName().compareNatural(b.getFullPathName());} } compare;
+    files.sort(compare);
+    filteredPresets.clear();
+    const auto query=presetSearch.getText().trim();
+    for(const auto& f:files)
+        if((!selectedBank.isDirectory()||f.isAChildOf(selectedBank))
+           &&(query.isEmpty()||f.getFullPathName().containsIgnoreCase(query))
+           &&(!favoritesOnly||favoritePresets.contains(f.getFullPathName())))
+            filteredPresets.add(f);
+    presetPage=juce::jlimit(0,juce::jmax(0,(filteredPresets.size()-1)/12),presetPage);
+    repaint();
+}
+void MetaTuneInspiredAudioProcessorEditor::openPrivateBrowser(int tab)
+{
+    if(!presetBrowserOpen)
+        favoritePresets=juce::StringArray::fromLines(presetDirectory().getChildFile("favorites.txt").loadFileAsString());
+    presetBrowserOpen=true;browserTab=juce::jlimit(0,1,tab);
+    refreshPrivatePresets();resized();repaint();
+}
+bool MetaTuneInspiredAudioProcessorEditor::recallPrivatePreset(const juce::File& file)
+{
+    juce::MemoryBlock bytes;
+    if(!file.existsAsFile()||file.getSize()>4*1024*1024||!file.loadFileAsData(bytes))return false;
+    const auto xml=juce::AudioProcessor::getXmlFromBinary(bytes.getData(),(int)bytes.getSize());
+    if(!xml||!xml->hasTagName(processor.parameters.state.getType()))return false;
+    auto incoming=juce::ValueTree::fromXml(*xml);
+    if(!incoming.isValid())return false;
+    juce::StringArray ids{"root","scale"};
+    for(int i=0;i<12;++i)ids.add("customDegree"+juce::String(i));
+    std::array<float,14> old{};
+    for(int i=0;i<ids.size();++i)
+        if(auto* param=processor.parameters.getParameter(ids[i]))old[(size_t)i]=param->getValue();
+    undoState=processor.parameters.copyState();hasUndoState=true;hasRedoState=false;
+    processor.parameters.replaceState(incoming);
+    if(keepPresetScale)
+        for(int i=0;i<ids.size();++i)
+            if(auto* param=processor.parameters.getParameter(ids[i]))param->setValueNotifyingHost(old[(size_t)i]);
+    selectedPresetFile=file;selectedPresetName=file.getFileNameWithoutExtension();
+    processor.publishGroupKeyScale();repaint();return true;
+}
+void MetaTuneInspiredAudioProcessorEditor::stepPrivatePreset(int delta)
+{
+    refreshPrivatePresets();if(filteredPresets.isEmpty())return;
+    int i=filteredPresets.indexOf(selectedPresetFile);
+    i=i<0?(delta>0?0:filteredPresets.size()-1):(i+delta+filteredPresets.size())%filteredPresets.size();
+    if(recallPrivatePreset(filteredPresets[i]))presetPage=i/12;
+}
+void MetaTuneInspiredAudioProcessorEditor::toggleCustomDegree(int note)
+{
+    std::array<bool,12> current{};
+    for(int i=0;i<12;++i)
+        if(auto* raw=processor.parameters.getRawParameterValue("customDegree"+juce::String(i)))current[(size_t)i]=raw->load()>0.5f;
+    const int rootNote=juce::jlimit(0,11,selectedNoteIndex);
+    const int mask=autotune::scaleMask(static_cast<autotune::Scale>(juce::jlimit(0,8,scale.getSelectedItemIndex())),current);
+    const int next=mask^(1<<((note-rootNote+12)%12));
+    if(next==0)return;
+    undoState=processor.parameters.copyState();hasUndoState=true;hasRedoState=false;
+    for(int i=0;i<12;++i)
+        if(auto* param=processor.parameters.getParameter("customDegree"+juce::String(i)))param->setValueNotifyingHost((next&(1<<i))?1.0f:0.0f);
+    scale.setSelectedItemIndex(8,juce::sendNotificationSync);
+    processor.publishGroupKeyScale();repaint();
+}
+void MetaTuneInspiredAudioProcessorEditor::drawPrivateBrowsers(juce::Graphics& g)
+{
+    const auto ink=juce::Colour(0xffc5becb),accent=juce::Colour(0xffd1b6ff);
+    const auto tile=[&](juce::Rectangle<float> r,const juce::String& label,bool active){
+        g.setColour(active?juce::Colour(0xff4d3c61):juce::Colour(0xff29272e));
+        g.fillRoundedRectangle(r.reduced(1),4);g.setColour(active?accent:ink);
+        g.setFont(uiFont(13,juce::Font::bold));
+        g.drawFittedText(label,r.reduced(3).toNearestInt(),juce::Justification::centred,1);
+    };
+    const auto glyph=[&](int id,juce::Rectangle<float> r,bool active=false){
+        drawLicensedIcon(g,id,r.withSizeKeepingCentre(18,18),active?accent:ink);
+    };
+    if(presetBrowserOpen)
+    {
+        const auto r=privateBrowserArea;
+        g.setColour(juce::Colour(0xff1d1b22));g.fillRoundedRectangle(r,7);
+        g.setColour(juce::Colour(0xff49434e));g.drawRoundedRectangle(r,7,1);
+        tile({71,80,147,38},"Presets",browserTab==0);tile({220,80,147,38},"Groups",browserTab==1);
+        if(browserTab==0)
+        {
+            const char* labels[]={"Home","Bank","Save","Import","Favorites"};
+            const int icons[]={93,85,88,72,favoritesOnly?90:89};
+            for(int i=0;i<5;++i)
+            {
+                const auto a=juce::Rectangle<float>(73+i*59.0f,123,58,42);
+                glyph(icons[i],a.withHeight(23),i==4&&favoritesOnly);
+                g.setColour(ink);g.setFont(uiFont(10.5f));
+                g.drawText(labels[i],a.withTrimmedTop(23),juce::Justification::centred);
+            }
+            glyph(91,{74,173,26,31});glyph(70,{338,173,26,31});
+            g.setColour(ink);g.setFont(uiFont(12));
+            g.drawFittedText(selectedBank.isDirectory()?selectedBank.getFileName():"All banks",
+                juce::Rectangle<int>(76,208,174,20),juce::Justification::centredLeft,1);
+            glyph(87,{257,206,22,24},keepPresetScale);
+            tile({279,207,86,22},"Keep scale",keepPresetScale);
+            if(filteredPresets.isEmpty())
+            {
+                g.setColour(muted);g.setFont(uiFont(14));
+                g.drawFittedText("No matching presets.\nImport or save an .mti preset.",
+                    juce::Rectangle<int>(83,271,273,76),juce::Justification::centred,3);
+            }
+            for(int i=0;i<12;++i)
+            {
+                const int index=presetPage*12+i;if(index>=filteredPresets.size())break;
+                const auto f=filteredPresets[index];const auto a=browserRow(i);
+                g.setColour(f==selectedPresetFile?juce::Colour(0xff443454):juce::Colour(0xff25232a));g.fillRoundedRectangle(a,3);
+                glyph(f.getParentDirectory()==presetDirectory()?73:84,a.withWidth(27));
+                g.setColour(text);g.setFont(uiFont(13));
+                const auto label=f.getParentDirectory()==presetDirectory()?f.getFileNameWithoutExtension():
+                    f.getParentDirectory().getFileName()+" / "+f.getFileNameWithoutExtension();
+                g.drawFittedText(label,a.withTrimmedLeft(30).withTrimmedRight(28).toNearestInt(),juce::Justification::centredLeft,1);
+                glyph(favoritePresets.contains(f.getFullPathName())?90:89,a.withX(a.getRight()-28).withWidth(28),favoritePresets.contains(f.getFullPathName()));
+            }
+            glyph(18,{78,610,40,42});glyph(17,{324,610,40,42});
+            g.setColour(ink);g.setFont(uiFont(12));
+            g.drawText(juce::String(presetPage+1)+" / "+juce::String(juce::jmax(1,(filteredPresets.size()+11)/12)),120,610,204,42,juce::Justification::centred);
+        }
+        else
+        {
+            g.setColour(ink);g.setFont(uiFont(14));
+            g.drawFittedText("Key and scale links\nSame process • session only",
+                juce::Rectangle<int>(83,127,273,65),juce::Justification::centred,3);
+            for(int i=0;i<=4;++i)
+            {
+                const auto a=juce::Rectangle<float>(76,206+i*67.0f,288,59);
+                tile(a,i==0?"Ungrouped":"Group "+juce::String(i)+"   •   "+juce::String(MetaTuneInspiredAudioProcessor::getNoteGroupCount(i)),processor.getNoteGroup()==i);
+                glyph(i==0?11:9,a.withWidth(39),processor.getNoteGroup()==i);
+            }
+            g.setColour(muted);g.setFont(uiFont(12));
+            g.drawFittedText("Share explicit key and scale edits. Speed, amount and sustain stay independent.",
+                juce::Rectangle<int>(88,555,264,91),juce::Justification::centred,4);
+        }
+    }
+    if(scaleBrowserOpen)
+    {
+        g.setColour(juce::Colour(0xff1c1a21));g.fillRect(privateScaleArea);
+        tile({2,731,79,24},"#",!flatNotes);tile({82,731,79,24},"b",flatNotes);
+        const int flats[]={55,58,57,61,60,62,65,64,51,50,54,53};
+        const char* names[]={"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
+        for(int i=0;i<12;++i)
+        {
+            const auto a=juce::Rectangle<float>(3+(i%3)*53.0f,758+(i/3)*34.0f,52,33);
+            const auto& original=flatNotes?licensedIcon(flats[i]):privateNoteGlyph(i);
+            tile(a,original.isNull()?names[i]:"",i==selectedNoteIndex);
+            if(!original.isNull())
+            {
+                const auto b=a.withSizeKeepingCentre(20,20).toNearestInt();g.setColour(i==selectedNoteIndex?accent:ink);
+                g.drawImageWithin(original,b.getX(),b.getY(),b.getWidth(),b.getHeight(),juce::RectanglePlacement::centred,true);
+            }
+        }
+        for(int i=0;i<8;++i)tile({3+(i%2)*79.0f,897+(i/2)*27.0f,78,26},shortScaleNames[i],scale.getSelectedItemIndex()==i);
+        tile({3,1006,157,28},"Custom",scale.getSelectedItemIndex()==8);
+    }
+}
+bool MetaTuneInspiredAudioProcessorEditor::privateBrowserMouse(juce::Point<float> point)
+{
+    const float x=point.x,y=point.y;
+    if(presetBrowserOpen&&privateBrowserArea.contains(point))
+    {
+        if(y<118)openPrivateBrowser(x<220?0:1);
+        else if(browserTab==1)
+        {
+            if(y>=206&&y<541)processor.setNoteGroup(juce::jlimit(0,4,(int)((y-206)/67)));
+        }
+        else if(y>=123&&y<165)
+        {
+            const int button=juce::jlimit(0,4,(int)((x-73)/59));
+            if(button==0){selectedBank=juce::File{};favoritesOnly=false;presetSearch.clear();presetPage=0;refreshPrivatePresets();}
+            if(button==1)
+            {
+                auto dir=presetDirectory();
+                if(dir.createDirectory().wasOk())
+                {
+                    auto bank=dir.getNonexistentChildFile("Bank","",true);
+                    if(bank.createDirectory().wasOk()){selectedBank=bank;refreshPrivatePresets();}
+                }
+            }
+            if(button==2)savePresetToFile();
+            if(button==3)loadPresetFromFile();
+            if(button==4){favoritesOnly=!favoritesOnly;presetPage=0;refreshPrivatePresets();}
+        }
+        else if(y>=173&&y<204&&x>338)presetSearch.clear();
+        else if(y>=205&&y<230&&x>251)keepPresetScale=!keepPresetScale;
+        else if(y>=230&&y<602)
+        {
+            const int index=presetPage*12+(int)((y-230)/31);
+            if(index>=0&&index<filteredPresets.size())
+            {
+                const auto file=filteredPresets[index];
+                if(x>337)
+                {
+                    const auto path=file.getFullPathName();
+                    if(favoritePresets.contains(path))favoritePresets.removeString(path);
+                    else favoritePresets.addIfNotAlreadyThere(path);
+                    if(presetDirectory().createDirectory().wasOk())
+                        presetDirectory().getChildFile("favorites.txt").replaceWithText(favoritePresets.joinIntoString("\n"));
+                    refreshPrivatePresets();
+                }
+                else if(!recallPrivatePreset(file))
+                    juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,"Preset not loaded","Not a valid .mti preset.");
+            }
+        }
+        else if(y>=610){presetPage+=x<119?-1:(x>324?1:0);refreshPrivatePresets();}
+        repaint();return true;
+    }
+    if(scaleBrowserOpen&&privateScaleArea.contains(point))
+    {
+        if(y<757)flatNotes=x>=81;
+        else if(y<894)setRootNote(juce::jlimit(0,11,(int)((y-758)/34)*3+(int)(x/53)));
+        else if(y>=897&&y<1005)setScaleMode(juce::jlimit(0,7,(int)((y-897)/27)*2+(int)(x/80)));
+        else if(y>=1006)setScaleMode(8);
+        repaint();return true;
+    }
+    return false;
+}
 void MetaTuneInspiredAudioProcessorEditor::openHeaderMenu()
 {
     juce::PopupMenu menu;
@@ -3011,8 +3282,9 @@ void MetaTuneInspiredAudioProcessorEditor::openHeaderMenu()
 void MetaTuneInspiredAudioProcessorEditor::savePresetToFile()
 {
     if (saveChooser != nullptr) return;
+    presetDirectory().createDirectory();
     saveChooser = std::make_shared<juce::FileChooser>("Save MetaTune Inspired preset",
-        juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("MetaTuneInspired.mti"), "*.mti");
+        (selectedBank.isDirectory()?selectedBank:presetDirectory()).getChildFile("MetaTuneInspired.mti"), "*.mti");
     auto chooser = saveChooser;
     juce::Component::SafePointer<MetaTuneInspiredAudioProcessorEditor> safeThis(this);
     chooser->launchAsync(juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles,
@@ -3029,7 +3301,9 @@ void MetaTuneInspiredAudioProcessorEditor::savePresetToFile()
                                                            "The selected preset file could not be written.");
                 else
                 {
+                    safeThis->selectedPresetFile=file;
                     safeThis->selectedPresetName = file.getFileNameWithoutExtension();
+                    safeThis->refreshPrivatePresets();
                     safeThis->repaint();
                     juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "Preset saved",
                                                            "Preset state saved successfully.");
@@ -3054,16 +3328,15 @@ void MetaTuneInspiredAudioProcessorEditor::loadPresetFromFile()
             const auto file = fc.getResult();
             if (file.existsAsFile())
             {
-                juce::MemoryBlock block;
-                if (file.loadFileAsData(block))
+                if(safeThis->recallPrivatePreset(file))
                 {
-                    safeThis->processor.setStateInformation(block.getData(), (int)block.getSize());
-                    safeThis->selectedPresetName = file.getFileNameWithoutExtension();
-                    safeThis->selectedNoteIndex = juce::jlimit(0, 11, safeThis->root.getSelectedItemIndex());
-                    if (safeThis->scale.getSelectedItemIndex() != 0)
-                        safeThis->lastNonChromaticScaleMode = safeThis->scale.getSelectedItemIndex();
-
-                    safeThis->repaint();
+                    auto dir=safeThis->presetDirectory();
+                    if(dir.createDirectory().wasOk()&&!file.isAChildOf(dir))
+                    {
+                        const auto target=dir.getNonexistentChildFile(file.getFileNameWithoutExtension(),".mti",false);
+                        if(file.copyFileTo(target))safeThis->selectedPresetFile=target;
+                    }
+                    safeThis->refreshPrivatePresets();
                 }
                 else
                 {
@@ -3155,17 +3428,32 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
     const float x = event.position.x / juce::jmax(0.0001f, sx);
     const float y = event.position.y / juce::jmax(0.0001f, sy);
 
+    if(!privateLicensedShell.isNull())
+    {
+        if(privateBrowserMouse({x,y}))return;
+        if(x<60&&y>=147.5f&&y<577.5f){processor.setNoteGroup(juce::jlimit(0,4,(int)((y-147.5f)/86)));repaint();return;}
+        if(event.mods.isRightButtonDown())
+        {
+            const int note=licensedPianoHit({x,y});
+            if(note>=0){toggleCustomDegree(note);return;}
+        }
+    }
     // Licensed controls use exactly the same source rectangles as paint().
     if (!privateLicensedShell.isNull() && y >= 0.0f && y < 59.0f)
     {
         const juce::Point<float> p(x,y);
         const auto hit=[&](const char* name,juce::Rectangle<float> fallback)
         { return licensedWidgetBounds(name,fallback).contains(p); };
-        if(hit("OpenCloseBrowser",{68,8,72,48})) { openHeaderMenu(); return; }
+        if(hit("OpenCloseBrowser",{68,8,72,48}))
+        {
+            if(presetBrowserOpen){presetBrowserOpen=false;resized();repaint();}
+            else openPrivateBrowser(0);
+            return;
+        }
         if(hit("CurrentPreset",{142,8,291,48}))
         {
-            if(x>=389.0f) setRootNote((selectedNoteIndex+(y<30.0f?1:-1)+12)%12);
-            else loadPresetFromFile();
+            if(x>=389.0f)stepPrivatePreset(y<30.0f?-1:1);
+            else openPrivateBrowser(0);
             return;
         }
         if(hit("SaveCurrentPreset",{433,8,73,48})) { savePresetToFile(); return; }
@@ -3306,8 +3594,9 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
 
     // The guide documents orb gestures as alternate ways to adjust Speed and Amount.
     // Drag the small inner globe for Speed; drag the frosted outer shell for Amount.
-    const float orbDx = x - 470.0f;
-    const float orbDy = y - 365.0f;
+    const float browserOrbScale=(!privateLicensedShell.isNull()&&presetBrowserOpen)?0.76f:1.0f;
+    const float orbDx=(x-(browserOrbScale<1.0f?660.0f:470.0f))/browserOrbScale;
+    const float orbDy=(y-365.0f)/browserOrbScale;
     const float drawnOrbRadius = std::sqrt(orbDx * orbDx + orbDy * orbDy);
     const float amountNormForHitTest = juce::jlimit(0.0f, 1.0f, (float)amount.getValue() / 100.0f);
     const float orbHitScale = 0.86f + 0.14f * amountNormForHitTest;
@@ -3443,7 +3732,7 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
                 if(y<key.getY()+103.0f)setRootNote((selectedNoteIndex+step+12)%12);
                 else setScaleMode((scale.getSelectedItemIndex()+step+9)%9);
             }
-            else openHeaderMenu();
+            else {scaleBrowserOpen=!scaleBrowserOpen;repaint();}
             return;
         }
         const auto tone=licensedWidgetBounds("ToneVolumeSlider",{8,826,148,19});
@@ -3570,11 +3859,14 @@ void MetaTuneInspiredAudioProcessorEditor::resized()
     // The only visible performance toggle is Low Latency.
     lowLatency.setBounds(px(983), py(686), px(180), py(35));
 #endif
-    noteReadout.setBounds(px(360), py(365), px(230), py(70));
+    noteReadout.setBounds(px(presetBrowserOpen?572:360),py(365),px(presetBrowserOpen?176:230),py(70));
     // The status line was behind the moveable Doubler dot at y~620.
     status.setBounds(px(32), py(642), px(600), py(24));
     if (privateAssetGallery != nullptr)
         privateAssetGallery->setBounds(getLocalBounds());
+    presetSearch.setBounds(px(102),py(173),px(233),py(31));
+    presetSearch.setFont(uiFont(juce::jmax(9.0f,14.0f*juce::jmin(sx,sy))));
+    presetSearch.setVisible(!privateLicensedShell.isNull()&&presetBrowserOpen&&browserTab==0);
     const float uiScale = juce::jmin(sx, sy);
     noteReadout.setFont(uiFont(juce::jlimit(16.0f, 42.0f, 42.0f * uiScale),
                               juce::Font::bold));
@@ -3658,6 +3950,7 @@ void MetaTuneInspiredAudioProcessorEditor::timerCallback()
             sustain.setValue(signedValue, juce::dontSendNotification);
     }
 
+    processor.syncGroupKeyScale();
     pitchReferenceHz = processor.getPitchReferenceHz();
     if(auto* rawTone=processor.parameters.getRawParameterValue("toneVolume"))
         toneVolume=juce::jlimit(0.0f,1.0f,rawTone->load(std::memory_order_relaxed)/100.0f);

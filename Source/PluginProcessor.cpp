@@ -31,6 +31,68 @@ MetaTuneInspiredAudioProcessor::MetaTuneInspiredAudioProcessor()
     toneVolumeParameter = parameters.getRawParameterValue("toneVolume");
 }
 
+namespace {
+struct NoteGroupState { std::atomic<int> members{0}; std::atomic<std::uint64_t> state{0}; };
+std::array<NoteGroupState,5> noteGroups;
+}
+MetaTuneInspiredAudioProcessor::~MetaTuneInspiredAudioProcessor()
+{
+    stopTimer();
+    const auto g=noteGroup.exchange(0);
+    if(g>0&&g<=4)noteGroups[(size_t)g].members.fetch_sub(1);
+}
+int MetaTuneInspiredAudioProcessor::getNoteGroupCount(int g) noexcept
+{
+    return g>0&&g<=4?juce::jmax(0,noteGroups[(size_t)g].members.load()):0;
+}
+void MetaTuneInspiredAudioProcessor::setNoteGroup(int requested)
+{
+    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    const int next=juce::jlimit(0,4,requested),old=noteGroup.exchange(next);
+    if(old==next)return;
+    if(old>0)noteGroups[(size_t)old].members.fetch_sub(1);
+    lastGroupState=0;
+    if(next>0)
+    {
+        if(noteGroups[(size_t)next].members.fetch_add(1)==0)publishGroupKeyScale();
+        else syncGroupKeyScale();
+    }
+}
+void MetaTuneInspiredAudioProcessor::publishGroupKeyScale()
+{
+    const int g=getNoteGroup();
+    if(g==0)return;
+    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    const auto value=[this](const juce::String& id){
+        if(auto* raw=parameters.getRawParameterValue(id))return juce::roundToInt(raw->load());
+        return 0;
+    };
+    std::uint64_t payload=(std::uint64_t)juce::jlimit(0,11,value("root"))
+        |((std::uint64_t)juce::jlimit(0,8,value("scale"))<<4);
+    for(int i=0;i<12;++i)
+        if(value("customDegree"+juce::String(i)))payload|=std::uint64_t(1)<<(8+i);
+    auto& state=noteGroups[(size_t)g].state;
+    lastGroupState=(((state.load()>>20)+1)<<20)|payload;
+    state.store(lastGroupState);
+}
+void MetaTuneInspiredAudioProcessor::syncGroupKeyScale()
+{
+    const int g=getNoteGroup();
+    if(g==0)return;
+    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    const auto state=noteGroups[(size_t)g].state.load();
+    if(state==0||state==lastGroupState)return;
+    lastGroupState=state;
+    const auto set=[this](const juce::String& id,int value){
+        if(auto* param=parameters.getParameter(id)){
+            const float normal=param->convertTo0to1((float)value);
+            if(std::abs(param->getValue()-normal)>0.00001f)param->setValueNotifyingHost(normal);
+        }
+    };
+    for(int i=0;i<12;++i)set("customDegree"+juce::String(i),(int)((state>>(8+i))&1));
+    set("root",(int)(state&15));set("scale",(int)((state>>4)&15));
+}
+
 float MetaTuneInspiredAudioProcessor::speedControlToMilliseconds(float controlValue) noexcept
 {
     const float p = juce::jlimit(0.0f, 100.0f, controlValue);
@@ -186,6 +248,7 @@ void MetaTuneInspiredAudioProcessor::releaseResources()
 
 void MetaTuneInspiredAudioProcessor::timerCallback()
 {
+    syncGroupKeyScale();
     if (! latencyPrepared.load(std::memory_order_acquire)) return;
 #if defined(SKELLTUNE_LIVE_FIXED_LOW_LATENCY) && SKELLTUNE_LIVE_FIXED_LOW_LATENCY
     const bool live = true;

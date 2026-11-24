@@ -26,6 +26,21 @@ private:
     void openHeaderMenu();
     void savePresetToFile();
     void loadPresetFromFile();
+    void openPrivateBrowser(int tab);
+    void refreshPrivatePresets();
+    void drawPrivateBrowsers(juce::Graphics&);
+    bool privateBrowserMouse(juce::Point<float>);
+    bool recallPrivatePreset(const juce::File&);
+    void stepPrivatePreset(int);
+    void toggleCustomDegree(int);
+    juce::File presetDirectory() const;
+    bool presetBrowserOpen=false,scaleBrowserOpen=false,flatNotes=false;
+    bool keepPresetScale=false,favoritesOnly=false;
+    int browserTab=0,presetPage=0;
+    juce::TextEditor presetSearch;
+    juce::Array<juce::File> filteredPresets;
+    juce::StringArray favoritePresets;
+    juce::File selectedPresetFile,selectedBank;
 
     MetaTuneInspiredAudioProcessor& processor;
     // Loaded on the message thread once per editor, not reloaded on paint.

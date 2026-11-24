@@ -22,6 +22,27 @@ int main(int argc,char**argv)
             if (child->getName()=="Licensed resource audit") privateLoaded=true;
     std::printf("private_skin_loaded=%d\n",privateLoaded?1:0);
     if (requirePrivate && !privateLoaded) return 3;
+    {
+        MetaTuneInspiredAudioProcessor follower;
+        processor.setNoteGroup(1);follower.setNoteGroup(1);
+        if(MetaTuneInspiredAudioProcessor::getNoteGroupCount(1)!=2)return 12;
+        auto* root=processor.parameters.getParameter("root");
+        auto* scale=processor.parameters.getParameter("scale");
+        if(!root||!scale)return 13;
+        root->setValueNotifyingHost(root->convertTo0to1(7));
+        scale->setValueNotifyingHost(scale->convertTo0to1(6));
+        processor.publishGroupKeyScale();follower.syncGroupKeyScale();
+        if(juce::roundToInt(follower.parameters.getRawParameterValue("root")->load())!=7||
+           juce::roundToInt(follower.parameters.getRawParameterValue("scale")->load())!=6)return 14;
+        follower.setNoteGroup(0);
+        root->setValueNotifyingHost(root->convertTo0to1(4));
+        scale->setValueNotifyingHost(scale->convertTo0to1(0));
+        processor.publishGroupKeyScale();follower.syncGroupKeyScale();
+        if(juce::roundToInt(follower.parameters.getRawParameterValue("root")->load())!=7)return 15;
+        processor.setNoteGroup(0);
+        if(MetaTuneInspiredAudioProcessor::getNoteGroupCount(1)!=0)return 16;
+        std::printf("group_link_and_leave_passed=1\n");
+    }
     const auto output=juce::File::getCurrentWorkingDirectory().getChildFile("ui_shots");
     if (output.createDirectory().failed()) return 4;
 
@@ -82,6 +103,23 @@ int main(int argc,char**argv)
             std::printf("keyboard_hits_passed=%dx%d (24 original regions)\n",size.x,size.y);
         }
         if(!capture("MetaTune_"+juce::String(size.x)+"x"+juce::String(size.y)+".png")) return 10;
+    }
+    if(privateLoaded)
+    {
+        const auto tap=[&](float x,float y){
+            juce::Point<float> p(x*editor->getWidth()/1366.0f,y*editor->getHeight()/1080.0f);
+            auto source=juce::Desktop::getInstance().getMainMouseSource();auto now=juce::Time::getCurrentTime();
+            juce::MouseEvent down(source,p,juce::ModifierKeys(juce::ModifierKeys::leftButtonModifier),1,0,0,0,0,editor.get(),editor.get(),now,p,now,1,false);
+            editor->mouseDown(down);
+            juce::MouseEvent up(source,p,juce::ModifierKeys(),0,0,0,0,0,editor.get(),editor.get(),now,p,now,1,false);editor->mouseUp(up);
+        };
+        tap(103,30);if(!capture("MetaTune_preset_browser.png"))return 40;
+        tap(291,98);if(!capture("MetaTune_group_browser.png"))return 41;
+        tap(220,301);if(processor.getNoteGroup()!=1)return 42;
+        tap(220,231);if(processor.getNoteGroup()!=0)return 43;
+        tap(103,30);tap(80,920);
+        if(!capture("MetaTune_scale_browser.png"))return 44;
+        tap(121,742);if(!capture("MetaTune_scale_browser_flats.png"))return 45;
     }
     if(auto* speed=processor.parameters.getParameter("speed"))
         speed->setValueNotifyingHost(1.0f);

@@ -9,7 +9,13 @@ class MetaTuneInspiredAudioProcessor final : public juce::AudioProcessor, privat
 {
 public:
     MetaTuneInspiredAudioProcessor();
-    ~MetaTuneInspiredAudioProcessor() override = default;
+    ~MetaTuneInspiredAudioProcessor() override;
+    // Explicit session-only links, local to this loaded plugin module.
+    void setNoteGroup(int);
+    int getNoteGroup() const noexcept { return noteGroup.load(); }
+    static int getNoteGroupCount(int) noexcept;
+    void publishGroupKeyScale();
+    void syncGroupKeyScale();
 
     void prepareToPlay(double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
@@ -53,6 +59,8 @@ public:
     void stopTonePreview() noexcept { tonePreviewMidiNote.store(-1, std::memory_order_relaxed); }
 
 private:
+    std::atomic<int> noteGroup {0};
+    std::uint64_t lastGroupState=0;
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameters();
     void timerCallback() override; // message thread: safe host PDC updates
     void processDoubler(juce::AudioBuffer<float>& buffer, int startSample, int samples) noexcept;
