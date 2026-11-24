@@ -28,12 +28,18 @@ int main(int argc,char**argv)
         if(MetaTuneInspiredAudioProcessor::getNoteGroupCount(1)!=2)return 12;
         auto* root=processor.parameters.getParameter("root");
         auto* scale=processor.parameters.getParameter("scale");
-        if(!root||!scale)return 13;
+        auto* degree=processor.parameters.getParameter("customDegree1");
+        auto* followerAmount=follower.parameters.getParameter("amount");
+        if(!root||!scale||!degree||!followerAmount)return 13;
+        followerAmount->setValueNotifyingHost(0.37f);
+        degree->setValueNotifyingHost(1.0f);
         root->setValueNotifyingHost(root->convertTo0to1(7));
         scale->setValueNotifyingHost(scale->convertTo0to1(6));
         processor.publishGroupKeyScale();follower.syncGroupKeyScale();
         if(juce::roundToInt(follower.parameters.getRawParameterValue("root")->load())!=7||
-           juce::roundToInt(follower.parameters.getRawParameterValue("scale")->load())!=6)return 14;
+           juce::roundToInt(follower.parameters.getRawParameterValue("scale")->load())!=6||
+           follower.parameters.getRawParameterValue("customDegree1")->load()<0.5f||
+           std::abs(followerAmount->getValue()-0.37f)>0.001f)return 14;
         follower.setNoteGroup(0);
         root->setValueNotifyingHost(root->convertTo0to1(4));
         scale->setValueNotifyingHost(scale->convertTo0to1(0));
@@ -106,20 +112,64 @@ int main(int argc,char**argv)
     }
     if(privateLoaded)
     {
-        const auto tap=[&](float x,float y){
+        const auto tap=[&](float x,float y,bool right=false){
             juce::Point<float> p(x*editor->getWidth()/1366.0f,y*editor->getHeight()/1080.0f);
             auto source=juce::Desktop::getInstance().getMainMouseSource();auto now=juce::Time::getCurrentTime();
-            juce::MouseEvent down(source,p,juce::ModifierKeys(juce::ModifierKeys::leftButtonModifier),1,0,0,0,0,editor.get(),editor.get(),now,p,now,1,false);
+            juce::MouseEvent down(source,p,juce::ModifierKeys(right?juce::ModifierKeys::rightButtonModifier:juce::ModifierKeys::leftButtonModifier),1,0,0,0,0,editor.get(),editor.get(),now,p,now,1,false);
             editor->mouseDown(down);
             juce::MouseEvent up(source,p,juce::ModifierKeys(),0,0,0,0,0,editor.get(),editor.get(),now,p,now,1,false);editor->mouseUp(up);
         };
-        tap(103,30);if(!capture("MetaTune_preset_browser.png"))return 40;
+        // Native preset fixture: only create an isolated new directory and
+        // remove that specific fixture afterwards. No existing files touched.
+        const auto library=juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+            .getChildFile("MetaTuneInspired").getChildFile("Presets");
+        if(library.createDirectory().failed())return 33;
+        const auto fixtureDir=library.getNonexistentChildFile("_NativeBrowserQA","",true);
+        if(fixtureDir.createDirectory().failed())return 34;
+        struct RemoveFixture {juce::File f;~RemoveFixture(){f.deleteRecursively();}} cleanup{fixtureDir};
+        const auto set=[&](const char* id,float v){
+            if(auto* param=processor.parameters.getParameter(id))
+                param->setValueNotifyingHost(param->convertTo0to1(v));
+        };
+        const auto raw=[&](const char* id){return processor.parameters.getRawParameterValue(id)->load();};
+        set("root",2);set("scale",5);set("speed",81);
+        juce::MemoryBlock preset;processor.getStateInformation(preset);
+        const auto fixture=fixtureDir.getChildFile("Native Test Preset.mti");
+        if(!fixture.replaceWithData(preset.getData(),preset.getSize()))return 35;
+        set("root",4);set("scale",0);set("speed",20);
+        tap(103,30);
+        juce::TextEditor* search=nullptr;
+        for(int i=0;i<editor->getNumChildComponents();++i)
+            if(editor->getChildComponent(i)->getName()=="Preset search")
+                search=dynamic_cast<juce::TextEditor*>(editor->getChildComponent(i));
+        if(!search||!search->isVisible())return 36;
+        search->setText(fixtureDir.getFileName(),true);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(100);
+        if(!capture("MetaTune_preset_browser.png"))return 40;
+        tap(190,245);
+        if(juce::roundToInt(raw("root"))!=2||juce::roundToInt(raw("scale"))!=5||
+           std::abs(raw("speed")-81)>0.2f)return 37;
+        tap(300,218); // Keep scale
+        set("root",7);set("scale",6);set("speed",20);tap(190,245);
+        if(juce::roundToInt(raw("root"))!=7||juce::roundToInt(raw("scale"))!=6||
+           std::abs(raw("speed")-81)>0.2f)return 38;
+        std::printf("preset_recall_keep_scale_passed=1\n");
         tap(291,98);if(!capture("MetaTune_group_browser.png"))return 41;
         tap(220,301);if(processor.getNoteGroup()!=1)return 42;
         tap(220,231);if(processor.getNoteGroup()!=0)return 43;
         tap(103,30);tap(80,920);
         if(!capture("MetaTune_scale_browser.png"))return 44;
-        tap(121,742);if(!capture("MetaTune_scale_browser_flats.png"))return 45;
+        tap(112,742);if(!capture("MetaTune_scale_browser_flats.png"))return 45;
+        for(int i=0;i<9;++i)
+        {
+            if(i==8)tap(80,1018);
+            else tap(42+(i%2)*79,910+(i/2)*27);
+            if(juce::roundToInt(raw("scale"))!=i)return 46;
+        }
+        tap(145,742); // close the scale drawer
+        tap(207,950,true); // custom note toggling on the real keyboard
+        if(juce::roundToInt(raw("scale"))!=8)return 47;
+        std::printf("nine_scale_choices_passed=1\n");
     }
     if(auto* speed=processor.parameters.getParameter("speed"))
         speed->setValueNotifyingHost(1.0f);

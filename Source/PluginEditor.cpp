@@ -1670,7 +1670,8 @@ void MetaTuneInspiredAudioProcessorEditor::drawPiano(juce::Graphics& g, juce::Re
                 strip.getX()+strip.getWidth()*note/12.0f,strip.getY(),
                 strip.getWidth()/12.0f,strip.getHeight()).reduced(1.8f,1.0f);
             const bool allowed=isAllowed(note);
-            const auto& glyph=privateNoteGlyph(note);
+            static const int flatGlyphs[]={55,58,57,61,60,62,65,64,51,50,54,53};
+            const auto& glyph=flatNotes?licensedIcon(flatGlyphs[note]):privateNoteGlyph(note);
             g.setColour(allowed?juce::Colour(0xffeee8f5):juce::Colour(0xff8d8496));
             if (!glyph.isNull())
                 g.drawImageWithin(glyph, (int)(lane.getCentreX()-15), (int)(lane.getCentreY()-15),
@@ -2784,7 +2785,9 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
         centeredIcon(18,scaleRow.withWidth(29.0f),11.0f,sideInk);
         centeredIcon(17,scaleRow.withX(scaleRow.getRight()-29.0f).withWidth(29.0f),11.0f,sideInk);
         g.setColour(juce::Colour(0xffe4d9ef));
-        const auto& glyph=privateNoteGlyph(selectedNoteIndex);
+        static const int flatGlyphs[]={55,58,57,61,60,62,65,64,51,50,54,53};
+        const int displayNote=juce::jlimit(0,11,selectedNoteIndex);
+        const auto& glyph=flatNotes?licensedIcon(flatGlyphs[displayNote]):privateNoteGlyph(displayNote);
         if(!glyph.isNull())
             g.drawImageWithin(glyph,(int)key.getCentreX()-32,(int)keyRow.getCentreY()-32,
                 64,64,juce::RectanglePlacement::centred,true);
@@ -3085,7 +3088,8 @@ void MetaTuneInspiredAudioProcessorEditor::drawPrivateBrowsers(juce::Graphics& g
             glyph(91,{74,173,26,31});glyph(70,{338,173,26,31});
             g.setColour(ink);g.setFont(uiFont(12));
             g.drawFittedText(selectedBank.isDirectory()?selectedBank.getFileName():"All banks",
-                juce::Rectangle<int>(76,208,174,20),juce::Justification::centredLeft,1);
+                juce::Rectangle<int>(76,208,148,20),juce::Justification::centredLeft,1);
+            glyph(82,{227,206,23,24});
             glyph(87,{257,206,22,24},keepPresetScale);
             tile({279,207,86,22},"Keep scale",keepPresetScale);
             if(filteredPresets.isEmpty())
@@ -3129,7 +3133,8 @@ void MetaTuneInspiredAudioProcessorEditor::drawPrivateBrowsers(juce::Graphics& g
     if(scaleBrowserOpen)
     {
         g.setColour(juce::Colour(0xff1c1a21));g.fillRect(privateScaleArea);
-        tile({2,731,79,24},"#",!flatNotes);tile({82,731,79,24},"b",flatNotes);
+        tile({2,731,62,24},"#",!flatNotes);tile({65,731,62,24},"b",flatNotes);
+        glyph(70,{130,731,31,24});
         const int flats[]={55,58,57,61,60,62,65,64,51,50,54,53};
         const char* names[]={"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
         for(int i=0;i<12;++i)
@@ -3144,7 +3149,7 @@ void MetaTuneInspiredAudioProcessorEditor::drawPrivateBrowsers(juce::Graphics& g
             }
         }
         for(int i=0;i<8;++i)tile({3+(i%2)*79.0f,897+(i/2)*27.0f,78,26},shortScaleNames[i],scale.getSelectedItemIndex()==i);
-        tile({3,1006,157,28},"Custom",scale.getSelectedItemIndex()==8);
+        tile({3,1006,157,25},"Custom",scale.getSelectedItemIndex()==8);
     }
 }
 bool MetaTuneInspiredAudioProcessorEditor::privateBrowserMouse(juce::Point<float> point)
@@ -3175,7 +3180,26 @@ bool MetaTuneInspiredAudioProcessorEditor::privateBrowserMouse(juce::Point<float
             if(button==4){favoritesOnly=!favoritesOnly;presetPage=0;refreshPrivatePresets();}
         }
         else if(y>=173&&y<204&&x>338)presetSearch.clear();
-        else if(y>=205&&y<230&&x>251)keepPresetScale=!keepPresetScale;
+        else if(y>=205&&y<230)
+        {
+            if(x>251)keepPresetScale=!keepPresetScale;
+            else
+            {
+                juce::Array<juce::File> banks;
+                if(presetDirectory().isDirectory())
+                    presetDirectory().findChildFiles(banks,juce::File::findDirectories,false);
+                juce::PopupMenu menu;
+                menu.addItem(1,"All banks",true,!selectedBank.isDirectory());
+                for(int i=0;i<banks.size();++i)
+                    menu.addItem(2+i,banks[i].getFileName(),true,banks[i]==selectedBank);
+                juce::Component::SafePointer<MetaTuneInspiredAudioProcessorEditor> self(this);
+                menu.showMenuAsync(juce::PopupMenu::Options(),[self,banks](int choice){
+                    if(self==nullptr||choice==0)return;
+                    self->selectedBank=choice==1?juce::File{}:banks[choice-2];
+                    self->presetPage=0;self->refreshPrivatePresets();
+                });
+            }
+        }
         else if(y>=230&&y<602)
         {
             const int index=presetPage*12+(int)((y-230)/31);
@@ -3200,7 +3224,7 @@ bool MetaTuneInspiredAudioProcessorEditor::privateBrowserMouse(juce::Point<float
     }
     if(scaleBrowserOpen&&privateScaleArea.contains(point))
     {
-        if(y<757)flatNotes=x>=81;
+        if(y<757){if(x>=130)scaleBrowserOpen=false;else flatNotes=x>=65;}
         else if(y<894)setRootNote(juce::jlimit(0,11,(int)((y-758)/34)*3+(int)(x/53)));
         else if(y>=897&&y<1005)setScaleMode(juce::jlimit(0,7,(int)((y-897)/27)*2+(int)(x/80)));
         else if(y>=1006)setScaleMode(8);
@@ -3431,6 +3455,7 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
     if(!privateLicensedShell.isNull())
     {
         if(privateBrowserMouse({x,y}))return;
+        if(scaleBrowserOpen){scaleBrowserOpen=false;repaint();}
         if(x<60&&y>=147.5f&&y<577.5f){processor.setNoteGroup(juce::jlimit(0,4,(int)((y-147.5f)/86)));repaint();return;}
         if(event.mods.isRightButtonDown())
         {
