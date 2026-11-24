@@ -93,6 +93,116 @@ const juce::Image& privateNoteGlyph(int midiPitchClass)
     return glyphs[(size_t)juce::jlimit(0, 11, midiPitchClass)];
 }
 
+// The XML's root is a logical 1000x790 workspace, but the actual
+// 1x shell is 850x672. Widget coordinates are in shell space, not root space.
+// Use the same transform for drawing, controls and pointer interactions.
+juce::Rectangle<float> licensedWidgetBounds(const juce::String& name,
+                                             juce::Rectangle<float> fallback)
+{
+    static const auto layout = [] {
+        const auto file = findPrivateLicensedFile("OriginalMetaTune2/Embedded_XML/Absolute_Root.xml");
+        return file.existsAsFile() ? juce::XmlDocument::parse(file)
+                                   : std::unique_ptr<juce::XmlElement>{};
+    }();
+    if (layout != nullptr)
+        for (auto* child = layout->getFirstChildElement(); child != nullptr;
+             child = child->getNextElement())
+            if (child->getStringAttribute("name") == name)
+            {
+                const auto r = juce::Rectangle<float>(
+                    child->getStringAttribute("x").getFloatValue(),
+                    child->getStringAttribute("y").getFloatValue(),
+                    child->getStringAttribute("width").getFloatValue(),
+                    child->getStringAttribute("height").getFloatValue());
+                if (r.getWidth() > 0 && r.getHeight() > 0
+                    && r.getX() >= 0 && r.getY() >= 0
+                    && r.getRight() <= 850.0f && r.getBottom() <= 672.0f)
+                    return { r.getX()*1366.0f/850.0f, r.getY()*1080.0f/672.0f,
+                             r.getWidth()*1366.0f/850.0f, r.getHeight()*1080.0f/672.0f };
+            }
+    return fallback;
+}
+
+struct LicensedKey
+{
+    int svg;
+    // Measured from the exact 1700x1344 shell (not the old JUCE mock keyboard).
+    int x, y, width, height;
+    bool sharp;
+};
+
+constexpr std::array<LicensedKey,12> licensedKeys {{
+    {41,205,1080,177,247,false}, {42,305,1080,120,163,true},
+    {43,382,1080,181,247,false}, {44,520,1080,120,163,true},
+    {45,563,1080,179,247,false},
+    {46,743,1080,186,247,false}, {47,844,1080,120,163,true},
+    {48,929,1080,191,247,false}, {49,1059,1080,120,163,true},
+    {38,1120,1080,188,247,false}, {39,1275,1080,120,163,true},
+    {40,1308,1080,186,247,false}
+}};
+
+juce::Rectangle<float> licensedKeyBounds(int note)
+{
+    const auto& k = licensedKeys[(size_t)juce::jlimit(0,11,note)];
+    return { k.x * 1366.0f/1700.0f, k.y * 1080.0f/1344.0f,
+             k.width * 1366.0f/1700.0f, k.height * 1080.0f/1344.0f };
+}
+
+const juce::Image& licensedKeyMask(int note)
+{
+    // Trim the square conversion's transparent padding once. Preserve the
+    // source silhouette, including curved sharp-key ends and natural cutouts.
+    static const auto masks = [] {
+        std::array<juce::Image,12> result {};
+        for (size_t i=0;i<result.size();++i)
+        {
+            const auto path = "Svg/svg-" + juce::String(licensedKeys[i].svg).paddedLeft('0',3) + ".png";
+            auto source = loadPrivateLicensedRaster(path,128,128);
+            if (source.isNull()) continue;
+            int left=source.getWidth(), top=source.getHeight(), right=0, bottom=0;
+            for (int y=0;y<source.getHeight();++y)
+                for (int x=0;x<source.getWidth();++x)
+                    if (source.getPixelAt(x,y).getAlpha()>8)
+                    {
+                        left=juce::jmin(left,x); top=juce::jmin(top,y);
+                        right=juce::jmax(right,x+1); bottom=juce::jmax(bottom,y+1);
+                    }
+            if (right>left && bottom>top)
+                result[i]=source.getClippedImage({left,top,right-left,bottom-top});
+        }
+        return result;
+    }();
+    return masks[(size_t)juce::jlimit(0,11,note)];
+}
+
+bool licensedKeyContains(int note, juce::Point<float> point)
+{
+    const auto r = licensedKeyBounds(note);
+    if (!r.contains(point)) return false;
+    const auto& mask = licensedKeyMask(note);
+    if (mask.isNull()) return true;
+    const int mx = juce::jlimit(0, mask.getWidth()-1,
+        int((point.x-r.getX())/r.getWidth()*mask.getWidth()));
+    const int my = juce::jlimit(0, mask.getHeight()-1,
+        int((point.y-r.getY())/r.getHeight()*mask.getHeight()));
+    return mask.getPixelAt(mx,my).getAlpha() >= 96;
+}
+
+int licensedPianoHit(juce::Point<float> point)
+{
+    const auto strip = licensedWidgetBounds("ToneKeyboard", {165,782,1035,82});
+    if (strip.contains(point))
+        return juce::jlimit(0,11,int((point.x-strip.getX())/strip.getWidth()*12.0f));
+    // Raised keys own their curved silhouettes. Naturals own the remaining
+    // actual key regions. The exact same masks are used for rendering.
+    for (int pass=0; pass<2; ++pass)
+        for (int note=0;note<12;++note)
+            if (licensedKeys[(size_t)note].sharp == (pass==0)
+                && licensedKeyContains(note,point)) return note;
+    // Do not audition a neighbour when clicking a seam or unused background.
+    return -1;
+}
+
 const juce::Colour bg(0xff101012), panel(0xff242427), panel2(0xff18181b);
 const juce::Colour purple(0xffa36bff), pink(0xffdf83c5), cyan(0xff66dfff);
 const juce::Colour text(0xffe7e5e9), muted(0xffa7a5aa);
@@ -856,49 +966,56 @@ public:
         // physical material. Never paint a second casing or dark circular plate.
         if ((bool)properties.getWithDefault("skellyPrivateSkin", false))
         {
-            // Pixel-aligned to the original recesses. The old procedural LED
-            // radius was too small and appeared as a second dial inside the real one.
-            const float arcR = side * (isSpeed ? 0.47f : (isAmount ? 0.42f : 0.40f));
-            const float angle = startAngle + (endAngle - startAngle) * sliderPos;
+            // Original Speed well has a notch at the right. Match the
+            // source C-shaped arc, not a full ring extending over Sustain.
+            // JUCE angles are clockwise from 12 o'clock (sin,-cos).
+            const float arcR = side * (isSpeed ? 0.36f : (isAmount ? 0.365f : 0.34f));
+            const float a0 = isSpeed ? 2.32f : (isAmount ? 2.28f : 2.36f);
+            const float a1 = isSpeed ? 7.48f : (isAmount ? 7.49f : 7.07f);
+            const float pos=juce::jlimit(0.0f,1.0f,sliderPos);
+            const float angle=a0+(a1-a0)*pos;
             const juce::Colour live = isSpeed && overload > 0.001f
                 ? pink.interpolatedWith(overloadHeat, overload * 0.85f)
                 : (isSustain ? (slider.getValue() < 0.0 ? cyan : pink) : accent);
-            if (isSpeed && (overload > 0.001f || shock > 0.001f))
+            if (isSpeed && (overload>0.001f || shock>0.001f))
             {
-                g.setColour(overloadHeat.withAlpha(0.19f * overload + 0.28f * shock));
-                g.drawEllipse(cx - radius, cy - radius, radius * 2.0f, radius * 2.0f,
-                              3.0f + 2.0f * shock);
+                juce::Path glow;
+                glow.addCentredArc(cx,cy,arcR+side*0.07f,arcR+side*0.07f,0.0f,a0,a1,true);
+                g.setColour(overloadHeat.withAlpha(0.25f*overload+0.30f*shock));
+                g.strokePath(glow,juce::PathStrokeType(3.0f+2.0f*shock));
             }
-            juce::Path lit;
             if (isSustain)
             {
-                const float zero = startAngle + (endAngle - startAngle) * 0.5f;
+                const float zero=(a0+a1)*0.5f;
+                juce::Path track;
+                track.addCentredArc(cx,cy,arcR,arcR,0.0f,a0,a1,true);
+                g.setColour(juce::Colour(0xff434147));g.strokePath(track,juce::PathStrokeType(side*0.018f));
                 if (std::abs(angle-zero)>0.004f)
-                    lit.addCentredArc(cx, cy, arcR, arcR, 0.0f,
+                {
+                    juce::Path lit;
+                    lit.addCentredArc(cx,cy,arcR,arcR,0.0f,
                                       juce::jmin(zero,angle),juce::jmax(zero,angle),true);
+                    g.setColour(live.withAlpha(0.93f));g.strokePath(lit,juce::PathStrokeType(side*0.025f));
+                }
             }
-            else if (sliderPos > 0.001f)
-                lit.addCentredArc(cx, cy, arcR, arcR, 0.0f, startAngle, angle, true);
-            if (!lit.isEmpty())
+            else
             {
-                g.setColour(live.withAlpha(0.21f));
-                g.strokePath(lit, juce::PathStrokeType(isSustain ? 8.0f : 13.0f));
-                g.setColour(live.withAlpha(0.96f));
-                g.strokePath(lit, juce::PathStrokeType(isSustain ? 2.8f : 4.0f));
-            }
-            if (!isSustain)
-            {
-                constexpr int ticks = 65;
-                for(int i=0;i<ticks;++i)
+                // The original source has a discrete luminous segmented rail;
+                // no opaque new dial face or continuous line under the LEDs.
+                const int ticks=isSpeed?82:75;
+                for (int i=0;i<ticks;++i)
                 {
                     const float t=(float)i/(ticks-1);
-                    if (t > sliderPos) continue;
-                    const float a=startAngle+(endAngle-startAngle)*t;
-                    const float inner=arcR-(i%5==0?8.0f:5.0f);
-                    g.setColour(live.withAlpha(i%5==0?0.99f:0.85f));
-                    g.drawLine(cx+std::cos(a)*inner,cy+std::sin(a)*inner,
-                               cx+std::cos(a)*(arcR+1.0f),
-                               cy+std::sin(a)*(arcR+1.0f),i%5==0?1.7f:1.0f);
+                    const float a=a0+(a1-a0)*t;
+                    const float inner=arcR-side*0.027f;
+                    const float outer=arcR+side*0.032f;
+                    auto colour=pink.interpolatedWith(purple,t);
+                    if(isSpeed && overload>0.001f && t>0.93f)
+                        colour=colour.interpolatedWith(overloadHeat,overload);
+                    g.setColour(t<=pos?colour.withAlpha(0.97f):juce::Colour(0xff49464e).withAlpha(0.62f));
+                    g.drawLine(cx+std::sin(a)*inner,cy-std::cos(a)*inner,
+                               cx+std::sin(a)*outer,cy-std::cos(a)*outer,
+                               juce::jmax(0.65f,side*0.006f));
                 }
             }
             const juce::String display = isSpeed
@@ -906,8 +1023,8 @@ public:
                                    (float)slider.getValue()), 1)
                 : juce::String(slider.getValue(), 0);
             g.setColour(juce::Colour(0xffeee6f3));
-            g.setFont(digitalFont(juce::jlimit(12.0f, 23.0f,
-                       side*(isSustain?0.16f:0.19f)), juce::Font::bold));
+            g.setFont(digitalFont(juce::jlimit(10.0f, 34.0f,
+                       side*(isSustain?0.17f:0.15f)), juce::Font::bold));
             g.drawText(display,juce::Rectangle<float>(cx-radius*0.70f,
                    cy-side*0.14f,radius*1.40f,side*0.26f),
                    juce::Justification::centred);
@@ -1462,62 +1579,53 @@ void MetaTuneInspiredAudioProcessorEditor::drawPiano(juce::Graphics& g, juce::Re
 
     if (!privateLicensedShell.isNull())
     {
-        // Source image_021 and original ToneKeyboard coordinates confirm
-        // TWELVE equal chromatic lanes (C,C#,D,D#,E,F,F#,G,G#,A,A#,B),
-        // with the black keycaps already baked into shell.png.
-        // Do not paint the legacy opaque keys over the original texture.
-        for (int note = 0; note < 12; ++note)
+        // The upper ToneKeyboard has 12 equal lanes; TuneKeyboard below has
+        // the seven real natural key shapes and five curved raised keys.
+        // The extracted SVG silhouettes now drive the live key fills AND hits.
+        const auto strip = licensedWidgetBounds("ToneKeyboard", {165,782,1035,82});
+        for (int note=0;note<12;++note)
         {
-            const float x=(float)area.getX()+note*laneW;
-            const float w=laneW-1.0f;
+            const auto lane=juce::Rectangle<float>(
+                strip.getX()+strip.getWidth()*note/12.0f,strip.getY(),
+                strip.getWidth()/12.0f,strip.getHeight()).reduced(1.8f,1.0f);
             const bool allowed=isAllowed(note);
-            const bool rootKey=note==chosenRoot;
-            const bool in=note==liveInputPc;
-            const bool out=note==liveTargetPc;
-            const bool black=blackNote[note];
-            // The original reference illuminates natural keys in purple.
-            // Dark raised sharps retain their native texture, with a gentle
-            // tint only below the raised black cap.
-            if (black)
-            {
-                g.setColour(purple.withAlpha(allowed?0.10f:0.035f));
-                g.fillRect(x+1.0f,(float)keyTop+keyH*0.62f,
-                           w-2.0f,keyH*0.38f);
-            }
+            const auto& glyph=privateNoteGlyph(note);
+            g.setColour(allowed?juce::Colour(0xffeee8f5):juce::Colour(0xff8d8496));
+            if (!glyph.isNull())
+                g.drawImageWithin(glyph, (int)(lane.getCentreX()-15), (int)(lane.getCentreY()-15),
+                                  30,30,juce::RectanglePlacement::centred,true);
             else
             {
-                g.setColour(purple.withAlpha(allowed?0.35f:0.05f));
-                g.fillRect(x+1.0f,(float)keyTop,w-2.0f,(float)keyH);
+                g.setFont(uiFont(15.0f,juce::Font::bold));
+                g.drawText(names[note],lane,juce::Justification::centred);
             }
-            if (!allowed)
+            if (showDetectedNotes && (note==liveInputPc || note==liveTargetPc))
             {
-                g.setColour(juce::Colours::black.withAlpha(0.19f));
-                g.fillRect(x+1.0f,(float)keyTop,w-2.0f,(float)keyH);
+                g.setColour(note==liveTargetPc?cyan:pink);
+                g.fillRect(lane.getX()+3.0f,lane.getBottom()-4.0f,lane.getWidth()-6.0f,3.0f);
             }
-            if (rootKey || in || out)
-            {
-                g.setColour(out?cyan.withAlpha(0.24f)
-                                 : purple.withAlpha(rootKey?0.19f:0.11f));
-                g.fillRect(x+2.0f,(float)area.getBottom()-43.0f,w-4.0f,39.0f);
-                g.setColour(out?cyan:(in?pink:juce::Colour(0xffd4a8ff)));
-                g.fillRoundedRectangle(x+laneW*0.25f,
-                           (float)area.getBottom()-6.0f,laneW*0.50f,4.0f,2.0f);
-            }
-            g.setColour(juce::Colour(0xffe5dfeb).withAlpha(allowed?0.97f:0.48f));
-            g.setFont(uiFont(juce::jlimit(10.0f,15.0f,(float)labelH*0.29f),
-                             juce::Font::bold));
-            const auto& originalGlyph = privateNoteGlyph(note);
-            if (!originalGlyph.isNull())
-                g.drawImageWithin(originalGlyph,
-                    (int)std::round(x + laneW * 0.27f),
-                    area.getY() + 2,
-                    (int)std::round(laneW * 0.46f),
-                    juce::jmax(14, labelH - 4),
-                    juce::RectanglePlacement::centred);
-            else
-                g.drawText(names[note],x,(float)area.getY()+1.0f,w,
-                           (float)labelH-2.0f,juce::Justification::centred);
         }
+        for (int pass=0;pass<2;++pass)
+            for (int note=0;note<12;++note)
+            {
+                const bool sharp=licensedKeys[(size_t)note].sharp;
+                if (sharp!=(pass==1)) continue;
+                const bool allowed=isAllowed(note);
+                const bool in=showDetectedNotes && note==liveInputPc;
+                const bool out=showDetectedNotes && note==liveTargetPc;
+                const auto r=licensedKeyBounds(note);
+                const auto& mask=licensedKeyMask(note);
+                if (mask.isNull()) continue; // Never obscure source hardware with a wrong shape.
+                auto tint=allowed
+                    ? purple.withAlpha(sharp?0.19f:0.48f)
+                    : juce::Colours::black.withAlpha(0.24f);
+                if (note==chosenRoot) tint=purple.withAlpha(sharp?0.36f:0.65f);
+                if (in || out) tint=(out?cyan:pink).withAlpha(sharp?0.40f:0.59f);
+                g.setColour(tint);
+                g.drawImageWithin(mask,(int)r.getX(),(int)r.getY(),
+                                  juce::roundToInt(r.getWidth()),juce::roundToInt(r.getHeight()),
+                                  juce::RectanglePlacement::stretchToFit,true);
+            }
         return;
     }
 
@@ -1914,8 +2022,24 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     }
 
     // Heavy particle artwork is rasterized once, then reused during repaints.
-    static const juce::Image orbArtwork = createOrbArtwork();
-    g.drawImageAt(orbArtwork, 185, 85);
+    // Licensed mode draws the genuine sphere material as the BASE layer,
+    // rather than burying it beneath the old synthetic particle shell.
+    static const auto sourceSphere = loadPrivateLicensedRaster("orb-sphere.png",400,400);
+    const bool usingSourceSphere=hasOriginalArtwork && !sourceSphere.isNull();
+    if (usingSourceSphere)
+    {
+        g.saveState();
+        juce::Path sphere;
+        sphere.addEllipse(238.0f,138.0f,465.0f,460.0f);
+        g.reduceClipRegion(sphere);
+        g.drawImageWithin(sourceSphere,238,138,465,460,juce::RectanglePlacement::stretchToFit);
+        g.restoreState();
+    }
+    else
+    {
+        static const juce::Image orbArtwork = createOrbArtwork();
+        g.drawImageAt(orbArtwork,185,85);
+    }
 
     // Startup light pass: a rotating icy highlight runs around the shell while
     // concentric silver/violet energy rings brighten and then settle smoothly.
@@ -1957,11 +2081,12 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     }
 
     // Retain the luminous silver shell at 50% host scaling.
-    for (int shell = 16; shell >= 1; --shell)
+    for (int shell = usingSourceSphere ? 3 : 16; shell >= 1; --shell)
     {
         const float spread = (float)shell * 1.25f;
-        const float alpha = 0.045f + 0.012f * (17 - shell)
-                          + 0.045f * inputActivity + 0.025f * pitchLock;
+        const float alpha = usingSourceSphere
+            ? (0.025f+0.055f*inputActivity+0.018f*pitchLock)
+            : (0.045f+0.012f*(17-shell)+0.045f*inputActivity+0.025f*pitchLock);
         const float thickness = 9.0f + (float)((shell + 1) % 4) * 4.0f
                               + 1.5f * inputActivity;
         g.setColour(juce::Colour(0xfff9f6ff).withAlpha(juce::jmin(0.70f, alpha)));
@@ -1973,10 +2098,10 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xfffffdff).withAlpha(0.22f + 0.07f * blurStrength + 0.12f * inputActivity));
     g.strokePath(shellSpecular, juce::PathStrokeType(12.0f + 3.0f * inputActivity, juce::PathStrokeType::curved,
                                                       juce::PathStrokeType::rounded));
-    g.setColour(juce::Colour(0xfffffdff).withAlpha(0.80f));
+    g.setColour(juce::Colour(0xfffffdff).withAlpha(usingSourceSphere?0.22f:0.80f));
     g.strokePath(shellSpecular, juce::PathStrokeType(2.8f, juce::PathStrokeType::curved,
                                                       juce::PathStrokeType::rounded));
-    g.setColour(juce::Colour(0xfffdfaff).withAlpha(0.72f));
+    g.setColour(juce::Colour(0xfffdfaff).withAlpha(usingSourceSphere?0.14f:0.72f));
     g.drawEllipse(241.0f, 141.0f, 459.0f, 454.0f, 2.5f);
 
     // Violet bloom around the middle ring stays diffuse under the crisp neon rim.
@@ -2360,19 +2485,19 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
         g.setColour(juce::Colour(0xff18181b)); g.fillRoundedRectangle(298,686,310,35,17.0f);
     }
     // The remaining part of the row exposes working Major/Hold/Minor/Hold selectors.
-    const juce::Rectangle<float> majorArea(451.0f, 687.0f, 52.0f, 33.0f);
-    const juce::Rectangle<float> majorHoldArea(503.0f, 687.0f, 26.0f, 33.0f);
-    const juce::Rectangle<float> minorArea(529.0f, 687.0f, 52.0f, 33.0f);
-    const juce::Rectangle<float> minorHoldArea(581.0f, 687.0f, 27.0f, 33.0f);
+    const auto majorArea=hasOriginalArtwork?licensedWidgetBounds("ChordSelectorMajor",{297,681,80,32}):juce::Rectangle<float>(451,687,52,33);
+    const auto majorHoldArea=hasOriginalArtwork?licensedWidgetBounds("ChordSelectorMajorHold",{377,681,64,32}):juce::Rectangle<float>(503,687,26,33);
+    const auto minorArea=hasOriginalArtwork?licensedWidgetBounds("ChordSelectorMinor",{458,681,80,32}):juce::Rectangle<float>(529,687,52,33);
+    const auto minorHoldArea=hasOriginalArtwork?licensedWidgetBounds("ChordSelectorMinorHold",{538,681,64,32}):juce::Rectangle<float>(581,687,27,33);
     if (scale.getSelectedItemIndex() == 1) { g.setColour(purple.withAlpha(0.34f)); g.fillRoundedRectangle(majorArea, 10.0f); }
     if (majorHold) { g.setColour(pink.withAlpha(0.24f)); g.fillRoundedRectangle(majorHoldArea, 8.0f); }
     if (scale.getSelectedItemIndex() == 2) { g.setColour(purple.withAlpha(0.34f)); g.fillRoundedRectangle(minorArea, 10.0f); }
     if (minorHold) { g.setColour(pink.withAlpha(0.24f)); g.fillRoundedRectangle(minorHoldArea, 8.0f); }
     g.setColour(muted); g.setFont(uiFont(12.0f, juce::Font::bold));
-    g.drawText("Major", 451, 687, 52, 33, juce::Justification::centred);
-    g.drawText("H", 503, 687, 26, 33, juce::Justification::centred);
-    g.drawText("Minor", 529, 687, 52, 33, juce::Justification::centred);
-    g.drawText("H", 581, 687, 27, 33, juce::Justification::centred);
+    g.drawText("Major", majorArea, juce::Justification::centred);
+    g.drawText(hasOriginalArtwork?"Hold":"H", majorHoldArea, juce::Justification::centred);
+    g.drawText("Minor", minorArea, juce::Justification::centred);
+    g.drawText(hasOriginalArtwork?"Hold":"H", minorHoldArea, juce::Justification::centred);
 
     // In automatic mode, there is no switch or selector. Keep only a small
     // passive status chip rather than an oversized empty control housing.
@@ -2489,7 +2614,7 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xffe7d9ef)); g.setFont(uiFont(50.0f,juce::Font::bold));
     const auto& selectedGlyph = privateNoteGlyph(juce::jlimit(0, 11, selectedNoteIndex));
     if (hasOriginalArtwork && !selectedGlyph.isNull())
-        g.drawImageWithin(selectedGlyph, 51, 889, 64, 63, juce::RectanglePlacement::centred);
+        g.drawImageWithin(selectedGlyph, 51, 889, 64, 63, juce::RectanglePlacement::centred, true);
     else
         g.drawText(pitchNames[juce::jlimit(0, 11, selectedNoteIndex)],12,891,141,58,juce::Justification::centred);
     g.setColour(muted); g.setFont(uiFont(16.0f,juce::Font::bold));
@@ -2930,9 +3055,18 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
         return;
     }
 
-    // Clicking the note labels selects their chromatic note. Clicking a black or white
-    // key selects the actual key under the pointer, rather than simply using the header column.
-    if (x >= 165.0f && x < 1212.0f && y >= 788.0f && y < 1050.0f)
+    if (!privateLicensedShell.isNull())
+    {
+        const int note=licensedPianoHit({x,y});
+        if (note>=0)
+        {
+            setRootNote(note);
+            processor.startTonePreview(60+note);
+            return;
+        }
+    }
+    // Public fallback uses its own chromatic lane geometry.
+    if (privateLicensedShell.isNull() && x >= 165.0f && x < 1212.0f && y >= 788.0f && y < 1050.0f)
     {
         const float keyboardX = x - 165.0f;
         const float keyboardW = 1212.0f - 165.0f;
@@ -2990,7 +3124,15 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
     }
 
     // Selector row actions not already covered by the scale/root dropdown components.
-    if (y >= 676.0f && y < 733.0f)
+    if (!privateLicensedShell.isNull())
+    {
+        const juce::Point<float> point(x,y);
+        if (licensedWidgetBounds("ChordSelectorMajor",{297,681,80,32}).contains(point)) { setScaleMode(1); return; }
+        if (licensedWidgetBounds("ChordSelectorMajorHold",{377,681,64,32}).contains(point)) { majorHold=!majorHold; repaint(); return; }
+        if (licensedWidgetBounds("ChordSelectorMinor",{458,681,80,32}).contains(point)) { setScaleMode(2); return; }
+        if (licensedWidgetBounds("ChordSelectorMinorHold",{538,681,64,32}).contains(point)) { minorHold=!minorHold; repaint(); return; }
+    }
+    if (privateLicensedShell.isNull() && y >= 676.0f && y < 733.0f)
     {
         if (x >= 451.0f && x < 503.0f) { setScaleMode(1); return; }
         if (x >= 503.0f && x < 529.0f) { majorHold = !majorHold; repaint(); return; }
@@ -3026,23 +3168,40 @@ void MetaTuneInspiredAudioProcessorEditor::resized()
     const float sx=getWidth()/1366.0f, sy=getHeight()/1080.0f;
     const auto px = [sx](float value) { return juce::roundToInt(value * sx); };
     const auto py = [sy](float value) { return juce::roundToInt(value * sy); };
-    speed.setBounds(px(955), py(120), px(225), py(225));
     if (!privateLicensedShell.isNull())
     {
-        // Original shell control recess centres: Speed (1066,237),
-        // Sustain (1233,284), Amount (1201,484) in the 1366x1080 canvas.
-        sustain.setBounds(px(1163), py(214), px(140), py(140));
-        amount.setBounds(px(1090), py(372), px(225), py(225));
+        const auto place=[&](juce::Component& component,const juce::String& name,
+                             juce::Rectangle<float> fallback)
+        {
+            const auto b=licensedWidgetBounds(name,fallback);
+            component.setBounds(px(b.getX()),py(b.getY()),px(b.getWidth()),py(b.getHeight()));
+        };
+        place(speed,"SpeedControl",{945,114,257,257});
+        place(sustain,"SustainControl",{1163,206,154,154});
+        place(amount,"AmountControl",{1086,371,227,227});
     }
     else
     {
+        speed.setBounds(px(955), py(120), px(225), py(225));
         sustain.setBounds(px(1180), py(205), px(140), py(140));
         amount.setBounds(px(1090), py(395), px(225), py(225));
     }
     speedLabel.setBounds(px(960), py(320), px(220), py(25));
     amountLabel.setBounds(px(1097), py(575), px(220), py(25));
-    scale.setBounds(px(165), py(686), px(176), py(35));
-    root.setBounds(px(350), py(686), px(100), py(35));
+    if (!privateLicensedShell.isNull())
+    {
+        // Keep the scale attachment alive; the original plate has only a root
+        // selector plus Major/Minor buttons, not two overlapping combo boxes.
+        scale.setVisible(false);
+        const auto b=licensedWidgetBounds("ChordSelectorNote",{167,681,112,32});
+        root.setBounds(px(b.getX()),py(b.getY()),px(b.getWidth()),py(b.getHeight()));
+    }
+    else
+    {
+        scale.setVisible(true);
+        scale.setBounds(px(165), py(686), px(176), py(35));
+        root.setBounds(px(350), py(686), px(100), py(35));
+    }
 #if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
     abEngine.setBounds(px(693), py(686), px(279), py(35));
 #endif
