@@ -88,18 +88,21 @@ target_sources(MetaTuneInspired PRIVATE
     Source/LyraDSP/FormantAccent.cpp
 )
 target_compile_features(MetaTuneInspired PRIVATE cxx_std_17)
+# These feature macros affect public C++ header/class layouts (notably
+# LyraDSP/TunerChain.h). Consumers constructing the processor, including the
+# native host smoke and local UI capture, MUST use identical definitions.
+# PRIVATE definitions here previously risked an ODR/sizeof mismatch.
 if(SKELLTUNE_AUTO_2P5)
-  # Override the legacy lowLatency automation value in the DSP, not its ID/state.
-  target_compile_definitions(MetaTuneInspired PRIVATE
+  target_compile_definitions(MetaTuneInspired PUBLIC
       SKELLTUNE_AUTO_2P5=1 SKELLTUNE_LIVE_FIXED_LOW_LATENCY=1)
 endif()
 if(SKELLTUNE_LOW_VOICE_LAB)
-  target_compile_definitions(MetaTuneInspired PRIVATE SKELLTUNE_LOW_VOICE_LAB=1)
+  target_compile_definitions(MetaTuneInspired PUBLIC SKELLTUNE_LOW_VOICE_LAB=1)
   if(SKELLTUNE_LAB_FAST_2P5)
-    target_compile_definitions(MetaTuneInspired PRIVATE SKELLTUNE_LAB_FAST_2P5=1)
+    target_compile_definitions(MetaTuneInspired PUBLIC SKELLTUNE_LAB_FAST_2P5=1)
   endif()
   if(SKELLTUNE_3WAY_AB_LAB)
-    target_compile_definitions(MetaTuneInspired PRIVATE SKELLTUNE_3WAY_AB_LAB=1)
+    target_compile_definitions(MetaTuneInspired PUBLIC SKELLTUNE_3WAY_AB_LAB=1)
   endif()
 endif()
 target_compile_definitions(MetaTuneInspired PUBLIC
@@ -206,6 +209,21 @@ if(WIN32 AND SKELLTUNE_BUILD_WINDOWS_HOST_SMOKE)
   target_compile_definitions(SkellyVST3Smoke PRIVATE
       JUCE_PLUGINHOST_VST3=1 JUCE_MODAL_LOOPS_PERMITTED=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
   target_link_libraries(SkellyVST3Smoke PRIVATE
+      MetaTuneInspired juce::juce_audio_processors juce::juce_audio_utils
+      juce::juce_recommended_config_flags)
+endif()
+
+# Asset-free CI compiles the exact editor and processor as a portable native
+# Linux capture executable. Proprietary resources are supplied offline only.
+option(SKELLTUNE_BUILD_PRIVATE_UI_CAPTURE "Build the local private-skin QA executable" OFF)
+if(SKELLTUNE_BUILD_PRIVATE_UI_CAPTURE)
+  juce_add_console_app(SkellyPrivateUICapture PRODUCT_NAME "SkellyPrivateUICapture")
+  juce_generate_juce_header(SkellyPrivateUICapture)
+  target_sources(SkellyPrivateUICapture PRIVATE tools/private_ui_capture.cpp)
+  target_compile_features(SkellyPrivateUICapture PRIVATE cxx_std_17)
+  target_compile_definitions(SkellyPrivateUICapture PRIVATE
+      JUCE_MODAL_LOOPS_PERMITTED=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+  target_link_libraries(SkellyPrivateUICapture PRIVATE
       MetaTuneInspired juce::juce_audio_processors juce::juce_audio_utils
       juce::juce_recommended_config_flags)
 endif()

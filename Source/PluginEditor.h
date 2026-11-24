@@ -12,6 +12,8 @@ public:
     ~MetaTuneInspiredAudioProcessorEditor() override;
     void paint(juce::Graphics&) override;
     void resized() override;
+    void mouseMove(const juce::MouseEvent&) override;
+    void mouseExit(const juce::MouseEvent&) override;
     void mouseDown(const juce::MouseEvent&) override;
     void mouseDrag(const juce::MouseEvent&) override;
     void mouseUp(const juce::MouseEvent&) override;
@@ -26,8 +28,38 @@ private:
     void openHeaderMenu();
     void savePresetToFile();
     void loadPresetFromFile();
+    void openPrivateBrowser(int tab);
+    void refreshPrivatePresets();
+    void drawPrivateBrowsers(juce::Graphics&);
+    bool privateBrowserMouse(juce::Point<float>);
+    bool recallPrivatePreset(const juce::File&);
+    void stepPrivatePreset(int);
+    void toggleCustomDegree(int);
+    juce::File presetDirectory() const;
+    bool presetBrowserOpen=false,scaleBrowserOpen=false,flatNotes=false;
+    float scaleSlide=0.0f, doublerReveal=0.0f;
+    bool doublerHovered=false;
+    int chordSelectMode=0; // Note, Major, Minor; independent of current DSP scale.
+    int doublerAxis=0; // both, width only, mix only
+    bool doublerAltLock=false;
+    juce::Rectangle<float> doublerTrack() const;
+    juce::Point<float> doublerPosition() const;
+    void drawPrivateDoubler(juce::Graphics&);
+    void updatePrivateHover(juce::Point<float>);
+    bool keepPresetScale=false,favoritesOnly=false;
+    int browserTab=0,presetPage=0;
+    juce::TextEditor presetSearch;
+    juce::Array<juce::File> filteredPresets;
+    juce::StringArray favoritePresets;
+    juce::File selectedPresetFile,selectedBank;
 
     MetaTuneInspiredAudioProcessor& processor;
+    // Loaded on the message thread once per editor, not reloaded on paint.
+    // An empty image preserves the existing public/fallback appearance.
+    juce::Image privateLicensedShell;
+    // Private, optional resource gallery. Cached thumbnails render on the
+    // message thread and never touch the audio engine.
+    std::unique_ptr<juce::Component> privateAssetGallery;
     juce::Slider speed, amount, sustain;
     juce::ComboBox scale, root;
 #if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
