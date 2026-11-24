@@ -16,49 +16,81 @@ namespace {
 //   Contents/Resources/PrivateMetaTune/shell.png
 // Only the JUCE message thread performs file I/O, once on first UI paint.
 // No file I/O or allocation is added to the real-time audio callback.
-juce::Image loadPrivateLicensedRaster(const juce::String& filename,
-                                      int expectedWidth, int expectedHeight)
+juce::File findPrivateLicensedFile(const juce::String& name)
 {
 #if JUCE_WINDOWS && defined(SKELLTUNE_AUTO_2P5) && SKELLTUNE_AUTO_2P5
-    // Use the module owning this translation unit, NOT the host EXE path.
-    static int privateSkinModuleAnchor = 0x4d543235;
+    // Resolve from the DLL module, not FL Studio's EXE or current directory.
+    static int resourceModuleAnchor = 0x4d543235;
     HMODULE module = nullptr;
-    const auto anchor = reinterpret_cast<LPCWSTR>(&privateSkinModuleAnchor);
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
                             GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                            anchor, &module) || module == nullptr)
+                            reinterpret_cast<LPCWSTR>(&resourceModuleAnchor), &module))
         return {};
-
     wchar_t path[32768] {};
-    const DWORD len = GetModuleFileNameW(module, path, 32768);
-    if (len == 0 || len >= 32768)
+    const DWORD length = GetModuleFileNameW(module, path, 32768);
+    if (length == 0 || length >= 32768)
         return {};
     auto folder = juce::File(juce::String(path)).getParentDirectory();
     for (int level = 0; level < 5; ++level)
     {
-        // Standard VST3 layout and a second layout useful for standalone QA.
-        const auto candidates = {
-            folder.getChildFile("Contents").getChildFile("Resources")
-                  .getChildFile("PrivateMetaTune").getChildFile(filename),
-            folder.getChildFile("Resources").getChildFile("PrivateMetaTune")
-                  .getChildFile("shell.png")
-        };
-        for (const auto& candidate : candidates)
-        {
-            if (!candidate.existsAsFile())
-                continue;
-            auto image = juce::ImageFileFormat::loadFrom(candidate);
-            // Require the known, whole-shell source, never a cropped widget.
-            if (!image.isNull() && image.getWidth() == expectedWidth && image.getHeight() == expectedHeight)
-                return image;
-        }
-        auto parent = folder.getParentDirectory();
-        if (parent == folder)
-            break;
+        for (const auto& candidate : {
+                 folder.getChildFile("Contents").getChildFile("Resources")
+                       .getChildFile("PrivateMetaTune").getChildFile(name),
+                 folder.getChildFile("Resources").getChildFile("PrivateMetaTune")
+                       .getChildFile(name) })
+            if (candidate.existsAsFile()) return candidate;
+        const auto parent = folder.getParentDirectory();
+        if (parent == folder) break;
         folder = parent;
     }
+#else
+    juce::ignoreUnused(name);
 #endif
     return {};
+}
+
+juce::Image loadPrivateLicensedRaster(const juce::String& filename,
+                                      int expectedWidth, int expectedHeight)
+{
+    const auto file = findPrivateLicensedFile(filename);
+    if (!file.existsAsFile()) return {};
+    auto image = juce::ImageFileFormat::loadFrom(file);
+    if (!image.isNull() &&
+        (expectedWidth <= 0 || image.getWidth() == expectedWidth) &&
+        (expectedHeight <= 0 || image.getHeight() == expectedHeight))
+        return image;
+    return {};
+}
+
+juce::Typeface::Ptr loadPrivateLicensedTypeface(const juce::String& fileName)
+{
+    const auto file = findPrivateLicensedFile("OriginalMetaTune2/Fonts/" + fileName);
+    juce::MemoryBlock bytes;
+    if (file.existsAsFile() && file.loadFileAsData(bytes) && bytes.getSize() > 0)
+        return juce::Typeface::createSystemTypefaceFor(bytes.getData(), bytes.getSize());
+    return {};
+}
+
+const juce::Image& privateNoteGlyph(int midiPitchClass)
+{
+    // Source SVG 050-066: the complete original chromatic note glyph set.
+    // Each high-resolution PNG is locally created from the original vector.
+    // Deferred static init: public builds never inspect proprietary resources.
+    static const std::array<juce::Image, 12> glyphs {
+        loadPrivateLicensedRaster("Svg/svg-055.png", 128, 128),
+        loadPrivateLicensedRaster("Svg/svg-056.png", 128, 128),
+        loadPrivateLicensedRaster("Svg/svg-057.png", 128, 128),
+        loadPrivateLicensedRaster("Svg/svg-059.png", 128, 128),
+        loadPrivateLicensedRaster("Svg/svg-060.png", 128, 128),
+        loadPrivateLicensedRaster("Svg/svg-062.png", 128, 128),
+        loadPrivateLicensedRaster("Svg/svg-063.png", 128, 128),
+        loadPrivateLicensedRaster("Svg/svg-064.png", 128, 128),
+        loadPrivateLicensedRaster("Svg/svg-066.png", 128, 128),
+        loadPrivateLicensedRaster("Svg/svg-050.png", 128, 128),
+        loadPrivateLicensedRaster("Svg/svg-052.png", 128, 128),
+        loadPrivateLicensedRaster("Svg/svg-053.png", 128, 128)
+    };
+    return glyphs[(size_t)juce::jlimit(0, 11, midiPitchClass)];
 }
 
 const juce::Colour bg(0xff101012), panel(0xff242427), panel2(0xff18181b);
@@ -72,6 +104,22 @@ constexpr float pitchReferenceMaxHz = 466.1638f; // A440 + 1 semitone
 // FontOptions, so we avoid that newer API and rely on portable metrics/fallbacks.
 juce::Font uiFont(float height, int style = juce::Font::plain)
 {
+    static const auto originalRegular = loadPrivateLicensedTypeface("Roboto-Regular_07_79e85140.ttf");
+    static const auto originalBold = loadPrivateLicensedTypeface("Roboto-Bold_04_7d0b991e.ttf");
+    static const auto originalItalic = loadPrivateLicensedTypeface("Roboto-Italic_05_5fce8b6f.ttf");
+    static const auto originalMedium = loadPrivateLicensedTypeface("Roboto_Medium-Regular_06_2e0a681e.ttf");
+    static const auto originalDIN = loadPrivateLicensedTypeface("DINPro-Regular-Regular_03_6501b660.otf");
+    static const auto originalEuro = loadPrivateLicensedTypeface("EurostileT-Regular_01_d07881a1.ttf");
+    // Register all six UI typefaces from the licensed bundle, and select the
+    // right face for actual widget text. Original Eurostile/DIN are available
+    // to the asset-audit viewer without installing fonts into Windows.
+    juce::ignoreUnused(originalDIN, originalEuro);
+    const auto face = (style & juce::Font::italic) ? originalItalic
+                     : ((style & juce::Font::bold) ? originalBold
+                        : (originalMedium != nullptr ? originalMedium : originalRegular));
+    if (face != nullptr)
+        return juce::Font(juce::FontOptions(face).withHeight(height)
+                          .withMetricsKind(juce::TypefaceMetricsKind::portable));
     auto options = juce::FontOptions("Segoe UI", height, style)
         .withMetricsKind(juce::TypefaceMetricsKind::portable)
         .withFallbacks(std::vector<juce::String>{ "Arial", "Tahoma" });
@@ -80,6 +128,10 @@ juce::Font uiFont(float height, int style = juce::Font::plain)
 
 juce::Font digitalFont(float height, int style = juce::Font::bold)
 {
+    static const auto originalDigits = loadPrivateLicensedTypeface("Digital_Numbers-Regular_02_de9e0cfb.ttf");
+    if (originalDigits != nullptr)
+        return juce::Font(juce::FontOptions(originalDigits).withHeight(height)
+                          .withMetricsKind(juce::TypefaceMetricsKind::portable));
     auto options = juce::FontOptions("Consolas", height, style)
         .withMetricsKind(juce::TypefaceMetricsKind::portable)
         .withFallbacks(std::vector<juce::String>{ "Segoe UI", "Arial" });
@@ -1292,8 +1344,17 @@ void MetaTuneInspiredAudioProcessorEditor::drawPiano(juce::Graphics& g, juce::Re
             g.setColour(juce::Colour(0xffe5dfeb).withAlpha(allowed?0.97f:0.48f));
             g.setFont(uiFont(juce::jlimit(10.0f,15.0f,(float)labelH*0.29f),
                              juce::Font::bold));
-            g.drawText(names[note],x,(float)area.getY()+1.0f,w,
-                       (float)labelH-2.0f,juce::Justification::centred);
+            const auto& originalGlyph = privateNoteGlyph(note);
+            if (!originalGlyph.isNull())
+                g.drawImageWithin(originalGlyph,
+                    (int)std::round(x + laneW * 0.27f),
+                    area.getY() + 2,
+                    (int)std::round(laneW * 0.46f),
+                    juce::jmax(14, labelH - 4),
+                    juce::RectanglePlacement::centred);
+            else
+                g.drawText(names[note],x,(float)area.getY()+1.0f,w,
+                           (float)labelH-2.0f,juce::Justification::centred);
         }
         return;
     }
@@ -2236,7 +2297,11 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     }
     static const char* pitchNames[] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
     g.setColour(juce::Colour(0xffe7d9ef)); g.setFont(uiFont(50.0f,juce::Font::bold));
-    g.drawText(pitchNames[juce::jlimit(0, 11, selectedNoteIndex)],12,891,141,58,juce::Justification::centred);
+    const auto& selectedGlyph = privateNoteGlyph(juce::jlimit(0, 11, selectedNoteIndex));
+    if (hasOriginalArtwork && !selectedGlyph.isNull())
+        g.drawImageWithin(selectedGlyph, 51, 889, 64, 63, juce::RectanglePlacement::centred);
+    else
+        g.drawText(pitchNames[juce::jlimit(0, 11, selectedNoteIndex)],12,891,141,58,juce::Justification::centred);
     g.setColour(muted); g.setFont(uiFont(16.0f,juce::Font::bold));
     const juce::String currentScaleName = scale.getSelectedItemIndex() == 1 ? "major" :
                                           (scale.getSelectedItemIndex() == 2 ? "minor" : "custom");
