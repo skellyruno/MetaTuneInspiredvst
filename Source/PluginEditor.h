@@ -31,6 +31,9 @@ private:
     // Loaded on the message thread once per editor, not reloaded on paint.
     // An empty image preserves the existing public/fallback appearance.
     juce::Image privateLicensedShell;
+    // Private, optional resource gallery. Cached thumbnails render on the
+    // message thread and never touch the audio engine.
+    std::unique_ptr<juce::Component> privateAssetGallery;
     juce::Slider speed, amount, sustain;
     juce::ComboBox scale, root;
 #if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
