@@ -3,6 +3,8 @@
 #include <JuceHeader.h>
 #include "../Source/PluginProcessor.h"
 #include <array>
+#include <algorithm>
+#include <vector>
 #include <cmath>
 #include <cstdio>
 #include <memory>
@@ -48,6 +50,62 @@ int main(int argc,char**argv)
         processor.setNoteGroup(0);
         if(MetaTuneInspiredAudioProcessor::getNoteGroupCount(1)!=0)return 16;
         std::printf("group_link_and_leave_passed=1\n");
+    }
+
+    // Render the actual processor (not a mathematical model of the effect).
+    // With correction amount zero, compare identical impulses and harmonics
+    // at 0/100% Doubler and at width 0/100. Check direct dry leakage at the
+    // dry impulse's measured output sample, and check stereo side energy.
+    {
+        constexpr int blockSize=256, blocks=192, impulseAt=blockSize*128+37;
+        struct Render {std::vector<float> l,r;int pdc=0;};
+        auto render=[&](float mix,float width,bool tone)->Render
+        {
+            MetaTuneInspiredAudioProcessor proc;
+            const auto set=[&](const char* id,float v){
+                if(auto* param=proc.parameters.getParameter(id))
+                    param->setValueNotifyingHost(param->convertTo0to1(v));
+            };
+            set("amount",0);set("doublerMix",mix);set("doublerWidth",width);
+            proc.prepareToPlay(48000,blockSize);
+            Render out;out.pdc=proc.getLatencySamples();
+            out.l.reserve(blocks*blockSize);out.r.reserve(blocks*blockSize);
+            juce::AudioBuffer<float> b(2,blockSize);juce::MidiBuffer midi;
+            for(int k=0;k<blocks;++k)
+            {
+                for(int i=0;i<blockSize;++i)
+                {
+                    const int n=k*blockSize+i;
+                    const float sample=tone?
+                        0.12f*std::sin(juce::MathConstants<float>::twoPi*223.0f*n/48000.0f)
+                        +0.06f*std::sin(juce::MathConstants<float>::twoPi*1031.0f*n/48000.0f)
+                        :(n==impulseAt?0.5f:0.0f);
+                    b.setSample(0,i,sample);b.setSample(1,i,sample);
+                }
+                proc.processBlock(b,midi);
+                for(int i=0;i<blockSize;++i){out.l.push_back(b.getSample(0,i));out.r.push_back(b.getSample(1,i));}
+            }
+            proc.releaseResources();return out;
+        };
+        const auto dry=render(0,100,false),wet=render(100,100,false);
+        if(dry.pdc!=wet.pdc)return 53;
+        const auto peak=std::max_element(dry.l.begin(),dry.l.end(),[](float a,float b){return std::abs(a)<std::abs(b);});
+        const auto at=(size_t)std::distance(dry.l.begin(),peak);
+        if(std::abs(*peak)<0.05f)return 54;
+        const float leak=std::max(std::abs(wet.l[at]),std::abs(wet.r[at]))/std::abs(*peak);
+        float wetPeak=0;
+        for(float value:wet.l){if(!std::isfinite(value))return 55;wetPeak=std::max(wetPeak,std::abs(value));}
+        if(wetPeak<0.05f||leak>0.03f)return 56;
+        const auto narrow=render(100,0,true),wide=render(100,100,true);
+        const auto side=[](const Render& audio){
+            double e=0;const size_t start=audio.l.size()/2;
+            for(size_t i=start;i<audio.l.size();++i){const double diff=audio.l[i]-audio.r[i];e+=diff*diff;}
+            return std::sqrt(e/(audio.l.size()-start));
+        };
+        const double centerSide=side(narrow),wideSide=side(wide);
+        std::printf("doubler_dry_leak_ratio=%.6f centered_side_rms=%.6f wide_side_rms=%.6f pdc_samples=%d\n",
+                    leak,centerSide,wideSide,dry.pdc);
+        if(centerSide>0.00001||wideSide<0.001)return 57;
     }
     const auto output=juce::File::getCurrentWorkingDirectory().getChildFile("ui_shots");
     if (output.createDirectory().failed()) return 4;

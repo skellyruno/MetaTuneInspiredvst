@@ -588,8 +588,19 @@ void MetaTuneInspiredAudioProcessor::processDoubler(juce::AudioBuffer<float>& bu
         const float delayedL = readDelay(0, delayL);
         const float delayedR = channels > 1 ? readDelay(1, delayR) : readDelay(0, delayR);
 
-        // Width acts in the mid/side domain; wet mix blends in decorrelated, gently
-        // modulated voices rather than merely drawing the two Doubler rings.
+        // Preview Doubler: actual dry/wet crossfade, not dry blended with
+        // another partially dry signal. At 100% only the two causal delayed
+        // voices remain. Width pans the two wet voices (not the input).
+        // Retain the same bounded delay taps, state IDs and smoothing.
+#if defined(SKELLTUNE_AUTO_2P5) && SKELLTUNE_AUTO_2P5
+        const float wetMid=0.5f*(delayedL+delayedR);
+        const float wetSide=0.5f*(delayedL-delayedR)*width;
+        const float wetL=channels>1?wetMid+wetSide:wetMid;
+        const float wetR=wetMid-wetSide;
+        left[i]=inL+(wetL-inL)*mix;
+        if(right!=nullptr)right[i]=inR+(wetR-inR)*mix;
+#else
+        // Preserve the older stable/other lab renders and saved sessions.
         const float mid = 0.5f * (inL + inR);
         const float side = 0.5f * (inL - inR) * (1.0f + 0.75f * width * mix);
         const float wideL = mid + side;
@@ -600,6 +611,7 @@ void MetaTuneInspiredAudioProcessor::processDoubler(juce::AudioBuffer<float>& bu
         left[i] = wideL * (1.0f - mix) + wetL * mix;
         if (channels > 1)
             right[i] = wideR * (1.0f - mix) + wetR * mix;
+#endif
 
         doublerLfoPhase += lfoIncrement;
         if (doublerLfoPhase >= juce::MathConstants<float>::twoPi)
