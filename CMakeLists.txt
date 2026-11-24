@@ -88,18 +88,21 @@ target_sources(MetaTuneInspired PRIVATE
     Source/LyraDSP/FormantAccent.cpp
 )
 target_compile_features(MetaTuneInspired PRIVATE cxx_std_17)
+# These feature macros affect public C++ header/class layouts (notably
+# LyraDSP/TunerChain.h). Consumers constructing the processor, including the
+# native host smoke and local UI capture, MUST use identical definitions.
+# PRIVATE definitions here previously risked an ODR/sizeof mismatch.
 if(SKELLTUNE_AUTO_2P5)
-  # Override the legacy lowLatency automation value in the DSP, not its ID/state.
-  target_compile_definitions(MetaTuneInspired PRIVATE
+  target_compile_definitions(MetaTuneInspired PUBLIC
       SKELLTUNE_AUTO_2P5=1 SKELLTUNE_LIVE_FIXED_LOW_LATENCY=1)
 endif()
 if(SKELLTUNE_LOW_VOICE_LAB)
-  target_compile_definitions(MetaTuneInspired PRIVATE SKELLTUNE_LOW_VOICE_LAB=1)
+  target_compile_definitions(MetaTuneInspired PUBLIC SKELLTUNE_LOW_VOICE_LAB=1)
   if(SKELLTUNE_LAB_FAST_2P5)
-    target_compile_definitions(MetaTuneInspired PRIVATE SKELLTUNE_LAB_FAST_2P5=1)
+    target_compile_definitions(MetaTuneInspired PUBLIC SKELLTUNE_LAB_FAST_2P5=1)
   endif()
   if(SKELLTUNE_3WAY_AB_LAB)
-    target_compile_definitions(MetaTuneInspired PRIVATE SKELLTUNE_3WAY_AB_LAB=1)
+    target_compile_definitions(MetaTuneInspired PUBLIC SKELLTUNE_3WAY_AB_LAB=1)
   endif()
 endif()
 target_compile_definitions(MetaTuneInspired PUBLIC
