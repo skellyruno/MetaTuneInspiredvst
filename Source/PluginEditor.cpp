@@ -2138,6 +2138,16 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
 
     g.restoreState();
 
+    // The original 2x material for the 4-bank selector is not in shell.png.
+    // Place that genuine rail before drawing active group indicators.
+    if (hasOriginalArtwork)
+    {
+        static const juce::Image originalGroupRail =
+            loadPrivateLicensedRaster("group-rail.png", 74, 538);
+        if (!originalGroupRail.isNull())
+            g.drawImageWithin(originalGroupRail, 0, 150, 58, 430,
+                              juce::RectanglePlacement::stretchToFit);
+    }
     // Note group buttons still need live selection; their source plate is
     // pre-rendered in the private shell, so don't paint a second solid panel.
     if (!hasOriginalArtwork)
@@ -2218,6 +2228,21 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xff35343b)); g.drawRoundedRectangle(685,684,657,39,19.0f,1.0f);
 #endif
 
+    // Real original 2x input/output meter textures. The 100 live note
+    // columns below remain the source-of-truth for dynamic pitch monitoring.
+    if (hasOriginalArtwork)
+    {
+        static const juce::Image originalIn =
+            loadPrivateLicensedRaster("heatmap-input.png", 1288, 32);
+        static const juce::Image originalOut =
+            loadPrivateLicensedRaster("heatmap-output.png", 1288, 32);
+        if (!originalIn.isNull())
+            g.drawImageWithin(originalIn, 165, 739, 1047, 19,
+                              juce::RectanglePlacement::stretchToFit);
+        if (!originalOut.isNull())
+            g.drawImageWithin(originalOut, 165, 762, 1047, 18,
+                              juce::RectanglePlacement::stretchToFit);
+    }
     // The asset has the original monitor panels. Keep only the live traces.
     if (!hasOriginalArtwork)
     {
@@ -2253,9 +2278,12 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
             const float strength = juce::jlimit(0.0f, 1.0f, heatmapConfidence[(size_t)historyIndex]);
             const int inputNote = heatmapInputNotes[(size_t)historyIndex];
             const int outputNote = heatmapOutputNotes[(size_t)historyIndex];
-            g.setColour(juce::Colour(0xff0a0a0d));
-            g.fillRect(x, 739.0f, 7.0f, 19.0f);
-            g.fillRect(x, 762.0f, 7.0f, 18.0f);
+            if (!hasOriginalArtwork)
+            {
+                g.setColour(juce::Colour(0xff0a0a0d));
+                g.fillRect(x, 739.0f, 7.0f, 19.0f);
+                g.fillRect(x, 762.0f, 7.0f, 18.0f);
+            }
             if (inputNote >= 0)
             {
                 const auto inputColour = noteTint(inputNote, false);
@@ -2315,15 +2343,35 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     {
         g.setColour(juce::Colour(0xff222226)); g.fillRect(1212,734,154,341);
     }
+    if (hasOriginalArtwork)
+    {
+        static const juce::Image visibleIcon =
+            loadPrivateLicensedRaster("Svg/svg-012.png", 128, 128);
+        static const juce::Image hiddenIcon =
+            loadPrivateLicensedRaster("Svg/svg-013.png", 128, 128);
+        static const juce::Image powerIcon =
+            loadPrivateLicensedRaster("Svg/svg-006.png", 128, 128);
+        const auto& heatIcon = showHeatMaps ? visibleIcon : hiddenIcon;
+        const auto& noteIcon = showDetectedNotes ? visibleIcon : hiddenIcon;
+        if (!heatIcon.isNull())
+            g.drawImageWithin(heatIcon, 1220, 742, 19, 20,
+                              juce::RectanglePlacement::centred);
+        if (!noteIcon.isNull())
+            g.drawImageWithin(noteIcon, 1220, 799, 19, 20,
+                              juce::RectanglePlacement::centred);
+        if (!powerIcon.isNull())
+            g.drawImageWithin(powerIcon, 1220, 875, 19, 20,
+                              juce::RectanglePlacement::centred);
+    }
     g.setColour(showHeatMaps ? purple : muted); g.setFont(uiFont(14.0f,juce::Font::bold));
-    g.drawText("In / Out",1225,741,130,24,juce::Justification::centredLeft);
-    g.drawText(showHeatMaps ? "HeatMaps ON" : "HeatMaps OFF",1225,761,130,24,juce::Justification::centredLeft);
+    g.drawText("In / Out",1242,741,108,24,juce::Justification::centredLeft);
+    g.drawText(showHeatMaps ? "HeatMaps ON" : "HeatMaps OFF",1242,761,108,24,juce::Justification::centredLeft);
     g.setColour(showDetectedNotes ? purple : muted);
-    g.drawText("Detected",1225,800,130,24,juce::Justification::centredLeft);
-    g.drawText(showDetectedNotes ? "Notes ON" : "Notes OFF",1225,820,130,24,juce::Justification::centredLeft);
+    g.drawText("Detected",1242,800,108,24,juce::Justification::centredLeft);
+    g.drawText(showDetectedNotes ? "Notes ON" : "Notes OFF",1242,820,108,24,juce::Justification::centredLeft);
     g.setColour(globalBypass ? pink : muted);
-    g.drawText("Global",1225,880,130,24,juce::Justification::centredLeft);
-    g.drawText(globalBypass ? "Bypassed" : "Bypass",1225,900,130,24,juce::Justification::centredLeft);
+    g.drawText("Global",1242,880,108,24,juce::Justification::centredLeft);
+    g.drawText(globalBypass ? "Bypassed" : "Bypass",1242,900,108,24,juce::Justification::centredLeft);
     g.setColour(muted); g.drawText("Pitch Reference",1225,958,130,24,juce::Justification::centredLeft);
     g.setColour(juce::Colour(0xff070708)); g.fillRoundedRectangle(1218,987,140,19,10.0f);
     const float referenceT = juce::jlimit(0.0f, 1.0f,
