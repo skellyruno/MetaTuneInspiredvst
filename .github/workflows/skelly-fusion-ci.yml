@@ -134,3 +134,36 @@ jobs:
           path: MetaTune_Auto_2p5_Preview_VST3.zip
           if-no-files-found: error
           retention-days: 14
+
+  linux-private-ui-capture:
+    # Public runner builds code ONLY. No licensed material is downloaded,
+    # installed, or published by this job. The binary runs with private assets
+    # offline after download, enabling real native-editor visual QA.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native JUCE build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libjack-jackd2-dev libfreetype6-dev libfontconfig1-dev libx11-dev libxext-dev libxinerama-dev libxrandr-dev libxcursor-dev libxcomposite-dev libxrender-dev libgl1-mesa-dev libglu1-mesa-dev libcurl4-openssl-dev xvfb
+      - name: Fetch pinned JUCE
+        run: git clone --depth 1 --branch 8.0.9 https://github.com/juce-framework/JUCE.git JUCE
+      - name: Configure native editor capture
+        run: cmake -S . -B build-ui -DCMAKE_BUILD_TYPE=Release -DJUCE_PATH="$PWD/JUCE" -DSKELLTUNE_BUILD_PRIVATE_UI_CAPTURE=ON -DSKELLTUNE_AUTO_2P5=ON
+      - name: Build actual editor and processor
+        run: cmake --build build-ui --target SkellyPrivateUICapture --parallel 3
+      - name: Run asset-free native editor smoke
+        run: |
+          runner="$(find build-ui -type f -name SkellyPrivateUICapture -print -quit)"
+          test -n "$runner"
+          xvfb-run -a "$runner"
+          mkdir -p private_ui_runner
+          cp "$runner" private_ui_runner/SkellyPrivateUICapture
+          tar -czf MetaTune_PrivateUICapture_Linux.tar.gz private_ui_runner
+      - name: Publish portable asset-free capture executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: MetaTune-PrivateUICapture-Linux-x64
+          path: MetaTune_PrivateUICapture_Linux.tar.gz
+          if-no-files-found: error
+          retention-days: 14

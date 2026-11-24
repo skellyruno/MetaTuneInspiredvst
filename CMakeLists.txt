@@ -209,3 +209,18 @@ if(WIN32 AND SKELLTUNE_BUILD_WINDOWS_HOST_SMOKE)
       MetaTuneInspired juce::juce_audio_processors juce::juce_audio_utils
       juce::juce_recommended_config_flags)
 endif()
+
+# Asset-free CI compiles the exact editor and processor as a portable native
+# Linux capture executable. Proprietary resources are supplied offline only.
+option(SKELLTUNE_BUILD_PRIVATE_UI_CAPTURE "Build the local private-skin QA executable" OFF)
+if(SKELLTUNE_BUILD_PRIVATE_UI_CAPTURE)
+  juce_add_console_app(SkellyPrivateUICapture PRODUCT_NAME "SkellyPrivateUICapture")
+  juce_generate_juce_header(SkellyPrivateUICapture)
+  target_sources(SkellyPrivateUICapture PRIVATE tools/private_ui_capture.cpp)
+  target_compile_features(SkellyPrivateUICapture PRIVATE cxx_std_17)
+  target_compile_definitions(SkellyPrivateUICapture PRIVATE
+      JUCE_MODAL_LOOPS_PERMITTED=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+  target_link_libraries(SkellyPrivateUICapture PRIVATE
+      MetaTuneInspired juce::juce_audio_processors juce::juce_audio_utils
+      juce::juce_recommended_config_flags)
+endif()

@@ -31,6 +31,16 @@ juce::File findPrivateLicensedFile(const juce::String& name)
     if (length == 0 || length >= 32768)
         return {};
     auto folder = juce::File(juce::String(path)).getParentDirectory();
+#elif JUCE_LINUX && defined(SKELLTUNE_AUTO_2P5) && SKELLTUNE_AUTO_2P5
+    // Native Linux QA executable uses the same JUCE editor code as the
+    // Windows preview. Its resources are added only to the local runner.
+    auto folder = juce::File::getSpecialLocation(juce::File::currentExecutableFile)
+                       .getParentDirectory();
+#else
+    juce::ignoreUnused(name);
+    return {};
+#endif
+#if (JUCE_WINDOWS || JUCE_LINUX) && defined(SKELLTUNE_AUTO_2P5) && SKELLTUNE_AUTO_2P5
     for (int level = 0; level < 5; ++level)
     {
         for (const auto& candidate : {
@@ -43,8 +53,6 @@ juce::File findPrivateLicensedFile(const juce::String& name)
         if (parent == folder) break;
         folder = parent;
     }
-#else
-    juce::ignoreUnused(name);
 #endif
     return {};
 }
