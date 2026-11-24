@@ -643,6 +643,163 @@ juce::Image createInnerOrbArtwork()
     return image;
 }
 
+
+class PrivateAssetGallery final : public juce::Component
+{
+public:
+    struct Row
+    {
+        juce::String category, name, preview, status;
+    };
+
+    PrivateAssetGallery()
+    {
+        setName("Licensed resource audit");
+        setOpaque(true);
+        const auto file = findPrivateLicensedFile("catalog.tsv");
+        if (!file.existsAsFile()) return;
+        const auto lines = juce::StringArray::fromLines(file.loadFileAsString());
+        for (const auto& line : lines)
+        {
+            juce::StringArray fields;
+            fields.addTokens(line, "\t", "");
+            if (fields.size() != 4 || fields[0] == "category") continue;
+            rows.push_back({ fields[0], fields[1], fields[2], fields[3] });
+        }
+        rebuildPageCache();
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        g.addTransform(juce::AffineTransform::scale(getWidth() / 1366.0f,
+                                                    getHeight() / 1080.0f));
+        g.fillAll(juce::Colour(0xff0b0b10));
+        g.setColour(juce::Colour(0xff25212e));
+        g.fillRoundedRectangle(54.0f, 53.0f, 1258.0f, 974.0f, 18.0f);
+        g.setColour(juce::Colour(0xff615674));
+        g.drawRoundedRectangle(54.0f, 53.0f, 1258.0f, 974.0f, 18.0f, 1.3f);
+        g.setColour(juce::Colour(0xffeee8f7));
+        g.setFont(uiFont(27.0f, juce::Font::bold));
+        g.drawText("ORIGINAL ASSET LIBRARY", 84, 77, 920, 44,
+                   juce::Justification::centredLeft);
+        g.setColour(juce::Colour(0xffb2a8c4));
+        g.setFont(uiFont(14.0f));
+        g.drawText(juce::String((int)rows.size()) +
+                   " source resources  •  Active = used by the main UI  •  Reference = available here",
+                   85, 117, 1030, 29, juce::Justification::centredLeft);
+        g.setColour(juce::Colour(0xff5f516e));
+        g.drawRoundedRectangle(1228.0f, 77.0f, 50.0f, 40.0f, 8.0f, 1.0f);
+        g.setColour(juce::Colour(0xffece2fa)); g.setFont(uiFont(23.0f));
+        g.drawText("×", 1230, 77, 47, 40, juce::Justification::centred);
+
+        const char* groups[] { "ALL", "SVG", "RASTER", "FONTS",
+                               "LAYOUT", "PREVIEW", "OTHER" };
+        for (int i = 0; i < 7; ++i)
+        {
+            const int x = 85 + i * 170;
+            g.setColour(i == group ? juce::Colour(0xff57446f)
+                                   : juce::Colour(0xff201e27));
+            g.fillRoundedRectangle((float)x, 162.0f, 155.0f, 37.0f, 8.0f);
+            g.setColour(juce::Colour(0xffefe8fa)); g.setFont(uiFont(14.0f, juce::Font::bold));
+            g.drawText(groups[i], x, 163, 155, 35, juce::Justification::centred);
+        }
+
+        if (rows.empty())
+        {
+            g.setColour(juce::Colour(0xffd9cde8)); g.setFont(uiFont(20.0f));
+            g.drawText("Private catalog missing. Reinstall the whole licensed VST3 folder.",
+                       100, 390, 1100, 100, juce::Justification::centred);
+            return;
+        }
+        const int start = page * 12;
+        for (int i = 0; i < 12; ++i)
+        {
+            const int index = start + i;
+            if (index >= (int)visibleRows.size()) break;
+            const auto& item = rows[(size_t)visibleRows[(size_t)index]];
+            const float x = 85.0f + (i % 4) * 305.0f;
+            const float y = 223.0f + (i / 4) * 250.0f;
+            g.setColour(juce::Colour(0xff111017));
+            g.fillRoundedRectangle(x, y, 285.0f, 226.0f, 12.0f);
+            g.setColour(juce::Colour(0xff474050));
+            g.drawRoundedRectangle(x, y, 285.0f, 226.0f, 12.0f, 0.9f);
+            if (!images[(size_t)i].isNull())
+                g.drawImageWithin(images[(size_t)i], (int)x + 12, (int)y + 8,
+                                  261, 150, juce::RectanglePlacement::centred);
+            g.setColour(item.status == "active" ? juce::Colour(0xffccaeff)
+                                                  : juce::Colour(0xff97909e));
+            g.setFont(uiFont(12.0f, juce::Font::bold));
+            g.drawText(item.category.toUpperCase() + "  " + item.status.toUpperCase(),
+                       (int)x+11, (int)y+157, 264, 20, juce::Justification::centredLeft);
+            g.setColour(juce::Colour(0xffe0dce8));
+            g.setFont(uiFont(13.0f));
+            g.drawFittedText(item.name, (int)x+11, (int)y+179, 263, 35,
+                             juce::Justification::centredLeft, 2);
+        }
+        const int pages = juce::jmax(1, ((int)visibleRows.size() + 11) / 12);
+        g.setColour(juce::Colour(0xffd5c9e5));
+        g.setFont(uiFont(16.0f));
+        g.drawText("Page " + juce::String(page+1) + "/" + juce::String(pages),
+                   576, 972, 216, 37, juce::Justification::centred);
+        g.drawText("‹ Previous", 392, 972, 178, 37, juce::Justification::centred);
+        g.drawText("Next ›", 796, 972, 178, 37, juce::Justification::centred);
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        const auto x = e.position.x * 1366.0f / juce::jmax(1, getWidth());
+        const auto y = e.position.y * 1080.0f / juce::jmax(1, getHeight());
+        if (x >= 1217.0f && y <= 140.0f)
+        {
+            setVisible(false);
+            return;
+        }
+        if (y >= 155.0f && y <= 207.0f)
+        {
+            const int index = (int)((x - 85.0f) / 170.0f);
+            if (index >= 0 && index < 7)
+            {
+                group = index; page = 0;
+                rebuildPageCache(); repaint();
+            }
+            return;
+        }
+        const int pages = juce::jmax(1, ((int)visibleRows.size() + 11) / 12);
+        if (y >= 958.0f && y <= 1028.0f)
+        {
+            if (x >= 382.0f && x < 574.0f) page = juce::jmax(0, page-1);
+            if (x >= 784.0f && x < 982.0f) page = juce::jmin(pages-1, page+1);
+            rebuildPageCache(); repaint();
+        }
+    }
+
+    void refresh() { rebuildPageCache(); repaint(); }
+
+private:
+    void rebuildPageCache()
+    {
+        visibleRows.clear();
+        static const char* names[] { "", "SVG", "Raster", "Fonts",
+                                     "Layout", "Preview", "Other" };
+        for (int i=0;i<(int)rows.size();++i)
+            if (group == 0 || rows[(size_t)i].category == names[group])
+                visibleRows.push_back(i);
+        page = juce::jlimit(0, juce::jmax(0, ((int)visibleRows.size()-1)/12), page);
+        for (int i = 0; i < 12; ++i)
+        {
+            images[(size_t)i] = {};
+            const int index = page * 12 + i;
+            if (index >= (int)visibleRows.size()) continue;
+            const auto& item = rows[(size_t)visibleRows[(size_t)index]];
+            images[(size_t)i] = loadPrivateLicensedRaster(item.preview, 260, 144);
+        }
+    }
+    std::vector<Row> rows;
+    std::vector<int> visibleRows;
+    std::array<juce::Image, 12> images {};
+    int group = 0, page = 0;
+};
+
 class MetaTuneKnobLookAndFeel final : public juce::LookAndFeel_V4
 {
 public:
@@ -1103,6 +1260,11 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
                                       &noteReadout, &status };
 #endif
     for (auto* c : components) addAndMakeVisible(c);
+    if (!privateLicensedShell.isNull())
+    {
+        privateAssetGallery = std::make_unique<PrivateAssetGallery>();
+        addChildComponent(*privateAssetGallery);
+    }
 #if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
     addAndMakeVisible(abEngine);
     abEngine.addItem("Current", 1);
@@ -2438,6 +2600,11 @@ void MetaTuneInspiredAudioProcessorEditor::openHeaderMenu()
         menu.addItem(2000 + i, names[i], true, i == selectedNoteIndex);
     menu.addSeparator();
     menu.addItem(3000, "Reset controls");
+    if (privateAssetGallery != nullptr)
+    {
+        menu.addSeparator();
+        menu.addItem(3100, "Original resource audit (422 files)");
+    }
 
     juce::Component::SafePointer<MetaTuneInspiredAudioProcessorEditor> safeThis(this);
     menu.showMenuAsync(juce::PopupMenu::Options(), [safeThis](int result)
@@ -2447,6 +2614,15 @@ void MetaTuneInspiredAudioProcessorEditor::openHeaderMenu()
             safeThis->setScaleMode(result - 1000);
         else if (result >= 2000 && result <= 2011)
             safeThis->setRootNote(result - 2000);
+        else if (result == 3100)
+        {
+            if (safeThis->privateAssetGallery != nullptr)
+            {
+                safeThis->privateAssetGallery->setVisible(true);
+                safeThis->privateAssetGallery->toFront(true);
+                safeThis->privateAssetGallery->repaint();
+            }
+        }
         else if (result == 3000)
         {
             safeThis->speed.setValue(30.0, juce::sendNotificationSync);
@@ -2877,6 +3053,8 @@ void MetaTuneInspiredAudioProcessorEditor::resized()
     noteReadout.setBounds(px(360), py(365), px(230), py(70));
     // The status line was behind the moveable Doubler dot at y~620.
     status.setBounds(px(32), py(642), px(600), py(24));
+    if (privateAssetGallery != nullptr)
+        privateAssetGallery->setBounds(getLocalBounds());
     const float uiScale = juce::jmin(sx, sy);
     noteReadout.setFont(uiFont(juce::jlimit(16.0f, 42.0f, 42.0f * uiScale),
                               juce::Font::bold));
