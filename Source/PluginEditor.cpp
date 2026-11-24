@@ -131,6 +131,52 @@ juce::Rectangle<float> licensedWidgetBounds(const juce::String& name,
     return fallback;
 }
 
+// The source toolbar vectors often use a faint disabled colour and an
+// almost-transparent full-cell rectangle. Extract the actual icon silhouette
+// once and tint it using the current widget state, retaining its source shape.
+const juce::Image& licensedIcon(int index)
+{
+    static std::array<juce::Image,95> cache {};
+    static std::array<bool,95> loaded {};
+    const auto i=(size_t)juce::jlimit(1,94,index);
+    if (!loaded[i])
+    {
+        loaded[i]=true;
+        auto image=loadPrivateLicensedRaster("Svg/svg-"+juce::String((int)i).paddedLeft('0',3)+".png",128,128);
+        if (!image.isNull())
+        {
+            int l=image.getWidth(),t=image.getHeight(),r=0,b=0;
+            for(int y=0;y<image.getHeight();++y)
+                for(int x=0;x<image.getWidth();++x)
+                    if(image.getPixelAt(x,y).getAlpha()>20)
+                    { l=juce::jmin(l,x);t=juce::jmin(t,y);r=juce::jmax(r,x+1);b=juce::jmax(b,y+1); }
+            if(r>l && b>t)
+            {
+                auto mask=image.getClippedImage({l,t,r-l,b-t}).createCopy();
+                for(int y=0;y<mask.getHeight();++y)
+                    for(int x=0;x<mask.getWidth();++x)
+                    {
+                        const auto a=mask.getPixelAt(x,y).getAlpha();
+                        mask.setPixelAt(x,y,juce::Colours::white.withAlpha(
+                            juce::jlimit(0.0f,1.0f,(a-12.0f)/243.0f)));
+                    }
+                cache[i]=mask;
+            }
+        }
+    }
+    return cache[i];
+}
+bool drawLicensedIcon(juce::Graphics& g,int index,juce::Rectangle<float> r,juce::Colour colour)
+{
+    const auto& image=licensedIcon(index);
+    if(image.isNull()) return false;
+    g.setColour(colour);
+    auto b=r.toNearestInt();
+    g.drawImageWithin(image,b.getX(),b.getY(),b.getWidth(),b.getHeight(),
+                      juce::RectanglePlacement::centred,true);
+    return true;
+}
+
 struct LicensedKey
 {
     int svg;
@@ -1010,20 +1056,27 @@ public:
             {
                 // The original source has a discrete luminous segmented rail;
                 // no opaque new dial face or continuous line under the LEDs.
+                juce::Path channel;
+                channel.addCentredArc(cx,cy,arcR,arcR,0.0f,a0,a1,true);
+                g.setColour(juce::Colour(0xff29292d));
+                g.strokePath(channel,juce::PathStrokeType(side*0.075f,
+                    juce::PathStrokeType::curved,juce::PathStrokeType::rounded));
                 const int ticks=isSpeed?82:75;
                 for (int i=0;i<ticks;++i)
                 {
                     const float t=(float)i/(ticks-1);
                     const float a=a0+(a1-a0)*t;
-                    const float inner=arcR-side*0.027f;
-                    const float outer=arcR+side*0.032f;
-                    auto colour=pink.interpolatedWith(purple,t);
+                    if(t>pos)continue;
+                    const float inner=arcR-side*0.031f;
+                    const float outer=arcR+side*0.036f;
+                    auto colour=juce::Colour(0xffd58a86).interpolatedWith(
+                        juce::Colour(0xffc9a0ff),t);
                     if(isSpeed && overload>0.001f && t>0.93f)
                         colour=colour.interpolatedWith(overloadHeat,overload);
-                    g.setColour(t<=pos?colour.withAlpha(0.97f):juce::Colour(0xff49464e).withAlpha(0.62f));
+                    g.setColour(colour.withAlpha(0.98f));
                     g.drawLine(cx+std::sin(a)*inner,cy-std::cos(a)*inner,
                                cx+std::sin(a)*outer,cy-std::cos(a)*outer,
-                               juce::jmax(0.65f,side*0.006f));
+                               juce::jmax(0.7f,side*0.010f));
                 }
             }
             const juce::String display = isSpeed
@@ -1425,7 +1478,7 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     amountAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor.parameters,"amount",amount);
     sustainAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor.parameters,"sustain",sustain);
     auto beginUndoableEdit = [this]() { undoState = processor.parameters.copyState(); hasUndoState = true; hasRedoState = false; };
-    auto finishUndoableEdit = [this]() { redoState = processor.parameters.copyState(); hasRedoState = hasUndoState; };
+    auto finishUndoableEdit = [this]() { repaint(); }; // Redo becomes available only after Undo.
     speed.onDragStart = beginUndoableEdit; speed.onDragEnd = finishUndoableEdit;
     amount.onDragStart = beginUndoableEdit; amount.onDragEnd = finishUndoableEdit;
     sustain.onDragStart = beginUndoableEdit;
@@ -1827,6 +1880,58 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
         g.fillRect(px, py, (i % 3 == 0) ? 2 : 1, 1);
     }
 
+    // Licensed header is a separate source-layout path. Painting the
+    // old chrome underneath the original vectors creates phantom hit areas.
+    if (hasOriginalArtwork)
+    {
+        const auto header=[&](const char* name,juce::Rectangle<float> fallback)
+        { return licensedWidgetBounds(name,fallback); };
+        const auto ink=juce::Colour(0xffc8c2cd);
+        const auto disabledInk=juce::Colour(0xff827d88);
+        const auto hotInk=juce::Colour(0xffe3d4fa);
+        const auto icon=[&](int index,juce::Rectangle<float> r,float size,juce::Colour colour)
+        {
+            const auto bounds=r.withSizeKeepingCentre(size,size);
+            return drawLicensedIcon(g,index,bounds,colour);
+        };
+        icon(19,header("SlateDigitalLogo",{3,8,63,48}),34.0f,hotInk);
+        icon(5,header("OpenCloseBrowser",{68,8,72,48}),28.0f,ink);
+        const auto preset=header("CurrentPreset",{142,8,291,48});
+        const auto presetText=preset.withTrimmedRight(54.0f).reduced(11.0f,3.0f);
+        g.setColour(ink);g.setFont(uiFont(16.0f,juce::Font::italic));
+        g.drawFittedText(selectedPresetName,presetText.toNearestInt(),juce::Justification::centredLeft,1,0.85f);
+        juce::Path up,down;
+        up.startNewSubPath(405.0f,27.0f);up.lineTo(412.0f,20.0f);up.lineTo(419.0f,27.0f);
+        down.startNewSubPath(405.0f,34.0f);down.lineTo(412.0f,41.0f);down.lineTo(419.0f,34.0f);
+        g.setColour(ink);g.strokePath(up,juce::PathStrokeType(1.7f));g.strokePath(down,juce::PathStrokeType(1.7f));
+        icon(24,header("SaveCurrentPreset",{433,8,73,48}),24.0f,ink);
+
+        const auto mark=header("ProductLogo",{506,8,466,48});
+        const auto markX=mark.getCentreX()-99.0f;
+        const auto markY=mark.getCentreY()-16.0f;
+        const bool meta=drawLicensedIcon(g,31,{markX,markY+3.0f,102.0f,29.0f},
+                                        juce::Colour(0xffc6b4dd));
+        const bool tune=drawLicensedIcon(g,32,{markX+103.0f,markY,96.0f,34.0f},
+                                        juce::Colour(0xffe2d2fa));
+        if(!meta || !tune)
+        {
+            g.setColour(hotInk);g.setFont(uiFont(26.0f,juce::Font::bold));
+            g.drawFittedText("metaTune",mark.toNearestInt(),juce::Justification::centred,1);
+        }
+        icon(28,header("Undo",{976,8,58,48}),22.0f,hasUndoState?ink:disabledInk);
+        icon(22,header("Redo",{1034,8,58,48}),22.0f,hasRedoState?ink:disabledInk);
+        icon(23,header("Reset",{1092,8,54,48}),25.0f,ink);
+        const auto ar=header("AButton",{1147,8,51,48});
+        const auto br=header("BButton",{1242,8,51,48});
+        g.setColour(purple.withAlpha(0.18f));
+        g.fillRoundedRectangle((activeB?br:ar).reduced(6.0f,7.0f),5.0f);
+        icon(1,ar,18.0f,activeB?disabledInk:hotInk);
+        icon(3,header("ABCopyButton",{1198,8,43,48}),15.0f,ink);
+        icon(2,br,18.0f,activeB?hotInk:disabledInk);
+        icon(27,header("Tooltips",{1293,8,73,48}),24.0f,ink);
+    }
+    else
+    {
     // Top chrome
     if (!hasOriginalArtwork)
     {
@@ -1978,6 +2083,8 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.drawLine(1295.0f, 34.0f, 1295.0f, 38.0f, 1.3f);
     g.drawText("?",1290,14,20,19,juce::Justification::centred);
 
+    }
+
     // Main surface and dramatic diagonal split
     if (privateLicensedShell.isNull())
     {
@@ -2041,6 +2148,12 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
         sphere.addEllipse(238.0f,138.0f,465.0f,460.0f);
         g.reduceClipRegion(sphere);
         g.drawImageWithin(sourceSphere,238,138,465,460,juce::RectanglePlacement::stretchToFit);
+        // Keep the extracted material visible, but give the dark centre a
+        // soft glass volume so the inner lens is not floating in a black hole.
+        g.setGradientFill(juce::ColourGradient(
+            purple.withAlpha(0.20f+0.14f*inputActivity),470.0f,365.0f,
+            purple.withAlpha(0.0f),690.0f,365.0f,true));
+        g.fillEllipse(238.0f,138.0f,465.0f,460.0f);
         g.restoreState();
     }
     else
@@ -2113,9 +2226,9 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.drawEllipse(241.0f, 141.0f, 459.0f, 454.0f, 2.5f);
 
     // Violet bloom around the middle ring stays diffuse under the crisp neon rim.
-    g.setColour(juce::Colour(0xffa875ff).withAlpha(0.13f));
+    g.setColour(juce::Colour(0xffa875ff).withAlpha(usingSourceSphere?0.045f:0.13f));
     g.drawEllipse(306.0f, 202.0f, 329.0f, 328.0f, 31.0f);
-    g.setColour(juce::Colour(0xffaa79ff).withAlpha(0.28f));
+    g.setColour(juce::Colour(0xffaa79ff).withAlpha(usingSourceSphere?0.12f:0.28f));
     g.drawEllipse(313.0f, 209.0f, 315.0f, 314.0f, 19.0f);
     g.setColour(juce::Colour(0xffb58aff).withAlpha(0.80f));
     g.drawEllipse(319.0f, 215.0f, 303.0f, 302.0f, 6.5f);
@@ -2411,7 +2524,13 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
         }
     }
 
-    // Keep the lightning logo fixed while the plasma texture moves beneath it.
+    // Use the original bolt vector in licensed mode; retain the legacy
+    // procedural shape only when the private resource cannot be decoded.
+    const bool drewLicensedBolt=hasOriginalArtwork &&
+        drawLicensedIcon(g,30,{449.0f,333.0f,42.0f,60.0f},
+                         juce::Colour(0xffffd5ff));
+    if(!drewLicensedBolt)
+    {
     juce::Path bolt;
     bolt.startNewSubPath(477.0f, 326.0f);
     bolt.lineTo(455.0f, 354.0f);
@@ -2424,6 +2543,7 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.fillPath(bolt, juce::AffineTransform::translation(1.0f, 1.0f));
     g.setColour(juce::Colour(0xffffc6ff).withAlpha(0.92f + 0.08f * orbBreathAmount));
     g.fillPath(bolt);
+    }
 
     // One clean luminous inner rim keeps the rotating texture inside the glass lens.
     g.setColour(juce::Colour(0xfff0e5ff).withAlpha(0.68f));
@@ -2523,84 +2643,54 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xff35343b)); g.drawRoundedRectangle(685,684,657,39,19.0f,1.0f);
 #endif
 
-    // Real original 2x input/output meter textures. The 100 live note
-    // columns below remain the source-of-truth for dynamic pitch monitoring.
-    if (hasOriginalArtwork)
-    {
-        static const juce::Image originalIn =
-            loadPrivateLicensedRaster("heatmap-input.png", 1288, 32);
-        static const juce::Image originalOut =
-            loadPrivateLicensedRaster("heatmap-output.png", 1288, 32);
-        if (!originalIn.isNull())
-            g.drawImageWithin(originalIn, 165, 739, 1047, 19,
-                              juce::RectanglePlacement::stretchToFit);
-        if (!originalOut.isNull())
-            g.drawImageWithin(originalOut, 165, 762, 1047, 18,
-                              juce::RectanglePlacement::stretchToFit);
-    }
-    // The asset has the original monitor panels. Keep only the live traces.
+    // Original meter materials are a subtle noise floor, never a full
+    // bright static signal. XML bounds are shared by texture and live traces.
+    const auto inMeter=hasOriginalArtwork?licensedWidgetBounds("InputHeatMap",{165,739,1047,19}):juce::Rectangle<float>(165,739,1047,19);
+    const auto outMeter=hasOriginalArtwork?licensedWidgetBounds("OutputHeatMap",{165,762,1047,18}):juce::Rectangle<float>(165,762,1047,18);
     if (!hasOriginalArtwork)
     {
-        g.setColour(juce::Colour(0xff1d1d20)); g.fillRect(0,734,1366,53);
-        g.setColour(juce::Colour(0xff0b0b0d)); g.fillRect(160,738,1052,45);
+        g.setColour(juce::Colour(0xff1d1d20));g.fillRect(0,734,1366,53);
     }
-    g.setColour(juce::Colour(0xff303036)); g.drawLine(160.0f,760.0f,1212.0f,760.0f,1.0f);
-    g.setColour(muted); g.setFont(uiFont(14.0f,juce::Font::bold));
-    g.drawText("Input",32,736,105,24,juce::Justification::centredLeft);
-    g.drawText("Output",32,760,105,24,juce::Justification::centredLeft);
-    if (showHeatMaps)
+    g.setColour(juce::Colour(0xff101014));g.fillRect(inMeter);g.fillRect(outMeter);
+    if(hasOriginalArtwork && showHeatMaps)
     {
-        const auto noteTint = [](int note, bool output) -> juce::Colour
+        static const auto in=loadPrivateLicensedRaster("heatmap-input.png",1288,32);
+        static const auto out=loadPrivateLicensedRaster("heatmap-output.png",1288,32);
+        g.saveState();g.setOpacity(0.075f);
+        if(!in.isNull())g.drawImageWithin(in,inMeter.getX(),inMeter.getY(),inMeter.getWidth(),inMeter.getHeight(),juce::RectanglePlacement::stretchToFit);
+        if(!out.isNull())g.drawImageWithin(out,outMeter.getX(),outMeter.getY(),outMeter.getWidth(),outMeter.getHeight(),juce::RectanglePlacement::stretchToFit);
+        g.restoreState();
+    }
+    g.setColour(muted);g.setFont(uiFont(14.0f,juce::Font::bold));
+    g.drawText("Input",32,inMeter.getY(),105,inMeter.getHeight(),juce::Justification::centredLeft);
+    g.drawText("Output",32,outMeter.getY(),105,outMeter.getHeight(),juce::Justification::centredLeft);
+    if(showHeatMaps)
+    {
+        const auto tint=[](int note,bool output)
         {
-            if (note < 0) return juce::Colour(0xff27252d);
-            const int pc = (note % 12 + 12) % 12;
-            static const juce::Colour hues[] = {
-                juce::Colour(0xff9470ff), juce::Colour(0xff65dff6),
-                juce::Colour(0xff8b72ee), juce::Colour(0xff65dff6),
-                juce::Colour(0xffca83ee), juce::Colour(0xff67d7f1),
-                juce::Colour(0xff9375ed), juce::Colour(0xff68dff3),
-                juce::Colour(0xffa27aff), juce::Colour(0xff65d7f1),
-                juce::Colour(0xffcf7edc), juce::Colour(0xff9879f2)
-            };
-            const auto base = hues[pc];
-            return output ? base.interpolatedWith(juce::Colour(0xffff86d8), 0.26f) : base;
+            const auto base=purple.interpolatedWith(cyan,((note%12+12)%12)/11.0f);
+            return output?base.interpolatedWith(pink,0.28f):base;
         };
-
-        for (int i = 0; i < heatmapColumnCount; ++i)
+        for(int i=0;i<heatmapColumnCount;++i)
         {
-            const int historyIndex = (heatmapWriteIndex + i) % heatmapColumnCount;
-            const float x = 165.0f + (float)i * 10.2f;
-            const float strength = juce::jlimit(0.0f, 1.0f, heatmapConfidence[(size_t)historyIndex]);
-            const int inputNote = heatmapInputNotes[(size_t)historyIndex];
-            const int outputNote = heatmapOutputNotes[(size_t)historyIndex];
-            if (!hasOriginalArtwork)
+            const int index=(heatmapWriteIndex+i)%heatmapColumnCount;
+            const float strength=juce::jlimit(0.0f,1.0f,heatmapConfidence[(size_t)index]);
+            const auto trace=[&](juce::Rectangle<float> bounds,int note,bool output)
             {
-                g.setColour(juce::Colour(0xff0a0a0d));
-                g.fillRect(x, 739.0f, 7.0f, 19.0f);
-                g.fillRect(x, 762.0f, 7.0f, 18.0f);
-            }
-            if (inputNote >= 0)
-            {
-                const auto inputColour = noteTint(inputNote, false);
-                g.setColour(inputColour.withAlpha(0.30f + 0.68f * strength));
-                g.fillRect(x, 739.0f, 6.0f, 19.0f);
-                g.setColour(inputColour.withAlpha(0.14f + 0.42f * strength));
-                g.fillRect(x + 1.0f, 741.0f, 2.0f, 15.0f);
-            }
-            if (outputNote >= 0)
-            {
-                const auto outputColour = noteTint(outputNote, true);
-                g.setColour(outputColour.withAlpha(0.26f + 0.70f * strength));
-                g.fillRect(x, 762.0f, 6.0f, 18.0f);
-                g.setColour(outputColour.withAlpha(0.12f + 0.44f * strength));
-                g.fillRect(x + 2.0f, 764.0f, 2.0f, 14.0f);
-            }
+                if(note<0 || strength<0.05f)return;
+                const float w=bounds.getWidth()/heatmapColumnCount;
+                g.setColour(tint(note,output).withAlpha(0.16f+0.80f*strength));
+                g.fillRect(bounds.getX()+i*w,bounds.getY()+2.0f,
+                           juce::jmax(1.0f,w-1.7f),bounds.getHeight()-4.0f);
+            };
+            trace(inMeter,heatmapInputNotes[(size_t)index],false);
+            trace(outMeter,heatmapOutputNotes[(size_t)index],true);
         }
     }
     else
     {
-        g.setColour(juce::Colour(0xff29282e));
-        g.drawText("Heatmaps hidden", 390, 744, 260, 30, juce::Justification::centred);
+        g.setColour(juce::Colour(0xffaaa1b2));g.setFont(uiFont(13.0f));
+        g.drawText("Heatmaps hidden",inMeter.getUnion(outMeter).toNearestInt(),juce::Justification::centred);
     }
 
     // Original keyboard and side rail are baked into the licensed background.
@@ -2934,7 +3024,68 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
     const float x = event.position.x / juce::jmax(0.0001f, sx);
     const float y = event.position.y / juce::jmax(0.0001f, sy);
 
-    // Toolbar hit areas: menu, save, undo, redo, sync-to-detected-note, A/B and help.
+    // Licensed controls use exactly the same source rectangles as paint().
+    if (!privateLicensedShell.isNull() && y >= 0.0f && y < 59.0f)
+    {
+        const juce::Point<float> p(x,y);
+        const auto hit=[&](const char* name,juce::Rectangle<float> fallback)
+        { return licensedWidgetBounds(name,fallback).contains(p); };
+        if(hit("OpenCloseBrowser",{68,8,72,48})) { openHeaderMenu(); return; }
+        if(hit("CurrentPreset",{142,8,291,48}))
+        {
+            if(x>=389.0f) setRootNote((selectedNoteIndex+(y<30.0f?1:-1)+12)%12);
+            else loadPresetFromFile();
+            return;
+        }
+        if(hit("SaveCurrentPreset",{433,8,73,48})) { savePresetToFile(); return; }
+        if(hit("Undo",{976,8,58,48}))
+        {
+            if(hasUndoState)
+            {
+                redoState=processor.parameters.copyState();hasRedoState=true;
+                processor.parameters.replaceState(undoState.createCopy());hasUndoState=false;
+                repaint();
+            }
+            return;
+        }
+        if(hit("Redo",{1034,8,58,48}))
+        {
+            if(hasRedoState)
+            {
+                undoState=processor.parameters.copyState();hasUndoState=true;
+                processor.parameters.replaceState(redoState.createCopy());hasRedoState=false;
+                repaint();
+            }
+            return;
+        }
+        if(hit("Reset",{1092,8,54,48}))
+        {
+            const float hz=processor.getDetectedHz();
+            if(hz>0.0f)
+                setRootNote(((int)std::round(69.0f+12.0f*std::log2(hz/pitchReferenceHz))%12+12)%12);
+            else openHeaderMenu();
+            return;
+        }
+        if(hit("ABCopyButton",{1198,8,43,48}))
+        {
+            const auto current=processor.parameters.copyState();
+            // The arrow copies the selected slot into the other slot, not
+            // a visual-only button. Preserve the current state/slot.
+            slotA=current.createCopy();slotB=current.createCopy();repaint();return;
+        }
+        const bool selectA=hit("AButton",{1147,8,51,48});
+        const bool selectB=hit("BButton",{1242,8,51,48});
+        if(selectA||selectB)
+        {
+            const auto current=processor.parameters.copyState();
+            if(selectA && activeB) {slotB=current.createCopy();if(slotA.isValid())processor.parameters.replaceState(slotA.createCopy());activeB=false;}
+            else if(selectB && !activeB) {slotA=current.createCopy();if(slotB.isValid())processor.parameters.replaceState(slotB.createCopy());activeB=true;}
+            repaint();return;
+        }
+        if(hit("Tooltips",{1293,8,73,48})) { openHeaderMenu();return; }
+        return;
+    }
+    // Fallback toolbar hit areas remain unchanged.
     if (y >= 0.0f && y < 59.0f)
     {
         if (x >= 68.0f && x < 142.0f) { openHeaderMenu(); return; }
