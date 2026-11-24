@@ -1451,7 +1451,11 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
     abEngine.setTooltip("Compare the current production path, LowVoice 3.4, and LowVoice 2.5. Nominal host PDC changes with mode; low-register voiced source age is variable.");
 #endif
 
-    scale.addItem("Chromatic", 1); scale.addItem("Major", 2); scale.addItem("Minor", 3);
+    // All nine choices must match the APVTS AudioParameterChoice exactly.
+    // A three-item attachment mapped Major/Minor to the wrong DSP scales.
+    const char* scaleNames[] {"Chromatic","Major","Minor","Harmonic Minor",
+        "Major Pentatonic","Minor Pentatonic","Blues","Dorian","Custom"};
+    for (int i=0;i<9;++i) scale.addItem(scaleNames[i],i+1);
 #if defined(SKELLTUNE_3WAY_AB_LAB) && SKELLTUNE_3WAY_AB_LAB
     for (auto* combo : { &scale, &root, &abEngine })
 #else
@@ -1504,10 +1508,14 @@ MetaTuneInspiredAudioProcessorEditor::MetaTuneInspiredAudioProcessorEditor(MetaT
         doublerMix = juce::jlimit(0.0f, 1.0f, rawMix->load(std::memory_order_relaxed) / 100.0f);
     if (auto* rawBypass = processor.parameters.getRawParameterValue("globalBypass"))
         globalBypass = rawBypass->load(std::memory_order_relaxed) > 0.5f;
-    lastNonChromaticScaleMode = scale.getSelectedItemIndex() == 2 ? 2 : 1;
+    lastNonChromaticScaleMode = juce::jlimit(1,8,scale.getSelectedItemIndex());
     slotA = processor.parameters.copyState();
     slotB = slotA.createCopy();
-    scale.onChange = [this]() { repaint(); };
+    scale.onChange = [this]() {
+        if(scale.getSelectedItemIndex()>0)
+            lastNonChromaticScaleMode=scale.getSelectedItemIndex();
+        repaint();
+    };
     root.onChange = [this]() { selectedNoteIndex = juce::jlimit(0, 11, root.getSelectedItemIndex()); repaint(); };
 
     // Startup spin-and-illuminate routine plays once for every newly opened editor.
@@ -1610,8 +1618,10 @@ void MetaTuneInspiredAudioProcessorEditor::drawPiano(juce::Graphics& g, juce::Re
 {
     static const char* names[] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
     static const bool blackNote[] = { false, true, false, true, false, false, true, false, true, false, true, false };
-    static const int majorScale[] = { 0, 2, 4, 5, 7, 9, 11 };
-    static const int minorScale[] = { 0, 2, 3, 5, 7, 8, 10 };
+    std::array<bool,12> customDegrees {};
+    for (int i=0;i<12;++i)
+        if (auto* raw=processor.parameters.getRawParameterValue("customDegree"+juce::String(i)))
+            customDegrees[(size_t)i]=raw->load(std::memory_order_relaxed)>0.5f;
 
     const int labelH = juce::jmin(52, area.getHeight() / 4);
     const int keyTop = area.getY() + labelH;
@@ -1628,14 +1638,11 @@ void MetaTuneInspiredAudioProcessorEditor::drawPiano(juce::Graphics& g, juce::Re
     const int liveTargetPc = hasLivePitch
         ? ((int)std::lround(processor.getSmoothedTargetMidiNote()) % 12 + 12) % 12 : -1;
 
-    const auto isAllowed = [scaleMode, chosenRoot](int noteIndex) noexcept
+    const int mask=autotune::scaleMask(static_cast<autotune::Scale>(
+        juce::jlimit(0,8,scaleMode)),customDegrees);
+    const auto isAllowed = [mask, chosenRoot](int noteIndex) noexcept
     {
-        if (scaleMode == 0) return true;
-        const int relative = (noteIndex - chosenRoot + 12) % 12;
-        const int* intervals = scaleMode == 1 ? majorScale : minorScale;
-        for (int degreeIndex = 0; degreeIndex < 7; ++degreeIndex)
-            if (relative == intervals[degreeIndex]) return true;
-        return false;
+        return (mask & (1 << ((noteIndex-chosenRoot+12)%12))) != 0;
     };
 
     if (!privateLicensedShell.isNull())
@@ -2630,6 +2637,19 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     // In automatic mode, there is no switch or selector. Keep only a small
     // passive status chip rather than an oversized empty control housing.
 #if defined(SKELLTUNE_AUTO_2P5) && SKELLTUNE_AUTO_2P5
+    if(hasOriginalArtwork)
+    {
+        // The retired stabilizer cutout is source artwork, not a control.
+        // Use it for real pitch-lock status instead of a dead empty knob.
+        const auto monitor=licensedWidgetBounds("Stabilizer",{685,675,670,45});
+        g.setColour(juce::Colour(0xff222126));
+        g.fillRoundedRectangle(monitor.reduced(5.0f,5.0f),16.0f);
+        const auto locked=processor.getPitchConfidence()>=0.60f && processor.getDetectedHz()>0.0f;
+        drawLicensedIcon(g,locked?10:11,{monitor.getX()+17.0f,monitor.getY()+11.0f,22.0f,22.0f},locked?purple:muted);
+        g.setColour(locked?text:muted);g.setFont(uiFont(13.0f,juce::Font::bold));
+        g.drawText(locked?"PITCH LOCK  •  "+juce::String(processor.getDetectedHz(),1)+" Hz":"WAITING FOR PITCH",
+            monitor.withTrimmedLeft(48.0f).withTrimmedRight(145.0f).toNearestInt(),juce::Justification::centredLeft);
+    }
     g.setColour(juce::Colour(0xff1c1a22));
     g.fillRoundedRectangle(1222, 692, 113, 24, 12.0f);
     g.setColour(juce::Colour(0xff494153));
@@ -2664,6 +2684,12 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(muted);g.setFont(uiFont(14.0f,juce::Font::bold));
     g.drawText("Input",32,inMeter.getY(),105,inMeter.getHeight(),juce::Justification::centredLeft);
     g.drawText("Output",32,outMeter.getY(),105,outMeter.getHeight(),juce::Justification::centredLeft);
+    if(hasOriginalArtwork)
+    {
+        const auto inputSplit=licensedWidgetBounds("InputHeatMapLabelSplitter",{120,742,26,1});
+        const auto outputSplit=licensedWidgetBounds("OutputHeatMapLabelSplitter",{120,769,26,1});
+        g.setColour(muted.withAlpha(0.42f));g.fillRect(inputSplit);g.fillRect(outputSplit);
+    }
     if(showHeatMaps)
     {
         const auto tint=[](int note,bool output)
@@ -2693,6 +2719,108 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
         g.drawText("Heatmaps hidden",inMeter.getUnion(outMeter).toNearestInt(),juce::Justification::centred);
     }
 
+    if(hasOriginalArtwork)
+    {
+        const auto rect=[](const char* name,juce::Rectangle<float> fallback)
+            { return licensedWidgetBounds(name,fallback); };
+        const auto centeredIcon=[&](int id,juce::Rectangle<float> r,float side,juce::Colour ink)
+            { drawLicensedIcon(g,id,r.withSizeKeepingCentre(side,side),ink); };
+        const auto tone=rect("ToneVolumeSlider",{8,826,148,19});
+        const auto toneLabel=rect("ToneVolumeLabel",{30,795,101,21});
+        g.setColour(muted);g.setFont(uiFont(14.0f,juce::Font::bold));
+        g.drawFittedText("Tone Volume",toneLabel.toNearestInt(),juce::Justification::centred,1);
+        g.setColour(juce::Colour(0xff101014));g.fillRoundedRectangle(tone,6.0f);
+        const auto track=tone.reduced(4.0f,4.0f);
+        g.setColour(juce::Colour(0xff9d697f));
+        g.fillRoundedRectangle(track.withWidth(track.getWidth()*toneVolume),4.0f);
+        g.setColour(juce::Colour(0xffe3c3d6));
+        g.fillRoundedRectangle(track.getX()+track.getWidth()*toneVolume-1.5f,
+                               tone.getY()+1.5f,3.0f,tone.getHeight()-3.0f,1.5f);
+
+        const auto key=rect("KeyScaleMonitor",{0,866,164,180});
+        const auto keyRow=juce::Rectangle<float>(key.getX(),key.getY()+13.0f,key.getWidth(),90.0f);
+        const auto scaleRow=juce::Rectangle<float>(key.getX(),key.getY()+105.0f,key.getWidth(),57.0f);
+        const auto sideInk=juce::Colour(0xffa6a0ac);
+        centeredIcon(18,keyRow.withWidth(29.0f),12.0f,sideInk);
+        centeredIcon(17,keyRow.withX(keyRow.getRight()-29.0f).withWidth(29.0f),12.0f,sideInk);
+        centeredIcon(18,scaleRow.withWidth(29.0f),11.0f,sideInk);
+        centeredIcon(17,scaleRow.withX(scaleRow.getRight()-29.0f).withWidth(29.0f),11.0f,sideInk);
+        g.setColour(juce::Colour(0xffe4d9ef));
+        const auto& glyph=privateNoteGlyph(selectedNoteIndex);
+        if(!glyph.isNull())
+            g.drawImageWithin(glyph,(int)key.getCentreX()-32,(int)keyRow.getCentreY()-32,
+                64,64,juce::RectanglePlacement::centred,true);
+        g.setFont(uiFont(15.0f,juce::Font::bold));
+        g.drawFittedText(scale.getText(),scaleRow.reduced(30.0f,8.0f).toNearestInt(),
+                         juce::Justification::centred,2);
+        centeredIcon(21,{key.getCentreX()-9.0f,key.getBottom()-19.0f,18.0f,18.0f},
+                     13.0f,muted);
+
+        drawPiano(g,{165,788,1047,287});
+        const auto ink=juce::Colour(0xffc4baca);
+        const auto activeInk=juce::Colour(0xffcfadff);
+        const auto inOut=rect("InOutHeatMapsOnOffButton",{1202,728,40,51});
+        const auto resetInOut=rect("InOutHeatMapsResetButton",{1242,728,40,51});
+        const auto target=rect("TargetHeatMapOnOffButton",{1202,782,40,82});
+        const auto resetTarget=rect("TargetHeatMapResetButton",{1242,782,40,82});
+        centeredIcon(showHeatMaps?12:13,inOut,22.0f,showHeatMaps?activeInk:ink);
+        centeredIcon(14,resetInOut,20.0f,ink);
+        centeredIcon(showDetectedNotes?15:16,target,22.0f,showDetectedNotes?activeInk:ink);
+        centeredIcon(14,resetTarget,20.0f,ink);
+        g.setFont(uiFont(13.0f,juce::Font::bold));
+        g.setColour(showHeatMaps?activeInk:ink);
+        g.drawFittedText("In / Out\nHeatMaps",rect("InOutHeatMapsLabel",{1282,731,74,40}).toNearestInt(),
+                        juce::Justification::centredLeft,2);
+        g.setColour(showDetectedNotes?activeInk:ink);
+        g.drawFittedText("Detected\nNotes",rect("TargetHeatMapLabel",{1282,804,74,40}).toNearestInt(),
+                        juce::Justification::centredLeft,2);
+
+        const auto bypass=rect("BypassOnOffButton",{1202,866,164,94});
+        centeredIcon(globalBypass?20:6,bypass.withWidth(50.0f),26.0f,
+                     globalBypass?pink:ink);
+        g.setColour(globalBypass?pink:ink);
+        g.drawFittedText(globalBypass?"Global\nBypassed":"Global\nBypass",
+            bypass.withTrimmedLeft(55.0f).reduced(3.0f,15.0f).toNearestInt(),
+            juce::Justification::centredLeft,2);
+
+        const auto pitch=rect("PitchSlider",{1208,1010,148,19});
+        g.setColour(muted);
+        g.drawFittedText("Pitch Reference",rect("PitchLabel",{1202,979,164,21}).toNearestInt(),
+                        juce::Justification::centred,1);
+        g.setColour(juce::Colour(0xff09090d));g.fillRoundedRectangle(pitch,6.0f);
+        const float t=juce::jlimit(0.0f,1.0f,
+            (pitchReferenceHz-pitchReferenceMinHz)/(pitchReferenceMaxHz-pitchReferenceMinHz));
+        g.setColour(juce::Colour(0xffd1c0df));
+        g.fillRoundedRectangle(pitch.getX()+2.0f+t*(pitch.getWidth()-8.0f),
+            pitch.getY()+2.0f,4.0f,pitch.getHeight()-4.0f,2.0f);
+        const float cents=1200.0f*std::log2(pitchReferenceHz/440.0f);
+        const auto centsText=(cents>=0?juce::String("+"):juce::String())+juce::String(cents,0)+" ct";
+        g.setColour(text);g.setFont(uiFont(13.0f));
+        g.drawFittedText(centsText,rect("PitchCentsEditor",{1213,1038,63,21}).toNearestInt(),
+                         juce::Justification::centred,1);
+        g.drawFittedText(juce::String(pitchReferenceHz,1)+" Hz",
+            rect("PitchHzEditor",{1283,1038,66,21}).toNearestInt(),juce::Justification::centred,1);
+
+        const bool chromatic=scale.getSelectedItemIndex()==0;
+        const auto chrom=rect("ChromaticButtonHolder",{0,1030,252,48}).withWidth(160.0f);
+        if(chromatic)
+        {
+            g.setColour(purple.withAlpha(0.18f));
+            g.fillRoundedRectangle(chrom.reduced(5.0f,8.0f),6.0f);
+        }
+        centeredIcon(chromatic?15:16,chrom.withWidth(40.0f),22.0f,chromatic?activeInk:ink);
+        g.setColour(chromatic?activeInk:ink);g.setFont(uiFont(15.0f,juce::Font::bold));
+        g.drawFittedText("Chromatic",chrom.withTrimmedLeft(40.0f).toNearestInt(),
+                         juce::Justification::centredLeft,1);
+
+        const auto resize=rect("RescaleWidget",{1249,635,108,24});
+        centeredIcon(25,resize.withTrimmedLeft(resize.getWidth()-30.0f),17.0f,ink);
+        g.setColour(muted);g.setFont(uiFont(12.0f));
+        g.drawFittedText(juce::String(juce::roundToInt(getWidth()*100.0f/1366.0f))+"%",
+                        resize.withTrimmedRight(32.0f).toNearestInt(),juce::Justification::centredRight,1);
+    }
+    else
+    {
     // Original keyboard and side rail are baked into the licensed background.
     if (!hasOriginalArtwork)
     {
@@ -2716,8 +2844,7 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     else
         g.drawText(pitchNames[juce::jlimit(0, 11, selectedNoteIndex)],12,891,141,58,juce::Justification::centred);
     g.setColour(muted); g.setFont(uiFont(16.0f,juce::Font::bold));
-    const juce::String currentScaleName = scale.getSelectedItemIndex() == 1 ? "major" :
-                                          (scale.getSelectedItemIndex() == 2 ? "minor" : "custom");
+    const juce::String currentScaleName = scale.getText();
     g.drawText(currentScaleName,15,943,135,22,juce::Justification::centred);
     g.drawText("click to",15,969,135,22,juce::Justification::centred);
     g.drawText("edit scale",15,990,135,22,juce::Justification::centred);
@@ -2777,6 +2904,7 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(chromaticActive ? juce::Colour(0xffd9c0ff) : purple);
     g.setFont(uiFont(15.0f, juce::Font::bold));
     g.drawText("Chromatic", 24, 1052, 112, 26, juce::Justification::centredLeft);
+    }
 }
 
 
@@ -2796,7 +2924,7 @@ void MetaTuneInspiredAudioProcessorEditor::setRootNote(int noteIndex)
 
 void MetaTuneInspiredAudioProcessorEditor::setScaleMode(int modeIndex)
 {
-    const int index = juce::jlimit(0, 2, modeIndex);
+    const int index = juce::jlimit(0, 8, modeIndex);
     if (index != 0)
         lastNonChromaticScaleMode = index;
     if (scale.getSelectedItemIndex() != index)
@@ -2813,9 +2941,8 @@ void MetaTuneInspiredAudioProcessorEditor::openHeaderMenu()
 {
     juce::PopupMenu menu;
     menu.addSectionHeader("Scale");
-    menu.addItem(1000, "Chromatic", true, scale.getSelectedItemIndex() == 0);
-    menu.addItem(1001, "Major", true, scale.getSelectedItemIndex() == 1);
-    menu.addItem(1002, "Minor", true, scale.getSelectedItemIndex() == 2);
+    for (int i=0;i<scale.getNumItems();++i)
+        menu.addItem(1000+i,scale.getItemText(i),true,scale.getSelectedItemIndex()==i);
     menu.addSeparator();
     menu.addSectionHeader("Root note");
     static const char* names[] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
@@ -2833,7 +2960,7 @@ void MetaTuneInspiredAudioProcessorEditor::openHeaderMenu()
     menu.showMenuAsync(juce::PopupMenu::Options(), [safeThis](int result)
     {
         if (safeThis == nullptr || result == 0) return;
-        if (result >= 1000 && result <= 1002)
+        if (result >= 1000 && result <= 1008)
             safeThis->setScaleMode(result - 1000);
         else if (result >= 2000 && result <= 2011)
             safeThis->setRootNote(result - 2000);
@@ -2975,7 +3102,9 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDrag(const juce::MouseEvent& eve
     }
     if (orbDragMode == 4)
     {
-        toneVolume = juce::jlimit(0.0f, 1.0f, (designX - 10.0f) / 145.0f);
+        const auto bounds=privateLicensedShell.isNull()?juce::Rectangle<float>(10,833,145,19):
+            licensedWidgetBounds("ToneVolumeSlider",{8,826,148,19});
+        toneVolume = juce::jlimit(0.0f,1.0f,(designX-bounds.getX())/bounds.getWidth());
         if (auto* parameter = processor.parameters.getParameter("toneVolume"))
             parameter->setValueNotifyingHost(parameter->convertTo0to1(toneVolume * 100.0f));
         repaint();
@@ -2983,7 +3112,9 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDrag(const juce::MouseEvent& eve
     }
     if (orbDragMode == 5)
     {
-        const float t = juce::jlimit(0.0f, 1.0f, (designX - 1218.0f) / 140.0f);
+        const auto bounds=privateLicensedShell.isNull()?juce::Rectangle<float>(1218,987,140,19):
+            licensedWidgetBounds("PitchSlider",{1208,1010,148,19});
+        const float t = juce::jlimit(0.0f,1.0f,(designX-bounds.getX())/bounds.getWidth());
         pitchReferenceHz = pitchReferenceMinHz + t * (pitchReferenceMaxHz - pitchReferenceMinHz);
         pitchReferenceHz = (float)(juce::roundToInt(pitchReferenceHz * 10.0f) / 10.0f);
         if (auto* parameter = processor.parameters.getParameter("pitchReference"))
@@ -3256,10 +3387,81 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
         return;
     }
 
-    // Heatmaps, detected-note display, bypass, and the pitch-reference slider are real hit targets.
-    if (x >= 1212.0f && y >= 734.0f && y < 790.0f) { showHeatMaps = !showHeatMaps; repaint(); return; }
-    if (x >= 1212.0f && y >= 790.0f && y < 865.0f) { showDetectedNotes = !showDetectedNotes; repaint(); return; }
-    if (x >= 1212.0f && y >= 865.0f && y < 940.0f)
+    if (!privateLicensedShell.isNull())
+    {
+        const juce::Point<float> point(x,y);
+        const auto hit=[&](const char* name,juce::Rectangle<float> fallback)
+            { return licensedWidgetBounds(name,fallback).contains(point); };
+        if(hit("InOutHeatMapsOnOffButton",{1202,728,40,51}))
+            {showHeatMaps=!showHeatMaps;repaint();return;}
+        if(hit("InOutHeatMapsResetButton",{1242,728,40,51}))
+        {
+            heatmapInputNotes.fill(-1);heatmapOutputNotes.fill(-1);
+            heatmapConfidence.fill(0.0f);heatmapWriteIndex=0;repaint();return;
+        }
+        if(hit("TargetHeatMapOnOffButton",{1202,782,40,82}))
+            {showDetectedNotes=!showDetectedNotes;repaint();return;}
+        if(hit("TargetHeatMapResetButton",{1242,782,40,82}))
+        {
+            // Clear existing displayed output history without changing DSP.
+            heatmapOutputNotes.fill(-1);repaint();return;
+        }
+        if(hit("BypassOnOffButton",{1202,866,164,94}))
+        {
+            globalBypass=!globalBypass;
+            if(auto* p=processor.parameters.getParameter("globalBypass"))
+                p->setValueNotifyingHost(p->convertTo0to1(globalBypass?1.0f:0.0f));
+            repaint();return;
+        }
+        const auto pitch=licensedWidgetBounds("PitchSlider",{1208,1010,148,19});
+        if(pitch.expanded(0.0f,6.0f).contains(point))
+        {
+            const float t=juce::jlimit(0.0f,1.0f,(x-pitch.getX())/pitch.getWidth());
+            pitchReferenceHz=juce::roundToInt((pitchReferenceMinHz+t*(pitchReferenceMaxHz-pitchReferenceMinHz))*10.0f)/10.0f;
+            if(auto* p=processor.parameters.getParameter("pitchReference"))
+            {
+                activeGestureParamA=p;p->beginChangeGesture();
+                p->setValueNotifyingHost(p->convertTo0to1(pitchReferenceHz));
+            }
+            orbDragMode=5;repaint();return;
+        }
+        if(hit("RescaleWidget",{1249,635,108,24}))
+        {
+            const int w=getWidth()<900?1000:(getWidth()<1200?1366:683);
+            setSize(w,juce::roundToInt(w*1080.0f/1366.0f));return;
+        }
+        const auto chrom=licensedWidgetBounds("ChromaticButtonHolder",{0,1030,252,48}).withWidth(160.0f);
+        if(chrom.contains(point))
+        {setScaleMode(scale.getSelectedItemIndex()==0?lastNonChromaticScaleMode:0);return;}
+        const auto key=licensedWidgetBounds("KeyScaleMonitor",{0,866,164,180});
+        if(key.contains(point))
+        {
+            const bool left=x<key.getX()+29.0f,right=x>key.getRight()-29.0f;
+            if(left||right)
+            {
+                const int step=left?-1:1;
+                if(y<key.getY()+103.0f)setRootNote((selectedNoteIndex+step+12)%12);
+                else setScaleMode((scale.getSelectedItemIndex()+step+9)%9);
+            }
+            else openHeaderMenu();
+            return;
+        }
+        const auto tone=licensedWidgetBounds("ToneVolumeSlider",{8,826,148,19});
+        if(tone.expanded(0.0f,6.0f).contains(point))
+        {
+            toneVolume=juce::jlimit(0.0f,1.0f,(x-tone.getX())/tone.getWidth());
+            if(auto* p=processor.parameters.getParameter("toneVolume"))
+            {
+                activeGestureParamA=p;p->beginChangeGesture();
+                p->setValueNotifyingHost(p->convertTo0to1(toneVolume*100.0f));
+            }
+            orbDragMode=4;repaint();return;
+        }
+    }
+    // Fallback status rail retains its existing geometry.
+    if (privateLicensedShell.isNull() && x >= 1212.0f && y >= 734.0f && y < 790.0f) { showHeatMaps = !showHeatMaps; repaint(); return; }
+    if (privateLicensedShell.isNull() && x >= 1212.0f && y >= 790.0f && y < 865.0f) { showDetectedNotes = !showDetectedNotes; repaint(); return; }
+    if (privateLicensedShell.isNull() && x >= 1212.0f && y >= 865.0f && y < 940.0f)
     {
         globalBypass = !globalBypass;
         if (auto* parameter = processor.parameters.getParameter("globalBypass"))
@@ -3267,7 +3469,7 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
         repaint();
         return;
     }
-    if (x >= 1212.0f && y >= 940.0f && y < 1045.0f)
+    if (privateLicensedShell.isNull() && x >= 1212.0f && y >= 940.0f && y < 1045.0f)
     {
         const float t = juce::jlimit(0.0f, 1.0f, (x - 1218.0f) / 140.0f);
         pitchReferenceHz = pitchReferenceMinHz + t * (pitchReferenceMaxHz - pitchReferenceMinHz);
@@ -3300,7 +3502,7 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
     }
 
     // Tone-volume bar controls the real reference-tone audition level in the processor.
-    if (x >= 0.0f && x < 165.0f && y >= 822.0f && y < 860.0f)
+    if (privateLicensedShell.isNull() && x >= 0.0f && x < 165.0f && y >= 822.0f && y < 860.0f)
     {
         toneVolume = juce::jlimit(0.0f, 1.0f, (x - 10.0f) / 145.0f);
         if (auto* parameter = processor.parameters.getParameter("toneVolume"))
@@ -3314,8 +3516,8 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
     }
 
     // Clicking the left scale card opens the same functional root/scale chooser.
-    if (x < 165.0f && y >= 875.0f && y < 1045.0f) { openHeaderMenu(); return; }
-    if (x < 165.0f && y >= 1045.0f && y < 1080.0f)
+    if (privateLicensedShell.isNull() && x < 165.0f && y >= 875.0f && y < 1045.0f) { openHeaderMenu(); return; }
+    if (privateLicensedShell.isNull() && x < 165.0f && y >= 1045.0f && y < 1080.0f)
     {
         setScaleMode(scale.getSelectedItemIndex() == 0 ? lastNonChromaticScaleMode : 0);
         return;
@@ -3457,6 +3659,8 @@ void MetaTuneInspiredAudioProcessorEditor::timerCallback()
     }
 
     pitchReferenceHz = processor.getPitchReferenceHz();
+    if(auto* rawTone=processor.parameters.getRawParameterValue("toneVolume"))
+        toneVolume=juce::jlimit(0.0f,1.0f,rawTone->load(std::memory_order_relaxed)/100.0f);
     if (auto* rawWidth = processor.parameters.getRawParameterValue("doublerWidth"))
         doublerWidth = juce::jlimit(0.0f, 1.0f, rawWidth->load(std::memory_order_relaxed) / 100.0f);
     if (auto* rawMix = processor.parameters.getRawParameterValue("doublerMix"))
