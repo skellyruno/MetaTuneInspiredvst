@@ -56,6 +56,7 @@ public:
     // Shared mapping for the UI readout and the active correction-time engine.
     static float speedControlToMilliseconds(float controlValue) noexcept;
     void startTonePreview(int midiNote) noexcept { tonePreviewMidiNote.store(juce::jlimit(0, 127, midiNote), std::memory_order_relaxed); }
+    int getTonePreviewMidiNote() const noexcept {return tonePreviewMidiNote.load(std::memory_order_relaxed);}
     void stopTonePreview() noexcept { tonePreviewMidiNote.store(-1, std::memory_order_relaxed); }
 
 private:

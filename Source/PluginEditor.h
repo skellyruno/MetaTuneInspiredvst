@@ -12,6 +12,8 @@ public:
     ~MetaTuneInspiredAudioProcessorEditor() override;
     void paint(juce::Graphics&) override;
     void resized() override;
+    void mouseMove(const juce::MouseEvent&) override;
+    void mouseExit(const juce::MouseEvent&) override;
     void mouseDown(const juce::MouseEvent&) override;
     void mouseDrag(const juce::MouseEvent&) override;
     void mouseUp(const juce::MouseEvent&) override;
@@ -35,6 +37,15 @@ private:
     void toggleCustomDegree(int);
     juce::File presetDirectory() const;
     bool presetBrowserOpen=false,scaleBrowserOpen=false,flatNotes=false;
+    float scaleSlide=0.0f, doublerReveal=0.0f;
+    bool doublerHovered=false;
+    int chordSelectMode=0; // Note, Major, Minor; independent of current DSP scale.
+    int doublerAxis=0; // both, width only, mix only
+    bool doublerAltLock=false;
+    juce::Rectangle<float> doublerTrack() const;
+    juce::Point<float> doublerPosition() const;
+    void drawPrivateDoubler(juce::Graphics&);
+    void updatePrivateHover(juce::Point<float>);
     bool keepPresetScale=false,favoritesOnly=false;
     int browserTab=0,presetPage=0;
     juce::TextEditor presetSearch;

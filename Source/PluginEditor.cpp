@@ -180,7 +180,7 @@ bool drawLicensedIcon(juce::Graphics& g,int index,juce::Rectangle<float> r,juce:
 // Source BrowsersAndOrbContainer: 42px padding, 190px panel, 368px height.
 // Shared rectangles for display and pointer actions.
 const juce::Rectangle<float> privateBrowserArea(67.5f,75.5f,305.0f,590.0f);
-const juce::Rectangle<float> privateScaleArea(0,729,163,310);
+const juce::Rectangle<float> privateScaleArea(0,729.6f,163.9f,310.2f);
 juce::Rectangle<float> browserRow(int i){return {74.5f,230.0f+i*31.0f,291.0f,30.0f};}
 const char* const shortScaleNames[]={"Chromatic","Major","Minor","Harm. Min","Maj. Pent","Min. Pent","Blues","Dorian","Custom"};
 struct LicensedKey
@@ -2142,9 +2142,11 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     // Mix controls the cyan-blue blur that the design uses to indicate blend amount.
     const float blurStrength = juce::jlimit(0.0f, 1.0f, doublerMix);
     const float doublerEngagement = juce::jlimit(0.0f, 1.0f, (blurStrength - 0.015f) / 0.20f);
-    const float doublerOffset = (2.0f + 28.0f * juce::jlimit(0.0f, 1.0f, doublerWidth))
+    const float doublerOffset = (2.0f + (hasOriginalArtwork?69.0f:28.0f) * juce::jlimit(0.0f, 1.0f, doublerWidth))
                               * doublerEngagement;
-    const juce::Colour doublerBlue(0xff47cfff);
+    const juce::Colour doublerBlue=hasOriginalArtwork
+        ? juce::Colour(0xffb7a4ef).interpolatedWith(juce::Colours::white,doublerReveal*0.65f)
+        : juce::Colour(0xff47cfff);
     if (doublerEngagement > 0.001f)
     {
         for (const float side : { -1.0f, 1.0f })
@@ -2577,6 +2579,18 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xffd6bdff).withAlpha(0.20f));
     g.drawEllipse(367.0f, 267.0f, 207.0f, 196.0f, 7.0f);
 
+    if(hasOriginalArtwork&&doublerMix>0.001f)
+    {
+        // Draw the two voice outlines after the source sphere, so its
+        // opaque material cannot hide them. Width = separation; wet = glow.
+        const float alpha=doublerMix*(0.22f+0.36f*doublerReveal);
+        for(float sign:{-1.0f,1.0f})
+        {
+            const auto r=juce::Rectangle<float>(238+sign*doublerOffset,138,465,460);
+            g.setColour(doublerBlue.withAlpha(alpha*0.28f));g.drawEllipse(r,13);
+            g.setColour(doublerBlue.withAlpha(alpha));g.drawEllipse(r,2.2f);
+        }
+    }
     g.restoreState();
 
     // The original 2x material for the 4-bank selector is not in shell.png.
@@ -2635,6 +2649,9 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     }
 
     // Doubler dot from the guide: drag left/right for width, up/down for wet/dry.
+    if(hasOriginalArtwork)drawPrivateDoubler(g);
+    else
+    {
     const float doublerDotX = 120.0f + doublerWidth * 100.0f;
     const float doublerDotY = 620.0f - doublerMix * 90.0f;
     g.setColour(juce::Colour(0xff5a5a5d));
@@ -2645,6 +2662,7 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     g.fillEllipse(doublerDotX - 12.0f, doublerDotY - 12.0f, 24.0f, 24.0f);
     g.setColour(juce::Colour(0xffb8b5bf));
     g.fillEllipse(doublerDotX - 8.0f, doublerDotY - 8.0f, 16.0f, 16.0f);
+    }
     g.setColour(juce::Colour(0xff3c3b42)); g.drawLine(0.0f, 673.0f, 1366.0f, 673.0f, 1.0f);
 
     // The licensed shell already provides this hardware strip.
@@ -2663,9 +2681,16 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
     const auto majorHoldArea=hasOriginalArtwork?licensedWidgetBounds("ChordSelectorMajorHold",{377,681,64,32}):juce::Rectangle<float>(503,687,26,33);
     const auto minorArea=hasOriginalArtwork?licensedWidgetBounds("ChordSelectorMinor",{458,681,80,32}):juce::Rectangle<float>(529,687,52,33);
     const auto minorHoldArea=hasOriginalArtwork?licensedWidgetBounds("ChordSelectorMinorHold",{538,681,64,32}):juce::Rectangle<float>(581,687,27,33);
-    if (scale.getSelectedItemIndex() == 1) { g.setColour(purple.withAlpha(0.34f)); g.fillRoundedRectangle(majorArea, 10.0f); }
+    if(hasOriginalArtwork)
+    {
+        const auto note=licensedWidgetBounds("ChordSelectorNote",{167,681,112,32});
+        if(chordSelectMode==0){g.setColour(purple.withAlpha(0.45f));g.fillRoundedRectangle(note,10);}
+        g.setColour(chordSelectMode==0?text:muted);g.setFont(uiFont(13,juce::Font::bold));
+        g.drawText("Note",note,juce::Justification::centred);
+    }
+    if ((hasOriginalArtwork?chordSelectMode:scale.getSelectedItemIndex()) == 1) { g.setColour(purple.withAlpha(0.34f)); g.fillRoundedRectangle(majorArea, 10.0f); }
     if (majorHold) { g.setColour(pink.withAlpha(0.24f)); g.fillRoundedRectangle(majorHoldArea, 8.0f); }
-    if (scale.getSelectedItemIndex() == 2) { g.setColour(purple.withAlpha(0.34f)); g.fillRoundedRectangle(minorArea, 10.0f); }
+    if ((hasOriginalArtwork?chordSelectMode:scale.getSelectedItemIndex()) == 2) { g.setColour(purple.withAlpha(0.34f)); g.fillRoundedRectangle(minorArea, 10.0f); }
     if (minorHold) { g.setColour(pink.withAlpha(0.24f)); g.fillRoundedRectangle(minorHoldArea, 8.0f); }
     g.setColour(muted); g.setFont(uiFont(12.0f, juce::Font::bold));
     g.drawText("Major", majorArea, juce::Justification::centred);
@@ -2788,14 +2813,20 @@ void MetaTuneInspiredAudioProcessorEditor::paint(juce::Graphics& g)
         static const int flatGlyphs[]={55,58,57,61,60,62,65,64,51,50,54,53};
         const int displayNote=juce::jlimit(0,11,selectedNoteIndex);
         const auto& glyph=flatNotes?licensedIcon(flatGlyphs[displayNote]):privateNoteGlyph(displayNote);
-        if(!glyph.isNull())
-            g.drawImageWithin(glyph,(int)key.getCentreX()-32,(int)keyRow.getCentreY()-32,
-                64,64,juce::RectanglePlacement::centred,true);
-        g.setFont(uiFont(15.0f,juce::Font::bold));
-        g.drawFittedText(scale.getText(),scaleRow.reduced(30.0f,8.0f).toNearestInt(),
-                         juce::Justification::centred,2);
-        centeredIcon(21,{key.getCentreX()-9.0f,key.getBottom()-19.0f,18.0f,18.0f},
-                     13.0f,muted);
+        if(scale.getSelectedItemIndex()==0)
+        {
+            centeredIcon(21,keyRow.withSizeKeepingCentre(55,55),36,juce::Colour(0xffd2cbd2));
+            g.setColour(juce::Colour(0xffaaa5ac));g.setFont(uiFont(18));
+            g.drawFittedText("hover to\nset scale",scaleRow.reduced(18,0).toNearestInt(),juce::Justification::centred,2);
+        }
+        else
+        {
+            if(!glyph.isNull())
+                g.drawImageWithin(glyph,(int)key.getCentreX()-32,(int)keyRow.getCentreY()-32,
+                    64,64,juce::RectanglePlacement::centred,true);
+            g.setFont(uiFont(17.0f,juce::Font::bold));
+            g.drawFittedText(scale.getText(),scaleRow.reduced(30.0f,8.0f).toNearestInt(),juce::Justification::centred,2);
+        }
 
         drawPiano(g,{165,788,1047,287});
         const auto ink=juce::Colour(0xffc4baca);
@@ -3130,26 +3161,37 @@ void MetaTuneInspiredAudioProcessorEditor::drawPrivateBrowsers(juce::Graphics& g
                 juce::Rectangle<int>(88,555,264,91),juce::Justification::centred,4);
         }
     }
-    if(scaleBrowserOpen)
+    if(scaleSlide>0.001f)
     {
-        g.setColour(juce::Colour(0xff1c1a21));g.fillRect(privateScaleArea);
-        tile({2,731,62,24},"#",!flatNotes);tile({65,731,62,24},"b",flatNotes);
-        glyph(70,{130,731,31,24});
+        // The original fold/unfold layout slides the 102px-wide selector
+        // out from the left, and clips it to the sidebar. No popup/menu peer.
+        juce::Graphics::ScopedSaveState saved(g);
+        g.reduceClipRegion(privateScaleArea.toNearestInt());
+        g.addTransform(juce::AffineTransform::translation(-privateScaleArea.getWidth()*(1.0f-scaleSlide),0));
+        g.setColour(juce::Colour(0xff262529));g.fillRect(privateScaleArea);
+        const auto scaleTile=[&](juce::Rectangle<float> r,const juce::String& label,bool active)
+        {
+            if(active){g.setColour(juce::Colour(0xff4a444b));g.fillRect(r.reduced(1));}
+            g.setColour(active?juce::Colour(0xfff5eff5):juce::Colour(0xffaaa5ac));
+            g.setFont(uiFont(14.0f));g.drawFittedText(label,r.reduced(2).toNearestInt(),juce::Justification::centred,1);
+        };
+        scaleTile({2,731,79,24},"Flats",flatNotes);scaleTile({82,731,79,24},"Sharps",!flatNotes);
+        g.setColour(juce::Colour(0xff3d3d3d));g.drawHorizontalLine(756,0,164);
         const int flats[]={55,58,57,61,60,62,65,64,51,50,54,53};
         const char* names[]={"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
         for(int i=0;i<12;++i)
         {
             const auto a=juce::Rectangle<float>(3+(i%3)*53.0f,758+(i/3)*34.0f,52,33);
             const auto& original=flatNotes?licensedIcon(flats[i]):privateNoteGlyph(i);
-            tile(a,original.isNull()?names[i]:"",i==selectedNoteIndex);
+            scaleTile(a,original.isNull()?names[i]:"",i==selectedNoteIndex);
             if(!original.isNull())
             {
                 const auto b=a.withSizeKeepingCentre(20,20).toNearestInt();g.setColour(i==selectedNoteIndex?accent:ink);
                 g.drawImageWithin(original,b.getX(),b.getY(),b.getWidth(),b.getHeight(),juce::RectanglePlacement::centred,true);
             }
         }
-        for(int i=0;i<8;++i)tile({3+(i%2)*79.0f,897+(i/2)*27.0f,78,26},shortScaleNames[i],scale.getSelectedItemIndex()==i);
-        tile({3,1006,157,25},"Custom",scale.getSelectedItemIndex()==8);
+        for(int i=0;i<8;++i)scaleTile({3+(i%2)*79.0f,897+(i/2)*27.0f,78,26},shortScaleNames[i],scale.getSelectedItemIndex()==i);
+        scaleTile({3,1006,157,25},"Custom",scale.getSelectedItemIndex()==8);
     }
 }
 bool MetaTuneInspiredAudioProcessorEditor::privateBrowserMouse(juce::Point<float> point)
@@ -3224,7 +3266,7 @@ bool MetaTuneInspiredAudioProcessorEditor::privateBrowserMouse(juce::Point<float
     }
     if(scaleBrowserOpen&&privateScaleArea.contains(point))
     {
-        if(y<757){if(x>=130)scaleBrowserOpen=false;else flatNotes=x>=65;}
+        if(y<757)flatNotes=x<82;
         else if(y<894)setRootNote(juce::jlimit(0,11,(int)((y-758)/34)*3+(int)(x/53)));
         else if(y>=897&&y<1005)setScaleMode(juce::jlimit(0,7,(int)((y-897)/27)*2+(int)(x/80)));
         else if(y>=1006)setScaleMode(8);
@@ -3386,10 +3428,15 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDrag(const juce::MouseEvent& eve
     {
         // Horizontal movement is the primary Doubler Width axis; vertical movement
         // continues to control the mix/blur intensity shown by the two orb rings.
-        doublerWidth = juce::jlimit(0.0f, 1.0f,
-            doublerDragStartWidth + (designX - orbDragStartX) / 100.0f);
-        doublerMix = juce::jlimit(0.0f, 1.0f,
-            doublerDragStartMix + (orbDragStartY - designY) / 90.0f);
+        const auto track=doublerTrack();
+        const float dx=designX-orbDragStartX,dy=orbDragStartY-designY;
+        if(doublerAltLock&&doublerAxis==0)
+        {
+            if(std::max(std::abs(dx),std::abs(dy))<16.0f)return;
+            doublerAxis=std::abs(dx)>std::abs(dy)?1:2;
+        }
+        if(doublerAxis!=2)doublerWidth=juce::jlimit(0.0f,1.0f,doublerDragStartWidth+dx/track.getWidth());
+        if(doublerAxis!=1)doublerMix=juce::jlimit(0.0f,1.0f,doublerDragStartMix+dy/track.getHeight());
         if (auto* parameter = processor.parameters.getParameter("doublerWidth"))
             parameter->setValueNotifyingHost(parameter->convertTo0to1(doublerWidth * 100.0f));
         if (auto* parameter = processor.parameters.getParameter("doublerMix"))
@@ -3445,6 +3492,73 @@ void MetaTuneInspiredAudioProcessorEditor::mouseUp(const juce::MouseEvent&)
     orbDragMode = 0;
 }
 
+juce::Rectangle<float> MetaTuneInspiredAudioProcessorEditor::doublerTrack() const
+{
+    if(privateLicensedShell.isNull())return {120,530,100,90};
+    // Source XML: OrbContainer follows 42px folded/190px unfolded browser
+    // + 8px separator. DoublerTab reserves 100px on the right.
+    // CSS track offsets: left 30, right 120, top 48, bottom 24.
+    constexpr float sx=1366.0f/850.0f,sy=1080.0f/672.0f;
+    const float left=(presetBrowserOpen?198.0f:50.0f)+30.0f;
+    return {left*sx,95.0f*sy,(480.0f-left)*sx,296.0f*sy};
+}
+juce::Point<float> MetaTuneInspiredAudioProcessorEditor::doublerPosition() const
+{
+    const auto track=doublerTrack();
+    return {track.getX()+doublerWidth*track.getWidth(),track.getBottom()-doublerMix*track.getHeight()};
+}
+void MetaTuneInspiredAudioProcessorEditor::drawPrivateDoubler(juce::Graphics& g)
+{
+    const auto track=doublerTrack();const auto dot=doublerPosition();
+    const float a=juce::jlimit(0.0f,1.0f,doublerReveal);
+    if(a>0.002f)
+    {
+        // Source CSS uses a translucent track, separate sliders and numeric
+        // readouts; visibility follows the pad's hover/pressed state.
+        const auto ink=juce::Colours::white.withAlpha(0.55f*a);
+        g.setColour(ink);
+        juce::Path axes;axes.startNewSubPath(track.getX(),track.getY());
+        axes.lineTo(track.getX(),track.getBottom()-20);axes.quadraticTo(track.getX(),track.getBottom(),track.getX()+20,track.getBottom());
+        axes.lineTo(track.getRight(),track.getBottom());
+        g.strokePath(axes,juce::PathStrokeType(2.5f,juce::PathStrokeType::curved,juce::PathStrokeType::rounded));
+        g.setColour(juce::Colours::white.withAlpha(0.72f*a));
+        g.fillRoundedRectangle(dot.x-8,track.getBottom()-4,16,8,4);
+        g.fillRoundedRectangle(track.getX()-4,dot.y-8,8,16,4);
+        g.setFont(uiFont(14.0f));
+        g.drawText("Width  "+juce::String(juce::roundToInt(doublerWidth*100))+"%",
+            juce::Rectangle<float>(track.getCentreX()-80,track.getBottom()+7,160,23),juce::Justification::centred);
+        g.drawText("Wet / Dry  "+juce::String(juce::roundToInt(doublerMix*100))+"%",
+            juce::Rectangle<float>(track.getX()+8,track.getY()-26,170,24),juce::Justification::centredLeft);
+    }
+    const float radius=19.3f-8.8f*a; // CSS thumb 12px idle, 6.5px hover
+    g.setColour(juce::Colours::black.withAlpha(0.45f));g.fillEllipse(dot.x-22,dot.y-22,44,44);
+    g.setGradientFill(juce::ColourGradient(juce::Colours::white.withAlpha(0.66f+0.28f*a),dot.x,dot.y-19,
+        juce::Colours::grey.withAlpha(0.15f),dot.x,dot.y+19,false));
+    g.drawEllipse(dot.x-18,dot.y-18,36,36,1.6f+1.4f*a);
+    g.setColour(juce::Colours::white.withAlpha(orbDragMode==3?1.0f:0.30f+0.50f*a));
+    g.fillEllipse(dot.x-radius,dot.y-radius,2*radius,2*radius);
+}
+void MetaTuneInspiredAudioProcessorEditor::updatePrivateHover(juce::Point<float> point)
+{
+    if(privateLicensedShell.isNull())return;
+    const auto monitor=licensedWidgetBounds("KeyScaleMonitor",{0,866,164,180});
+    if(orbDragMode==0)
+        scaleBrowserOpen=monitor.contains(point)||(scaleBrowserOpen&&privateScaleArea.contains(point));
+    const auto dot=doublerPosition();const auto track=doublerTrack();
+    const bool nearTrack=(std::abs(point.x-track.getX())<22&&point.y>=track.getY()-8&&point.y<=track.getBottom()+8)||
+        (std::abs(point.y-track.getBottom())<22&&point.x>=track.getX()-8&&point.x<=track.getRight()+8);
+    doublerHovered=dot.getDistanceFrom(point)<28||(doublerHovered&&nearTrack)||orbDragMode==3;
+    repaint();
+}
+void MetaTuneInspiredAudioProcessorEditor::mouseMove(const juce::MouseEvent& event)
+{
+    updatePrivateHover({event.position.x*1366.0f/juce::jmax(1,getWidth()),
+                        event.position.y*1080.0f/juce::jmax(1,getHeight())});
+}
+void MetaTuneInspiredAudioProcessorEditor::mouseExit(const juce::MouseEvent&)
+{
+    if(orbDragMode==0){scaleBrowserOpen=false;doublerHovered=false;repaint();}
+}
 void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& event)
 {
     const float sx = getWidth() / 1366.0f;
@@ -3455,7 +3569,7 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
     if(!privateLicensedShell.isNull())
     {
         if(privateBrowserMouse({x,y}))return;
-        if(scaleBrowserOpen){scaleBrowserOpen=false;repaint();}
+        if(scaleBrowserOpen){scaleBrowserOpen=false;scaleSlide=0.0f;repaint();}
         if(x<60&&y>=147.5f&&y<577.5f){processor.setNoteGroup(juce::jlimit(0,4,(int)((y-147.5f)/86)));repaint();return;}
         if(event.mods.isRightButtonDown())
         {
@@ -3598,9 +3712,13 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
     }
 
     // Doubler dot: the documented horizontal/vertical gesture changes width and wet/dry.
-    const float dotX = 120.0f + doublerWidth * 100.0f;
-    const float dotY = 620.0f - doublerMix * 90.0f;
-    if (std::abs(x - dotX) <= 23.0f && std::abs(y - dotY) <= 23.0f)
+    const bool licensed=!privateLicensedShell.isNull();
+    const auto dot=licensed?doublerPosition():juce::Point<float>(120+doublerWidth*100,620-doublerMix*90);
+    const auto track=doublerTrack();
+    const bool widthTrack=licensed&&doublerReveal>0.15f&&std::abs(y-track.getBottom())<16&&x>=track.getX()-5&&x<=track.getRight()+5;
+    const bool mixTrack=licensed&&doublerReveal>0.15f&&std::abs(x-track.getX())<16&&y>=track.getY()-5&&y<=track.getBottom()+5;
+    const bool dotHit=dot.getDistanceFrom({x,y})<=22;
+    if (dotHit||widthTrack||mixTrack)
     {
         undoState = processor.parameters.copyState();
         hasUndoState = true;
@@ -3610,6 +3728,9 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
         orbDragStartY = y;
         doublerDragStartWidth = doublerWidth;
         doublerDragStartMix = doublerMix;
+        doublerAxis=dotHit?0:(widthTrack?1:2);
+        doublerAltLock=licensed&&event.mods.isAltDown();
+        doublerHovered=true;
         activeGestureParamA = processor.parameters.getParameter("doublerWidth");
         activeGestureParamB = processor.parameters.getParameter("doublerMix");
         if (activeGestureParamA != nullptr) activeGestureParamA->beginChangeGesture();
@@ -3664,8 +3785,19 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
         const int note=licensedPianoHit({x,y});
         if (note>=0)
         {
-            setRootNote(note);
-            processor.startTonePreview(60+note);
+            const auto strip=licensedWidgetBounds("ToneKeyboard",{165,782,1035,82});
+            if(strip.contains({x,y}))
+                processor.startTonePreview(60+note); // audition, never transpose
+            else if(chordSelectMode!=0)
+            {
+                const auto before=processor.parameters.copyState();
+                const int mode=chordSelectMode;
+                setRootNote(note);setScaleMode(mode);
+                undoState=before;hasUndoState=true;hasRedoState=false;
+                if(!(mode==1?majorHold:minorHold))chordSelectMode=0;
+                repaint();
+            }
+            else toggleCustomDegree(note);
             return;
         }
     }
@@ -3757,7 +3889,7 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
                 if(y<key.getY()+103.0f)setRootNote((selectedNoteIndex+step+12)%12);
                 else setScaleMode((scale.getSelectedItemIndex()+step+9)%9);
             }
-            else {scaleBrowserOpen=!scaleBrowserOpen;repaint();}
+            else {scaleBrowserOpen=true;scaleSlide=1.0f;repaint();}
             return;
         }
         const auto tone=licensedWidgetBounds("ToneVolumeSlider",{8,826,148,19});
@@ -3802,10 +3934,16 @@ void MetaTuneInspiredAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
     if (!privateLicensedShell.isNull())
     {
         const juce::Point<float> point(x,y);
-        if (licensedWidgetBounds("ChordSelectorMajor",{297,681,80,32}).contains(point)) { setScaleMode(1); return; }
-        if (licensedWidgetBounds("ChordSelectorMajorHold",{377,681,64,32}).contains(point)) { majorHold=!majorHold; repaint(); return; }
-        if (licensedWidgetBounds("ChordSelectorMinor",{458,681,80,32}).contains(point)) { setScaleMode(2); return; }
-        if (licensedWidgetBounds("ChordSelectorMinorHold",{538,681,64,32}).contains(point)) { minorHold=!minorHold; repaint(); return; }
+        if (licensedWidgetBounds("ChordSelectorNote",{167,681,112,32}).contains(point))
+            {chordSelectMode=0;majorHold=minorHold=false;repaint();return;}
+        if (licensedWidgetBounds("ChordSelectorMajor",{297,681,80,32}).contains(point))
+            {chordSelectMode=1;majorHold=minorHold=false;repaint();return;}
+        if (licensedWidgetBounds("ChordSelectorMajorHold",{377,681,64,32}).contains(point))
+            {majorHold=!majorHold;minorHold=false;chordSelectMode=majorHold?1:0;repaint();return;}
+        if (licensedWidgetBounds("ChordSelectorMinor",{458,681,80,32}).contains(point))
+            {chordSelectMode=2;majorHold=minorHold=false;repaint();return;}
+        if (licensedWidgetBounds("ChordSelectorMinorHold",{538,681,64,32}).contains(point))
+            {minorHold=!minorHold;majorHold=false;chordSelectMode=minorHold?2:0;repaint();return;}
     }
     if (privateLicensedShell.isNull() && y >= 676.0f && y < 733.0f)
     {
@@ -3865,15 +4003,13 @@ void MetaTuneInspiredAudioProcessorEditor::resized()
     amountLabel.setBounds(px(1097), py(575), px(220), py(25));
     if (!privateLicensedShell.isNull())
     {
-        // Keep the scale attachment alive; the original plate has only a root
-        // selector plus Major/Minor buttons, not two overlapping combo boxes.
-        scale.setVisible(false);
-        const auto b=licensedWidgetBounds("ChordSelectorNote",{167,681,112,32});
-        root.setBounds(px(b.getX()),py(b.getY()),px(b.getWidth()),py(b.getHeight()));
+        // Source Note/Major/Minor are keyboard edit modes, NOT root dropdowns.
+        // Retain the invisible APVTS attachments for state compatibility.
+        scale.setVisible(false);root.setVisible(false);
     }
     else
     {
-        scale.setVisible(true);
+        scale.setVisible(true);root.setVisible(true);
         scale.setBounds(px(165), py(686), px(176), py(35));
         root.setBounds(px(350), py(686), px(100), py(35));
     }
@@ -3885,8 +4021,10 @@ void MetaTuneInspiredAudioProcessorEditor::resized()
     lowLatency.setBounds(px(983), py(686), px(180), py(35));
 #endif
     noteReadout.setBounds(px(presetBrowserOpen?572:360),py(365),px(presetBrowserOpen?176:230),py(70));
-    // The status line was behind the moveable Doubler dot at y~620.
+    // The original status is already shown in the pitch-lock strip.
+    // Hide this duplicate while the licensed Doubler axes are visible.
     status.setBounds(px(32), py(642), px(600), py(24));
+    if(!privateLicensedShell.isNull())status.setVisible(false);
     if (privateAssetGallery != nullptr)
         privateAssetGallery->setBounds(getLocalBounds());
     presetSearch.setBounds(px(102),py(173),px(233),py(31));
@@ -3925,6 +4063,11 @@ void MetaTuneInspiredAudioProcessorEditor::timerCallback()
     const float deltaSeconds = (float)(nowMs - orbLastTickMs) * 0.001f;
     orbLastTickMs = nowMs;
     updateOrbMotion(deltaSeconds);
+    const float ease=1.0f-std::exp(-juce::jlimit(0.0f,0.08f,deltaSeconds)*16.0f);
+    scaleSlide+=(float(scaleBrowserOpen)-scaleSlide)*ease;
+    doublerReveal+=(float(doublerHovered||orbDragMode==3)-doublerReveal)*ease;
+    if(scaleSlide<0.001f&&!scaleBrowserOpen)scaleSlide=0.0f;
+    if(doublerReveal<0.001f&&!doublerHovered&&orbDragMode!=3)doublerReveal=0.0f;
     // The Lyra negative-retune ring smoothly enters and leaves the hard-snap
     // state even when Speed is automated from FL Studio rather than dragged.
     const float signedRetuneMs =
